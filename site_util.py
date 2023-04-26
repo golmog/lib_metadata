@@ -15,7 +15,16 @@ from .plugin import P
 logger = P.logger
 
 class SiteUtil(object):
-    session = requests.Session()
+    try:
+        from datetime import timedelta
+        from requests_cache import CachedSession
+        session = CachedSession(
+            "lib_metadata",
+            use_temp=True,
+            expire_after=timedelta(hours=6),
+        )
+    except Exception:
+        session = requests.Session()
 
     default_headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Safari/537.36',
@@ -89,7 +98,7 @@ class SiteUtil(object):
             # image_url : 디스코드에 올라간 표지 url 임.
             from PIL import Image
             from io import BytesIO
-            im = Image.open(BytesIO(requests.get(image_url).content))
+            im = Image.open(BytesIO(cls.session.get(image_url).content))
             width, height = im.size
             filename = 'proxy_%s.jpg' % str(time.time())
             filepath = os.path.join(path_data, 'tmp', filename)
@@ -604,7 +613,7 @@ class SiteUtil(object):
     def process_image_book(cls, url):
         from PIL import Image
         from io import BytesIO
-        im = Image.open(BytesIO(requests.get(url).content))
+        im = Image.open(BytesIO(cls.session.get(url).content))
         width, height = im.size
         filename = 'proxy_%s.jpg' % str(time.time())
         filepath = os.path.join(path_data, 'tmp', filename)
