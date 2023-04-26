@@ -332,7 +332,7 @@ class SiteDmm(object):
                     url = cls.site_base_url + tmp.split("'")[1]
                     url = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers).xpath('//iframe')[0].attrib['src']
                     text = SiteUtil.get_text(url, proxy_url=proxy_url, headers=cls.dmm_headers)
-                    pos = text.find('var params = {')
+                    pos = text.find('const args = {')
                     data = json.loads(text[text.find('{', pos):text.find(';', pos)])
                     #logger.debug(json.dumps(data, indent=4))
                     data['bitrates'] = sorted(data['bitrates'], key=lambda k: k['bitrate'], reverse=True)
