@@ -186,7 +186,10 @@ class SiteUtil(object):
                 logger.debug(ret['image_url'])
                 #ret['poster_image_url'] = cls.discord_proxy_get_target_poster(image_url)
                 #if ret['poster_image_url'] is None:
-                ret['poster_image_url'] = cls.process_image_mode('5', ret['image_url']) #포스터이미지 url 본인 sjva
+                if image_mode == '1':
+                    ret['poster_image_url'] = cls.process_image_mode('4', image_url, proxy_url=proxy_url)
+                else:
+                    ret['poster_image_url'] = cls.process_image_mode('5', ret['image_url']) #포스터이미지 url 본인 sjva
                     #if image_mode == '3': # 디스코드 url 모드일때만 포스터도 디스코드로
                     #ret['poster_image_url'] = cls.process_image_mode('3', tmp) #디스코드 url / 본인 sjva가 소스이므로 공용으로 등록
                     #cls.discord_proxy_set_target_poster(image_url, ret['poster_image_url'])
