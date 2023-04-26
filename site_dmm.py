@@ -198,9 +198,20 @@ class SiteDmm(object):
                     data = SiteUtil.get_image_url(a_nodes[0].attrib['href'], image_mode, proxy_url=proxy_url, with_poster=False)
                     entity.thumb.append(EntityThumb(aspect='landscape', value=data['image_url']))
                 else:
-                    data = SiteUtil.get_image_url(a_nodes[0].attrib['href'], image_mode, proxy_url=proxy_url, with_poster=True)
-                    entity.thumb.append(EntityThumb(aspect='landscape', value=data['image_url']))
-                    entity.thumb.append(EntityThumb(aspect='poster', value=data['poster_image_url']))
+                    try:
+                        image_url_art = tree.xpath('//*[@id="sample-image1"]')[0].attrib['href']    # fanart 즉 sample image의 첫번째
+                        image_url_ps = nodes[0].xpath('.//img')[0].attrib['src']    # poster small
+                    except Exception:
+                        image_url_art, image_url_ps = '', ''
+                    if SiteUtil.is_same_image(image_url_ps, image_url_art):
+                        image_url_landscape = SiteUtil.process_image_mode(image_mode, a_nodes[0].attrib['href'], proxy_url=proxy_url)
+                        entity.thumb.append(EntityThumb(aspect='landscape', value=image_url_landscape))
+                        image_url_poster = SiteUtil.process_image_mode(image_mode, image_url_art, proxy_url=proxy_url)
+                        entity.thumb.append(EntityThumb(aspect='poster', value=image_url_poster))
+                    else:
+                        data = SiteUtil.get_image_url(a_nodes[0].attrib['href'], image_mode, proxy_url=proxy_url, with_poster=True)
+                        entity.thumb.append(EntityThumb(aspect='landscape', value=data['image_url']))
+                        entity.thumb.append(EntityThumb(aspect='poster', value=data['poster_image_url']))
             except:
                 small_img_to_poster = True
             
@@ -208,7 +219,7 @@ class SiteDmm(object):
                 img_tag = nodes[0].xpath('.//img')[0]
                 entity.thumb.append(EntityThumb(aspect='poster', value=SiteUtil.process_image_mode(image_mode, img_tag.attrib['src'], proxy_url=proxy_url)))
 
-  
+
             entity.tagline = SiteUtil.trans(img_tag.attrib['alt'], do_trans=do_trans).replace(u'[배달 전용]', '').replace(u'[특가]', '').strip()
             tags = tree.xpath('{basetag}/table//tr'.format(basetag=basetag))
             tmp_premiered = None

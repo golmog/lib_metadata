@@ -202,6 +202,18 @@ class SiteUtil(object):
         return ret
 
     @classmethod
+    def is_same_image(cls, url1, url2):
+        try:
+            from imagehash import average_hash as hfun
+            from PIL import Image
+            from io import BytesIO
+            im1 = Image.open(BytesIO(cls.session.get(url1).content))
+            im2 = Image.open(BytesIO(cls.session.get(url2).content))
+            return hfun(im1) - hfun(im2) < 5
+        except Exception:
+            return False
+
+    @classmethod
     def change_html(cls, text):
         if text is not None:
             return text.replace('&nbsp;', ' ').replace('&nbsp', ' ').replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&').replace('&quot;', '"').replace('&#35;', '#').replace('&#39;', "‘")
