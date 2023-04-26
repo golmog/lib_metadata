@@ -88,7 +88,8 @@ class SiteUtil(object):
         elif image_mode == '5':  #로컬에 포스터를 만들고 
             # image_url : 디스코드에 올라간 표지 url 임.
             from PIL import Image
-            im = Image.open(requests.get(image_url, stream=True).raw)
+            from io import BytesIO
+            im = Image.open(BytesIO(requests.get(image_url).content))
             width, height = im.size
             filename = 'proxy_%s.jpg' % str(time.time())
             filepath = os.path.join(path_data, 'tmp', filename)
@@ -602,7 +603,8 @@ class SiteUtil(object):
     @classmethod
     def process_image_book(cls, url):
         from PIL import Image
-        im = Image.open(requests.get(url, stream=True).raw)
+        from io import BytesIO
+        im = Image.open(BytesIO(requests.get(url).content))
         width, height = im.size
         filename = 'proxy_%s.jpg' % str(time.time())
         filepath = os.path.join(path_data, 'tmp', filename)
