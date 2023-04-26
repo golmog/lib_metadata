@@ -202,13 +202,19 @@ class SiteUtil(object):
         return ret
 
     @classmethod
-    def is_same_image(cls, url1, url2):
+    def is_same_image(cls, url1, url2, part1=False, part2=False):
         try:
             from imagehash import average_hash as hfun
             from PIL import Image
             from io import BytesIO
             im1 = Image.open(BytesIO(cls.session.get(url1).content))
             im2 = Image.open(BytesIO(cls.session.get(url2).content))
+            w, h = im1.size
+            if w > h and part1:
+                im1 = im1.crop((w/1.895734597, 0, w, h))
+            w, h = im2.size
+            if w > h and part2:
+                im2 = im2.crop((w/1.895734597, 0, w, h))
             return hfun(im1) - hfun(im2) < 5
         except Exception:
             return False

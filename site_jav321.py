@@ -38,6 +38,16 @@ class SiteJav321(object):
                 entity.code = cls.module_char + cls.site_char + res.url.split('/')[-1]
                 entity.score = 100
                 entity.ui_code = keyword.upper()
+                try:
+                    tree = html.fromstring(res.text)
+                    image_url = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/img')[0].attrib['src']
+                    entity.image_url = SiteUtil.process_image_mode(image_mode, image_url, proxy_url=proxy_url)
+                    if manual:
+                        if image_mode == '3':
+                            image_mode = '0'
+                        entity.image_url = SiteUtil.process_image_mode(image_mode, entity.image_url, proxy_url=proxy_url)
+                except Exception:
+                    logger.exception('Exception while getting image url:')
                 ret['data'] = [entity.as_dict()]
                 ret['ret'] = 'success'
             else:
@@ -80,7 +90,7 @@ class SiteJav321(object):
                     if len(entity.actor) == 0:
                         try: entity.actor = [EntityActor(value.split(' ')[0].split('/')[0].strip())]
                         except: pass
-                elif key == u'标签':
+                elif key in ['标签', 'ジャンル']:
                     entity.genre = []
                     a_tags = node.xpath('.//following-sibling::a')
                     for a_tag in a_tags:
@@ -93,13 +103,13 @@ class SiteJav321(object):
                             genre_tmp = SiteUtil.trans(tmp, do_trans=do_trans).replace(' ', '')
                             if genre_tmp not in SiteUtil.av_genre_ignore_ko:
                                 entity.genre.append(genre_tmp)
-                elif key == u'番号' or key == u'品番':
+                elif key in ['番号', '品番']:
                     entity.title = entity.originaltitle = entity.sorttitle = value.upper()
                     entity.tag = [entity.title.split('-')[0]]
                 elif key == u'发行日期' or key == u'配信開始日':
                     entity.premiered = value
                     entity.year = int(value[:4])
-                elif key == u'播放时长':
+                elif key in ['播放时长', '収録時間']:
                     try: entity.runtime = int(re.compile(r'(?P<no>\d{2,3})').search(url).group('no'))
                     except: pass
                 elif key == u'赞':
@@ -107,7 +117,7 @@ class SiteJav321(object):
                         entity.ratings = [EntityRatings(0, votes=int(value), max=5, name='jav321')]
                     else:
                         entity.ratings[0].votes = int(value)
-                elif key == u'评分':
+                elif key in ['评分', '平均評価']:
                     try:
                         tmp = float(value)
                         if entity.ratings is None:
@@ -116,24 +126,51 @@ class SiteJav321(object):
                             logger.debug(value)
                             entity.ratings[0].value = tmp
                     except: pass
-                elif key == u'片商':
+                elif key in ['片商', 'メーカー']:
                     #entity.studio = value
                     entity.studio = node.xpath('.//following-sibling::a')[0].text_content().strip()
 
-            entity.thumb = []
-            node = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/img')[0]
-            tmp = SiteUtil.get_image_url(node.attrib['src'], image_mode, proxy_url=proxy_url)
-            entity.thumb.append(EntityThumb(aspect='poster', value=tmp['image_url']))
+            # low-res image poster - assuming always available
+            image_url_thumb = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/img')[0].attrib['src']
 
-
-            nodes = tree.xpath('//*[@id="vjs_sample_player"]')
-            first_art_append_to_landscape = True
-            if nodes:
-                node = nodes[0]
-                tmp = SiteUtil.get_image_url(node.attrib['poster'], image_mode, proxy_url=proxy_url)
-                entity.thumb.append(EntityThumb(aspect='landscape', value=tmp['image_url']))
-                first_art_append_to_landscape = False
+            image_url_landscape = ''
+            for node in tree.xpath('//*[@id="vjs_sample_player"]'):
+                image_url_landscape = node.attrib['poster']
                 entity.extras = [EntityExtra('trailer', entity.title, 'mp4', node.xpath('.//source')[0].attrib['src'])]
+
+            image_urls_art = []
+            for img in tree.xpath('/html/body/div[2]/div[2]/div//img'):
+                img_src = img.attrib['src']
+                if img_src == image_url_landscape:
+                    continue
+                image_urls_art.append(img_src)
+
+            # first art to landscape
+            if image_urls_art and not image_url_landscape:
+                image_url_landscape = image_urls_art.pop(0)
+
+            # resolving image_url_poster
+            image_url_poster, poster_from_landscape = '', False
+            if image_urls_art and SiteUtil.is_same_image(image_url_thumb, image_urls_art[0]):
+                # first art to poster
+                image_url_poster = image_urls_art[0]
+            if not image_url_poster and SiteUtil.is_same_image(image_url_landscape, image_url_thumb, part1=True):
+                image_url_poster = image_url_landscape
+                poster_from_landscape = True
+            if not image_url_poster:
+                image_url_poster = image_url_thumb
+
+            entity.thumb = []
+            if poster_from_landscape:
+                tmp = SiteUtil.get_image_url(image_url_poster, image_mode, proxy_url=proxy_url, with_poster=True)
+                entity.thumb.append(EntityThumb(aspect='poster', value=tmp['poster_image_url']))
+            else:
+                entity.thumb.append(EntityThumb(aspect='poster', value=SiteUtil.process_image_mode(image_mode, image_url_poster, proxy_url=proxy_url)))
+            if image_url_landscape:
+                tmp = SiteUtil.get_image_url(image_url_landscape, image_mode, proxy_url=proxy_url)
+                entity.thumb.append(EntityThumb(aspect='landscape', value=tmp['image_url']))
+
+
             #entity.plot = SiteUtil.trans(tree.xpath('/html/body/div[2]/div[1]/div[1]/div[1]/h3/text()')[0], do_trans=do_trans)
             tmp = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[2]/div[3]/div/text()')
             if len(tmp) > 0:
@@ -157,20 +194,13 @@ class SiteJav321(object):
                     entity.plot += SiteUtil.trans(tmp, do_trans=do_trans)
             #logger.debug(entity.plot)
 
-            nodes = tree.xpath('/html/body/div[2]/div[2]/div')
             entity.fanart = []
-            for idx, node in enumerate(nodes[(0 if entity.extras is None else 1):]):
+            for idx, img_url in enumerate(image_urls_art):
                 if idx > 9:
                     break
-                img_tag = node.xpath('.//img')
-                if img_tag:
-                    value = SiteUtil.process_image_mode(image_mode, img_tag[0].attrib['src'], proxy_url=proxy_url)
-                    if first_art_append_to_landscape:
-                        entity.thumb.append(EntityThumb(aspect='landscape', value=value))
-                        first_art_append_to_landscape = False
-                    else:
-                        entity.fanart.append(value)
-               
+                value = SiteUtil.process_image_mode(image_mode, img_url, proxy_url=proxy_url)
+                entity.fanart.append(value)
+
             entity.tagline = entity.plot   
             #/html/body/div[2]/div[2]/div[1]/p/a/img
             
