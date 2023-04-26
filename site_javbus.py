@@ -43,6 +43,8 @@ class SiteJavbus(object):
                     item = EntityAVSearch(cls.site_name)
                     tag = node.xpath('.//img')[0]
                     item.image_url = tag.attrib['src'].lower()
+                    if not item.image_url.startswith("http"):
+                        item.image_url = cls.site_base_url + item.image_url
                     if manual == True:
                         if image_mode == '3':
                             image_mode = '0'
@@ -96,8 +98,8 @@ class SiteJavbus(object):
             
             # 2021-10-14
             img_url = tag.attrib['src']
-            if tag.attrib['src'].startswith('http') == False:
-                img_url = 'https://www.javbus.com' + img_url
+            if not img_url.startswith('http'):
+                img_url = cls.site_base_url + img_url
 
             data = SiteUtil.get_image_url(img_url, image_mode, proxy_url=proxy_url, with_poster=True)
 
@@ -139,6 +141,7 @@ class SiteJavbus(object):
                             entity.studio = SiteUtil.av_studio[value]
                         else:
                             entity.studio = SiteUtil.trans(value, do_trans=do_trans)
+                    entity.studio = entity.studio.strip()
                 #elif key == u'發行商':
                 #    entity.studio = value
                 elif key == u'系列':
@@ -162,7 +165,8 @@ class SiteJavbus(object):
                         if tmp.strip() == '':
                             continue
                         entity.actor.append(EntityActor(tmp.strip()))
-            entity.tagline = SiteUtil.trans(tree.xpath('/html/body/div[5]/h3/text()')[0].strip(), do_trans=do_trans).replace(entity.title, '').replace(u'[배달 전용]', '').strip()
+            tagline = tree.xpath('/html/body/div[5]/h3/text()')[0].lstrip(entity.title).strip()
+            entity.tagline = SiteUtil.trans(tagline, do_trans=do_trans).replace(entity.title, '').replace('[배달 전용]', '').strip()
             entity.plot = entity.tagline
 
             tags = tree.xpath('//*[@id="sample-waterfall"]/a')
@@ -173,7 +177,7 @@ class SiteJavbus(object):
 
             ret['data'] = entity.as_dict()
             ret['ret'] = 'success'
-            logger.warning(ret)
+            logger.debug(ret)
             return ret
         except Exception as exception: 
             logger.error('Exception:%s', exception)
