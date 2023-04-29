@@ -203,8 +203,15 @@ class SiteUtil(object):
 
     @classmethod
     def is_same_image(cls, url1, url2, part1=False, part2=False):
+        def imhist(im, pdf=True):
+            arr = np.asarray(im.convert("RGB")).reshape(-1,3)
+            return np.apply_along_axis(lambda x: np.histogram(x, bins=255, range=(1,256), density=pdf)[0], 0, arr)
+        def imdist(_im1, _im2):
+            """based on bhattacharyya distance"""
+            h1, h2 = imhist(_im1), imhist(_im2)
+            return -np.log(np.sum(np.sqrt(h1*h2), axis=0, keepdims=True).min()) * 255.0
         try:
-            from imagehash import average_hash as hfun
+            import numpy as np
             from PIL import Image
             from io import BytesIO
             im1 = Image.open(BytesIO(cls.session.get(url1).content))
@@ -215,7 +222,7 @@ class SiteUtil(object):
             w, h = im2.size
             if w > h and part2:
                 im2 = im2.crop((w/1.895734597, 0, w, h))
-            return hfun(im1) - hfun(im2) < 5
+            return imdist(im1, im2) < 5.0
         except Exception:
             return False
 
