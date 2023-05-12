@@ -198,20 +198,23 @@ class SiteDmm(object):
                     data = SiteUtil.get_image_url(a_nodes[0].attrib['href'], image_mode, proxy_url=proxy_url, with_poster=False)
                     entity.thumb.append(EntityThumb(aspect='landscape', value=data['image_url']))
                 else:
-                    try:
-                        image_url_art = tree.xpath('//*[@id="sample-image1"]')[0].attrib['href']    # fanart 즉 sample image의 첫번째
-                        image_url_ps = nodes[0].xpath('.//img')[0].attrib['src']    # poster small
-                    except Exception:
-                        image_url_art, image_url_ps = '', ''
-                    if SiteUtil.is_hq_poster(image_url_ps, image_url_art):
-                        image_url_landscape = SiteUtil.process_image_mode(image_mode, a_nodes[0].attrib['href'], proxy_url=proxy_url)
-                        entity.thumb.append(EntityThumb(aspect='landscape', value=image_url_landscape))
-                        image_url_poster = SiteUtil.process_image_mode(image_mode, image_url_art, proxy_url=proxy_url)
-                        entity.thumb.append(EntityThumb(aspect='poster', value=image_url_poster))
+                    img_url_ps = nodes[0].xpath('.//img/@src')[0]    # poster small
+                    img_url_ls = nodes[0].xpath('.//a/@href')[0]    # landscape but not always landscape
+                    img_url_arts = tree.xpath('//*[starts-with(@id,"sample-image")]/@href')    # fanart 즉 sample image
+                    if img_url_arts and SiteUtil.is_hq_poster(img_url_ps, img_url_arts[0]):
+                        data = {
+                            "image_url": SiteUtil.process_image_mode(image_mode, img_url_ls, proxy_url=proxy_url),
+                            "poster_image_url": SiteUtil.process_image_mode(image_mode, img_url_arts[0], proxy_url=proxy_url),
+                        }
+                    elif img_url_arts and SiteUtil.is_hq_poster(img_url_ps, img_url_arts[-1]):
+                        data = {
+                            "image_url": SiteUtil.process_image_mode(image_mode, img_url_ls, proxy_url=proxy_url),
+                            "poster_image_url": SiteUtil.process_image_mode(image_mode, img_url_arts[-1], proxy_url=proxy_url),
+                        }
                     else:
-                        data = SiteUtil.get_image_url(a_nodes[0].attrib['href'], image_mode, proxy_url=proxy_url, with_poster=True)
-                        entity.thumb.append(EntityThumb(aspect='landscape', value=data['image_url']))
-                        entity.thumb.append(EntityThumb(aspect='poster', value=data['poster_image_url']))
+                        data = SiteUtil.get_image_url(img_url_ls, image_mode, proxy_url=proxy_url, with_poster=True)
+                    entity.thumb.append(EntityThumb(aspect='landscape', value=data['image_url']))
+                    entity.thumb.append(EntityThumb(aspect='poster', value=data['poster_image_url']))
             except:
                 small_img_to_poster = True
             
