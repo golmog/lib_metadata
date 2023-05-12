@@ -1,22 +1,26 @@
-
-# -*- coding: utf-8 -*-
-import os, time, json, re, sys
+import json
+import os
+import re
+import sys
+import time
+import traceback
+from datetime import timedelta
+from io import BytesIO
 
 import requests
-import traceback
-
 from lxml import html
+from PIL import Image
 
-from framework import SystemModelSetting, py_urllib, path_data
+from framework import SystemModelSetting, path_data, py_urllib
 from framework.util import Util
 from system import SystemLogicTrans
 
 from .plugin import P
+
 logger = P.logger
 
-class SiteUtil(object):
+class SiteUtil:
     try:
-        from datetime import timedelta
         from requests_cache import CachedSession
         session = CachedSession(
             "lib_metadata",
@@ -96,8 +100,6 @@ class SiteUtil(object):
             #ret = Util.make_apikey(tmp)
         elif image_mode == '5':  #로컬에 포스터를 만들고 
             # image_url : 디스코드에 올라간 표지 url 임.
-            from PIL import Image
-            from io import BytesIO
             im = Image.open(BytesIO(cls.session.get(image_url).content))
             width, height = im.size
             filename = 'proxy_%s.jpg' % str(time.time())
@@ -202,6 +204,34 @@ class SiteUtil(object):
         return ret
 
     @classmethod
+    def is_hq_poster(cls, im_sm, im_lg):
+        def imhist(im, pdf=True):
+            arr = np.asarray(im.convert("RGB")).reshape(-1,3)
+            return np.apply_along_axis(lambda x: np.histogram(x, bins=255, range=(1,256), density=pdf)[0], 0, arr)
+        def imdist(_im1, _im2):
+            """based on bhattacharyya distance"""
+            h1, h2 = imhist(_im1), imhist(_im2)
+            return -np.log(np.sum(np.sqrt(h1*h2), axis=0, keepdims=True).min()) * 255.0
+        def imopen(im):
+            if not isinstance(im, Image.Image) and isinstance(im, str):
+                return Image.open(BytesIO(cls.session.get(im).content))
+            return im
+        try:
+            import numpy as np
+            im_sm, im_lg = imopen(im_sm), imopen(im_lg)
+            ws, hs = im_sm.size
+            wl, hl = im_lg.size
+            if ws > wl or hs > hl:
+                # large image is not large enough
+                return False
+            if abs(ws/hs-wl/hl) > 0.1:
+                # aspect ratio is quite different
+                return False
+            return imdist(im_sm, im_lg) < 5.0
+        except Exception:
+            return False
+
+    @classmethod
     def is_same_image(cls, url1, url2, part1=False, part2=False):
         def imhist(im, pdf=True):
             arr = np.asarray(im.convert("RGB")).reshape(-1,3)
@@ -212,8 +242,6 @@ class SiteUtil(object):
             return -np.log(np.sum(np.sqrt(h1*h2), axis=0, keepdims=True).min()) * 255.0
         try:
             import numpy as np
-            from PIL import Image
-            from io import BytesIO
             im1 = Image.open(BytesIO(cls.session.get(url1).content))
             im2 = Image.open(BytesIO(cls.session.get(url2).content))
             w, h = im1.size
@@ -639,8 +667,6 @@ class SiteUtil(object):
 
     @classmethod
     def process_image_book(cls, url):
-        from PIL import Image
-        from io import BytesIO
         im = Image.open(BytesIO(cls.session.get(url).content))
         width, height = im.size
         filename = 'proxy_%s.jpg' % str(time.time())

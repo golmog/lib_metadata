@@ -203,7 +203,7 @@ class SiteDmm(object):
                         image_url_ps = nodes[0].xpath('.//img')[0].attrib['src']    # poster small
                     except Exception:
                         image_url_art, image_url_ps = '', ''
-                    if SiteUtil.is_same_image(image_url_ps, image_url_art):
+                    if SiteUtil.is_hq_poster(image_url_ps, image_url_art):
                         image_url_landscape = SiteUtil.process_image_mode(image_mode, a_nodes[0].attrib['href'], proxy_url=proxy_url)
                         entity.thumb.append(EntityThumb(aspect='landscape', value=image_url_landscape))
                         image_url_poster = SiteUtil.process_image_mode(image_mode, image_url_art, proxy_url=proxy_url)
