@@ -1,11 +1,6 @@
-# -*- coding: utf-8 -*-
-import os, traceback, time
+import time
 
-import requests
 from lxml import html
-
-from framework import SystemModelSetting
-from system import SystemLogicTrans
 
 from .plugin import P
 from .site_util import SiteUtil
@@ -13,32 +8,21 @@ from .site_util import SiteUtil
 logger = P.logger
 
 
-class SiteHentaku(object):
+class SiteHentaku:
     site_char = "H"
 
     @staticmethod
     def get_actor_info(entity_actor, proxy_url=None, retry=True):
         try:
             url = "https://hentaku.co/starsearch.php"
-            page = requests.post(
-                url,
-                headers=SiteUtil.default_headers,
-                data={"name": entity_actor["originalname"]},
-            )
+            page = SiteUtil.get_response(url, post_data={"name": entity_actor["originalname"]})
             page.encoding = "utf-8"
-            data = (
-                '<meta http-equiv="Content-Type" content="text/html; charset=utf-8">'
-                + page.text
-            )
+            data = '<meta http-equiv="Content-Type" content="text/html; charset=utf-8">' + page.text
             tree = html.fromstring(data)
             nodes = tree.xpath("//img")
             if nodes:
-                logger.debug(
-                    "hentaku %s %s",
-                    entity_actor["originalname"],
-                    nodes[0].attrib["src"].strip(),
-                )
                 thumb_url = nodes[0].attrib["src"].strip()
+                logger.debug("hentaku %s %s", entity_actor["originalname"], thumb_url)
                 if thumb_url != "":
                     entity_actor["thumb"] = SiteUtil.process_image_mode("3", thumb_url)
                 tmps = tree.xpath('//div[@class="avstar_info_b"]/text()')[0].split("/")
@@ -55,12 +39,9 @@ class SiteHentaku(object):
             # 2020-06-01
             # 단시간에 많은 요청시시 Error발생
             if retry:
-                logger.debug("단시간 많은 요청으로 재요청")
+                logger.debug("단시간 많은 요청으로 재시도")
                 time.sleep(2)
-                return SiteHentaku.get_actor_info(
-                    entity_actor, proxy_url=proxy_url, retry=False
-                )
-        except Exception as exception:
-            logger.error("Exception:%s", exception)
-            logger.error(traceback.format_exc())
+                return SiteHentaku.get_actor_info(entity_actor, proxy_url=proxy_url, retry=False)
+        except Exception:
+            logger.exception("배우 정보 업데이트 중 예외:")
         return entity_actor

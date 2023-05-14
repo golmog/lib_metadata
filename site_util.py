@@ -1,9 +1,7 @@
 import json
 import os
 import re
-import sys
 import time
-import traceback
 from datetime import timedelta
 from io import BytesIO
 
@@ -29,7 +27,8 @@ class SiteUtil:
             use_temp=True,
             expire_after=timedelta(hours=6),
         )
-    except Exception:
+    except Exception as e:
+        logger.warning("requests cache 사용 안함: %s", e)
         session = requests.Session()
 
     default_headers = {
@@ -40,99 +39,35 @@ class SiteUtil:
     }
 
     @classmethod
-    def get_tree(
-        cls,
-        url,
-        proxy_url=None,
-        headers=None,
-        post_data=None,
-        cookies=None,
-        verify=None,
-    ):
-        text = cls.get_text(
-            url,
-            proxy_url=proxy_url,
-            headers=headers,
-            post_data=post_data,
-            cookies=cookies,
-            verify=verify,
-        )
+    def get_tree(cls, url, **kwargs):
+        text = cls.get_text(url, **kwargs)
         # logger.debug(text)
         if text is None:
-            return
+            return text
         return html.fromstring(text)
 
     @classmethod
-    def get_text(
-        cls,
-        url,
-        proxy_url=None,
-        headers=None,
-        post_data=None,
-        cookies=None,
-        verify=None,
-    ):
-        res = cls.get_response(
-            url,
-            proxy_url=proxy_url,
-            headers=headers,
-            post_data=post_data,
-            cookies=cookies,
-            verify=verify,
-        )
+    def get_text(cls, url, **kwargs):
+        res = cls.get_response(url, **kwargs)
         # logger.debug('url: %s, %s', res.status_code, url)
         # if res.status_code != 200:
         #    return None
         return res.text
 
     @classmethod
-    def get_response(
-        cls,
-        url,
-        proxy_url=None,
-        headers=None,
-        post_data=None,
-        cookies=None,
-        verify=None,
-    ):
-        proxies = None
-        if proxy_url is not None and proxy_url != "":
-            proxies = {"http": proxy_url, "https": proxy_url}
-        if headers is None:
-            headers = cls.default_headers
+    def get_response(cls, url, **kwargs):
+        proxy_url = kwargs.pop("proxy_url", None)
+        if proxy_url:
+            kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
 
+        kwargs.setdefault("headers", cls.default_headers)
+
+        post_data = kwargs.pop("post_data", None)
         if post_data is None:
-            if verify == None:
-                res = cls.session.get(
-                    url, headers=headers, proxies=proxies, cookies=cookies
-                )
-            else:
-                res = cls.session.get(
-                    url,
-                    headers=headers,
-                    proxies=proxies,
-                    cookies=cookies,
-                    verify=verify,
-                )
+            res = cls.session.get(url, **kwargs)
         else:
-            if verify == None:
-                res = cls.session.post(
-                    url,
-                    headers=headers,
-                    proxies=proxies,
-                    data=post_data,
-                    cookies=cookies,
-                )
-            else:
-                res = cls.session.post(
-                    url,
-                    headers=headers,
-                    proxies=proxies,
-                    data=post_data,
-                    cookies=cookies,
-                    verify=verify,
-                )
-
+            kwargs["data"] = post_data
+            res = cls.session.post(url, **kwargs)
         # logger.debug(res.headers)
         # logger.debug(res.text)
         return res
@@ -144,24 +79,19 @@ class SiteUtil:
             return
         ret = image_url
         if image_mode == "1":
-            tmp = "{ddns}/metadata/api/image_proxy?url=" + py_urllib.quote_plus(
-                image_url
-            )
+            tmp = "{ddns}/metadata/api/image_proxy?url=" + py_urllib.quote_plus(image_url)
             if proxy_url is not None:
                 tmp += "&proxy_url=" + py_urllib.quote_plus(proxy_url)
             ret = Util.make_apikey(tmp)
         elif image_mode == "2":
-            tmp = "{ddns}/metadata/api/discord_proxy?url=" + py_urllib.quote_plus(
-                image_url
-            )
+            tmp = "{ddns}/metadata/api/discord_proxy?url=" + py_urllib.quote_plus(image_url)
             ret = Util.make_apikey(tmp)
         elif image_mode == "3":  # 고정 디스코드 URL.
             ret = cls.discord_proxy_image(image_url)
         elif image_mode == "4":  # landscape to poster
             # logger.debug(image_url)
-            ret = (
-                "{ddns}/metadata/normal/image_process.jpg?mode=landscape_to_poster&url="
-                + py_urllib.quote_plus(image_url)
+            ret = "{ddns}/metadata/normal/image_process.jpg?mode=landscape_to_poster&url=" + py_urllib.quote_plus(
+                image_url
             )
             ret = ret.format(ddns=SystemModelSetting.get("ddns"))
             # ret = Util.make_apikey(tmp)
@@ -169,17 +99,15 @@ class SiteUtil:
             # image_url : 디스코드에 올라간 표지 url 임.
             im = Image.open(BytesIO(cls.session.get(image_url).content))
             width, height = im.size
-            filename = "proxy_%s.jpg" % str(time.time())
+            filename = f"proxy_{time.time()}.jpg"
             filepath = os.path.join(path_data, "tmp", filename)
             if width > height:
                 left = width / 1.895734597
                 top = 0
                 right = width
                 bottom = height
-                poster = im.crop((left, top, right, bottom))
-                poster.save(filepath)
-            else:
-                im.save(filepath)
+                im = im.crop((left, top, right, bottom))
+            im.save(filepath)
             # poster_url = '{ddns}/file/data/tmp/%s' % filename
             # poster_url = Util.make_apikey(poster_url)
             # logger.debug('poster_url : %s', poster_url)
@@ -223,7 +151,6 @@ class SiteUtil:
         "アナル": "항문노출",
         "超乳": "폭유",
         "復刻": "리마스터",
-        "投稿": "투고",
         "義母": "새어머니",
         "おもちゃ": "노리개",
         "くノ一": "여자닌자",
@@ -335,9 +262,7 @@ class SiteUtil:
 
             # logger.debug('tmp : %s', tmp)
             # if tmp is None:
-            ret["image_url"] = cls.process_image_mode(
-                image_mode, image_url, proxy_url=proxy_url
-            )
+            ret["image_url"] = cls.process_image_mode(image_mode, image_url, proxy_url=proxy_url)
             # else:
             #    ret['image_url'] = tmp
 
@@ -350,25 +275,18 @@ class SiteUtil:
                     w, h = im.size
                     if w > h:
                         # landscape to poster
-                        ret["poster_image_url"] = cls.process_image_mode(
-                            "4", image_url, proxy_url=proxy_url
-                        )
+                        ret["poster_image_url"] = cls.process_image_mode("4", image_url, proxy_url=proxy_url)
                     else:
                         # already poster
-                        ret["poster_image_url"] = cls.process_image_mode(
-                            "1", image_url, proxy_url=proxy_url
-                        )
+                        ret["poster_image_url"] = cls.process_image_mode("1", image_url, proxy_url=proxy_url)
                 else:
-                    ret["poster_image_url"] = cls.process_image_mode(
-                        "5", ret["image_url"]
-                    )  # 포스터이미지 url 본인 sjva
+                    ret["poster_image_url"] = cls.process_image_mode("5", ret["image_url"])  # 포스터이미지 url 본인 sjva
                     # if image_mode == '3': # 디스코드 url 모드일때만 포스터도 디스코드로
                     # ret['poster_image_url'] = cls.process_image_mode('3', tmp) #디스코드 url / 본인 sjva가 소스이므로 공용으로 등록
                     # cls.discord_proxy_set_target_poster(image_url, ret['poster_image_url'])
 
-        except Exception as exception:
-            logger.error("Exception:%s", exception)
-            logger.error(traceback.format_exc())
+        except Exception:
+            logger.exception("Image URL 생성 중 예외:")
         # logger.debug('get_image_url')
         # logger.debug(ret)
         return ret
@@ -386,9 +304,7 @@ class SiteUtil:
         def imdist(_im1, _im2):
             """based on bhattacharyya distance"""
             h1, h2 = imhist(_im1), imhist(_im2)
-            return (
-                -np.log(np.sum(np.sqrt(h1 * h2), axis=0, keepdims=True).min()) * 255.0
-            )
+            return -np.log(np.sum(np.sqrt(h1 * h2), axis=0, keepdims=True).min()) * 255.0
 
         def imopen(im):
             if not isinstance(im, Image.Image) and isinstance(im, str):
@@ -424,9 +340,7 @@ class SiteUtil:
         def imdist(_im1, _im2):
             """based on bhattacharyya distance"""
             h1, h2 = imhist(_im1), imhist(_im2)
-            return (
-                -np.log(np.sum(np.sqrt(h1 * h2), axis=0, keepdims=True).min()) * 255.0
-            )
+            return -np.log(np.sum(np.sqrt(h1 * h2), axis=0, keepdims=True).min()) * 255.0
 
         try:
             import numpy as np
@@ -445,27 +359,27 @@ class SiteUtil:
 
     @classmethod
     def change_html(cls, text):
-        if text is not None:
-            return (
-                text.replace("&nbsp;", " ")
-                .replace("&nbsp", " ")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&amp;", "&")
-                .replace("&quot;", '"')
-                .replace("&#35;", "#")
-                .replace("&#39;", "‘")
-            )
+        if not text:
+            return text
+        return (
+            text.replace("&nbsp;", " ")
+            .replace("&nbsp", " ")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&")
+            .replace("&quot;", '"')
+            .replace("&#35;", "#")
+            .replace("&#39;", "‘")
+        )
 
     @classmethod
     def remove_special_char(cls, text):
-        return re.sub("[-=+,#/\?:^$.@*\"※~&%ㆍ!』\\‘|\(\)\[\]\<\>`'…》]", "", text)
+        return re.sub(r"[-=+,#/\?:^$.@*\"※~&%ㆍ!』\\‘|\(\)\[\]\<\>`'…》]", "", text)
 
     @classmethod
     def compare(cls, a, b):
         return (
-            cls.remove_special_char(a).replace(" ", "").lower()
-            == cls.remove_special_char(b).replace(" ", "").lower()
+            cls.remove_special_char(a).replace(" ", "").lower() == cls.remove_special_char(b).replace(" ", "").lower()
         )
 
     @classmethod
@@ -474,8 +388,8 @@ class SiteUtil:
         title = title.replace("특별기획드라마", "").strip()
         title = re.sub(r"\[.*?\]", "", title).strip()
         title = re.sub(r"\(.*?\)", "", title).strip()
-        title = re.sub(r"^.{2,3}%s" % "드라마", "", title).strip()
-        title = re.sub(r"^.{1,3}%s" % "특집", "", title).strip()
+        title = re.sub(r"^.{2,3}드라마", "", title).strip()
+        title = re.sub(r"^.{1,3}특집", "", title).strip()
         return title
 
     @classmethod
@@ -498,7 +412,7 @@ class SiteUtil:
         data["info"]["tagline"] = data["tagline"]
         data["info"]["mpaa"] = data["mpaa"]
         if "director" in data and len(data["director"]) > 0:
-            if type(data["director"][0]) == type({}):
+            if isinstance(data["director"][0], dict):
                 tmp_list = []
                 for tmp in data["director"]:
                     tmp_list.append(tmp["name"])
@@ -507,7 +421,7 @@ class SiteUtil:
                 data["info"]["director"] = data["director"]
         if "credits" in data and len(data["credits"]) > 0:
             data["info"]["writer"] = []
-            if type(data["credits"][0]) == type({}):
+            if isinstance(data["credits"][0], dict):
                 for tmp in data["credits"]:
                     data["info"]["writer"].append(tmp["name"])
             else:
@@ -551,33 +465,15 @@ class SiteUtil:
 
     @classmethod
     def is_hangul(cls, text):
-        pyVer3 = sys.version_info >= (3, 0)
-        if pyVer3:  # for Ver 3 or later
-            encText = text
-        else:  # for Ver 2.x
-            if type(text) is not unicode:
-                encText = text.decode("utf-8")
-            else:
-                encText = text
-
-        hanCount = len(re.findall("[\u3130-\u318F\uAC00-\uD7A3]+", encText))
+        hanCount = len(re.findall("[\u3130-\u318F\uAC00-\uD7A3]+", text))
         return hanCount > 0
 
     @classmethod
     def is_include_hangul(cls, text):
         try:
-            pyVer3 = sys.version_info >= (3, 0)
-            if pyVer3:  # for Ver 3 or later
-                encText = text
-            else:  # for Ver 2.x
-                if type(text) is not unicode:
-                    encText = text.decode("utf-8")
-                else:
-                    encText = text
-
-            hanCount = len(re.findall("[\u3130-\u318F\uAC00-\uD7A3]+", encText))
+            hanCount = len(re.findall("[\u3130-\u318F\uAC00-\uD7A3]+", text))
             return hanCount > 0
-        except:
+        except Exception:
             return False
 
     country_code_translate = {
@@ -825,71 +721,47 @@ class SiteUtil:
     @classmethod
     def get_tree_daum(cls, url, post_data=None):
         from system.logic_site import SystemLogicSite
-
-        cookies = SystemLogicSite.get_daum_cookies()
-        from framework import SystemModelSetting
-
-        proxy_url = SystemModelSetting.get("site_daum_proxy")
         from .site_daum import SiteDaum
 
-        headers = SiteDaum.default_headers
-        text = cls.get_text(
+        return cls.get_tree(
             url,
-            proxy_url=proxy_url,
-            headers=headers,
+            proxy_url=SystemModelSetting.get("site_daum_proxy"),
+            headers=SiteDaum.default_headers,
             post_data=post_data,
-            cookies=cookies,
+            cookies=SystemLogicSite.get_daum_cookies(),
         )
-        if text is None:
-            return
-        return html.fromstring(text)
 
     @classmethod
     def get_text_daum(cls, url, post_data=None):
         from system.logic_site import SystemLogicSite
-
-        cookies = SystemLogicSite.get_daum_cookies()
-        from framework import SystemModelSetting
-
-        proxy_url = SystemModelSetting.get("site_daum_proxy")
         from .site_daum import SiteDaum
 
-        headers = SiteDaum.default_headers
-        res = cls.get_response(
+        return cls.get_text(
             url,
-            proxy_url=proxy_url,
-            headers=headers,
+            proxy_url=SystemModelSetting.get("site_daum_proxy"),
+            headers=SiteDaum.default_headers,
             post_data=post_data,
-            cookies=cookies,
+            cookies=SystemLogicSite.get_daum_cookies(),
         )
-        return res.text
 
     @classmethod
     def get_response_daum(cls, url, post_data=None):
         from system.logic_site import SystemLogicSite
-
-        cookies = SystemLogicSite.get_daum_cookies()
-        from framework import SystemModelSetting
-
-        proxy_url = SystemModelSetting.get("site_daum_proxy")
         from .site_daum import SiteDaum
 
-        headers = SiteDaum.default_headers
-
-        res = cls.get_response(
+        return cls.get_response(
             url,
-            proxy_url=proxy_url,
-            headers=headers,
+            proxy_url=SystemModelSetting.get("site_daum_proxy"),
+            headers=SiteDaum.default_headers,
             post_data=post_data,
-            cookies=cookies,
+            cookies=SystemLogicSite.get_daum_cookies(),
         )
-        return res
 
     @classmethod
     def process_image_book(cls, url):
         im = Image.open(BytesIO(cls.session.get(url).content))
         width, height = im.size
-        filename = "proxy_%s.jpg" % str(time.time())
+        filename = f"proxy_{time.time()}.jpg"
         filepath = os.path.join(path_data, "tmp", filename)
         left = 0
         top = 0
@@ -898,16 +770,14 @@ class SiteUtil:
         poster = im.crop((left, top, right, bottom))
         try:
             poster.save(filepath)
-        except:
+        except Exception:
             poster = poster.convert("RGB")
             poster.save(filepath)
         ret = cls.discord_proxy_image_localfile(filepath)
         return ret
 
     @classmethod
-    def get_treefromcontent(
-        cls, url, proxy_url=None, headers=None, post_data=None, cookies=None
-    ):
+    def get_treefromcontent(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None):
         text = SiteUtil.get_response(
             url,
             proxy_url=proxy_url,
@@ -921,34 +791,26 @@ class SiteUtil:
         return html.fromstring(text)
 
     @classmethod
-    def get_translated_tag(cls, type, tag):
+    def get_translated_tag(cls, tag_type, tag):
         tags_json = os.path.join(os.path.dirname(__file__), "tags.json")
         with open(tags_json, "r", encoding="utf8") as f:
             tags = json.load(f)
 
-        if type in tags:
-            if tag in tags[type]:
-                res = tags[type][tag]
+        if tag_type in tags:
+            if tag in tags[tag_type]:
+                return tags[tag_type][tag]
 
+            trans_text = SystemLogicTrans.trans(tag, source="ja", target="ko").strip()
+            # logger.debug(f'태그 번역: {tag} - {trans_text}')
+            if cls.is_include_hangul(trans_text) or trans_text.replace(" ", "").isalnum():
+                tags[tag_type][tag] = trans_text
+
+                with open(tags_json, "w", encoding="utf8") as f:
+                    json.dump(tags, f, indent=4, ensure_ascii=False)
+
+                res = tags[tag_type][tag]
             else:
-                trans_text = SystemLogicTrans.trans(
-                    tag, source="ja", target="ko"
-                ).strip()
-                # logger.debug(f'태그 번역: {tag} - {trans_text}')
-                if (
-                    cls.is_include_hangul(trans_text)
-                    or trans_text.replace(" ", "").isalnum()
-                ):
-                    tags[type][tag] = trans_text
-
-                    with open(tags_json, "w", encoding="utf8") as f:
-                        json.dump(tags, f, indent=4, ensure_ascii=False)
-
-                    res = tags[type][tag]
-                else:
-                    res = tag
+                res = tag
 
             return res
-
-        else:
-            return tag
+        return tag

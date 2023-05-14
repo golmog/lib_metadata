@@ -1,16 +1,10 @@
-# -*- coding: utf-8 -*-
-# python
-import os, traceback, time, json
+import json
 
 # third-party
 import requests
-from flask import Blueprint, request, send_file, redirect
 
 # sjva 공용
-from framework import app, path_data, check_api, py_urllib, SystemModelSetting
-from framework.logger import get_logger
-from framework.util import Util
-
+from framework import SystemModelSetting, app
 
 from .plugin import P
 
@@ -24,122 +18,88 @@ server_plugin_ddns = app.config["DEFINE"]["METADATA_SERVER_URL"]
 try:
     if SystemModelSetting.get("ddns") == server_plugin_ddns:
         server_plugin_ddns = "http://127.0.0.1:19999"
-except:
+except Exception:
     pass
 
 
-class MetadataServerUtil(object):
+class MetadataServerUtil:
     @classmethod
     def get_metadata(cls, code):
         try:
-            from framework import py_urllib
-
-            url = f"{app.config['DEFINE']['WEB_DIRECT_URL']}/meta/get_meta.php?"
-            url += py_urllib.urlencode({"type": "meta", "code": code})
-            logger.warning(url)
-            data = requests.get(url).json()
+            url = f"{app.config['DEFINE']['WEB_DIRECT_URL']}/meta/get_meta.php"
+            params = {"type": "meta", "code": code}
+            logger.info("서버로부터 메타데이터를 가져오는 중: %s", params)
+            data = requests.get(url, params=params, timeout=30).json()
             if data["ret"] == "success":
                 return data["data"]
-        except Exception as exception:
-            # logger.debug('Exception:%s', exception)
-            # logger.debug(traceback.format_exc())
-            logger.error("metaserver connection fail.. get_metadata")
-
-    """
-    @classmethod
-    def search_metadata(cls, keyword):
-        try:
-            from framework import py_urllib
-            url = '{server_plugin_ddns}/server/normal/metadata/search?keyword={keyword}'.format(server_plugin_ddns=server_plugin_ddns, keyword=keyword)
-            data = requests.get(url).json()
-            if data['ret'] == 'success':
-                return data['data']
-        except Exception as exception: 
-            logger.error('metaserver connection fail.. search_metadata')
-    """
+        except Exception:
+            logger.exception("서버로부터 메타데이터를 가져오는 중 예외:")
 
     @classmethod
     def set_metadata(cls, code, data, keyword):
         try:
-            from framework import py_urllib
-
-            url = "{server_plugin_ddns}/server/normal/metadata/set".format(
-                server_plugin_ddns=server_plugin_ddns
-            )
+            url = f"{server_plugin_ddns}/server/normal/metadata/set"
             param = {
                 "code": code,
                 "data": json.dumps(data),
                 "user": SystemModelSetting.get("sjva_me_user_id"),
                 "keyword": keyword,
             }
-            # logger.debug(param)
-            data = requests.post(url, data=param).json()
+            logger.debug("서버로 메타데이터 보내는 중: %s", param)
+            data = requests.post(url, data=param, timeout=30).json()
             if data["ret"] == "success":
-                logger.info("%s Data save success. Thanks!!!!", code)
-        except Exception as exception:
-            logger.error("metaserver connection fail.. set_metadata")
+                logger.info("메타데이터 '%s' 저장 성공. 감사합니다!", code)
+        except Exception:
+            logger.exception("서버로 메타데이터 보내는 중 예외:")
 
     @classmethod
     def set_metadata_jav_censored(cls, code, data, keyword):
         try:
-            if (
-                data["thumb"] is None
-                or (code.startswith("C") and len(data["thumb"]) < 2)
-                or (code.startswith("D") and len(data["thumb"]) < 1)
-            ):
+            thumbs = data.get("thumb", [])
+            if code.startswith("C") and len(thumbs) < 2:
                 return
-            for tmp in data["thumb"]:
-                if tmp["value"] is None or tmp["value"].find(".discordapp.") == -1:
-                    return
-                if requests.get(tmp["value"]).status_code != 200:
-                    return
-            if SiteUtil.is_include_hangul(data["plot"]) == False:
+            if code.startswith("D") and len(thumbs) < 1:
                 return
-            """
-            if data['fanart'] is not None:
-                for tmp in data['fanart']:
-                    if tmp.find('.discordapp.') == -1:
-                        return
-            """
+            for thumb in thumbs:
+                value = thumb.get("value", "")
+                if ".discordapp." not in value:
+                    return
+                if not requests.get(thumb["value"], timeout=30).ok:
+                    return
+            if not SiteUtil.is_include_hangul(data.get("plot", "")):
+                return
+        except Exception:
+            logger.exception("보낼 메타데이터 확인 중 예외:")
+        else:
             cls.set_metadata(code, data, keyword)
-        except Exception as exception:
-            logger.error("Exception:%s", exception)
-            logger.error(traceback.format_exc())
 
     @classmethod
     def set_metadata_jav_uncensored(cls, code, data, keyword):
         try:
-            if data["thumb"] is None:
-                return
-            for tmp in data["thumb"]:
-                if tmp["value"] is None or tmp["value"].find(".discordapp.") == -1:
+            thumbs = data.get("thumb", [])
+            for thumb in thumbs:
+                value = thumb.get("value", "")
+                if ".discordapp." not in value:
                     return
-                if requests.get(tmp["value"]).status_code != 200:
+                if not requests.get(thumb["value"], timeout=30).ok:
                     return
-            if SiteUtil.is_include_hangul(data["tagline"]) == False:
+            if not SiteUtil.is_include_hangul(data.get("tagline", "")):
                 return
-            if (
-                data["plot"] is not None
-                and SiteUtil.is_include_hangul(data["plot"]) == False
-            ):
+            if not SiteUtil.is_include_hangul(data.get("plot", "")):
                 return
-
+        except Exception:
+            logger.exception("보낼 메타데이터 확인 중 예외:")
+        else:
             cls.set_metadata(code, data, keyword)
-            logger.debug(f"set metadata uncensored complete, {code}")
-
-        except Exception as exception:
-            logger.error("Exception:%s", exception)
-            logger.error(traceback.format_exc())
 
     @classmethod
     def get_meta_extra(cls, code):
         try:
-            from framework import py_urllib
-
-            url = f"{app.config['DEFINE']['WEB_DIRECT_URL']}/meta/get_meta.php?"
-            url += py_urllib.urlencode({"type": "extra", "code": code})
-            data = requests.get(url).json()
+            url = f"{app.config['DEFINE']['WEB_DIRECT_URL']}/meta/get_meta.php"
+            params = {"type": "extra", "code": code}
+            logger.info("서버로부터 메타데이터를 가져오는 중: %s", params)
+            data = requests.get(url, params=params, timeout=30).json()
             if data["ret"] == "success":
                 return data["data"]
-        except Exception as exception:
-            logger.error("metaserver connection fail.. get_meta_extra")
+        except Exception:
+            logger.exception("서버로부터 메타데이터를 가져오는 중 예외:")
