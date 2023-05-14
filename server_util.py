@@ -13,34 +13,38 @@ from framework.util import Util
 
 
 from .plugin import P
+
 logger = P.logger
 from .site_util import SiteUtil
+
 # 패키지
 
 
-server_plugin_ddns = app.config['DEFINE']['METADATA_SERVER_URL']
+server_plugin_ddns = app.config["DEFINE"]["METADATA_SERVER_URL"]
 try:
-    if SystemModelSetting.get('ddns') == server_plugin_ddns:
-        server_plugin_ddns = 'http://127.0.0.1:19999'
+    if SystemModelSetting.get("ddns") == server_plugin_ddns:
+        server_plugin_ddns = "http://127.0.0.1:19999"
 except:
     pass
+
 
 class MetadataServerUtil(object):
     @classmethod
     def get_metadata(cls, code):
         try:
             from framework import py_urllib
+
             url = f"{app.config['DEFINE']['WEB_DIRECT_URL']}/meta/get_meta.php?"
-            url += py_urllib.urlencode({'type':'meta', 'code':code})
+            url += py_urllib.urlencode({"type": "meta", "code": code})
             logger.warning(url)
             data = requests.get(url).json()
-            if data['ret'] == 'success':
-                return data['data']
+            if data["ret"] == "success":
+                return data["data"]
         except Exception as exception:
-            #logger.debug('Exception:%s', exception)
-            #logger.debug(traceback.format_exc())
-            logger.error('metaserver connection fail.. get_metadata')
-    
+            # logger.debug('Exception:%s', exception)
+            # logger.debug(traceback.format_exc())
+            logger.error("metaserver connection fail.. get_metadata")
+
     """
     @classmethod
     def search_metadata(cls, keyword):
@@ -58,27 +62,38 @@ class MetadataServerUtil(object):
     def set_metadata(cls, code, data, keyword):
         try:
             from framework import py_urllib
-            url = '{server_plugin_ddns}/server/normal/metadata/set'.format(server_plugin_ddns=server_plugin_ddns)
-            param = {'code':code, 'data':json.dumps(data), 'user':SystemModelSetting.get('sjva_me_user_id'), 'keyword':keyword}
-            #logger.debug(param)
-            data = requests.post(url, data=param).json()
-            if data['ret'] == 'success':
-                logger.info('%s Data save success. Thanks!!!!', code)
-        except Exception as exception: 
-            logger.error('metaserver connection fail.. set_metadata')
 
+            url = "{server_plugin_ddns}/server/normal/metadata/set".format(
+                server_plugin_ddns=server_plugin_ddns
+            )
+            param = {
+                "code": code,
+                "data": json.dumps(data),
+                "user": SystemModelSetting.get("sjva_me_user_id"),
+                "keyword": keyword,
+            }
+            # logger.debug(param)
+            data = requests.post(url, data=param).json()
+            if data["ret"] == "success":
+                logger.info("%s Data save success. Thanks!!!!", code)
+        except Exception as exception:
+            logger.error("metaserver connection fail.. set_metadata")
 
     @classmethod
     def set_metadata_jav_censored(cls, code, data, keyword):
         try:
-            if data['thumb'] is None or (code.startswith('C') and len(data['thumb']) < 2) or (code.startswith('D') and len(data['thumb']) < 1):
+            if (
+                data["thumb"] is None
+                or (code.startswith("C") and len(data["thumb"]) < 2)
+                or (code.startswith("D") and len(data["thumb"]) < 1)
+            ):
                 return
-            for tmp in data['thumb']:
-                if tmp['value'] is None or tmp['value'].find('.discordapp.') == -1:
+            for tmp in data["thumb"]:
+                if tmp["value"] is None or tmp["value"].find(".discordapp.") == -1:
                     return
-                if requests.get(tmp['value']).status_code != 200:
+                if requests.get(tmp["value"]).status_code != 200:
                     return
-            if SiteUtil.is_include_hangul(data['plot']) == False:
+            if SiteUtil.is_include_hangul(data["plot"]) == False:
                 return
             """
             if data['fanart'] is not None:
@@ -86,44 +101,45 @@ class MetadataServerUtil(object):
                     if tmp.find('.discordapp.') == -1:
                         return
             """
-            cls.set_metadata(code, data, keyword)   
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+            cls.set_metadata(code, data, keyword)
+        except Exception as exception:
+            logger.error("Exception:%s", exception)
             logger.error(traceback.format_exc())
-
 
     @classmethod
     def set_metadata_jav_uncensored(cls, code, data, keyword):
         try:
-            if data['thumb'] is None:
+            if data["thumb"] is None:
                 return
-            for tmp in data['thumb']:
-                if tmp['value'] is None or tmp['value'].find('.discordapp.') == -1:
+            for tmp in data["thumb"]:
+                if tmp["value"] is None or tmp["value"].find(".discordapp.") == -1:
                     return
-                if requests.get(tmp['value']).status_code != 200:
+                if requests.get(tmp["value"]).status_code != 200:
                     return
-            if SiteUtil.is_include_hangul(data['tagline']) == False:
+            if SiteUtil.is_include_hangul(data["tagline"]) == False:
                 return
-            if data['plot'] is not None and SiteUtil.is_include_hangul(data['plot']) == False:
+            if (
+                data["plot"] is not None
+                and SiteUtil.is_include_hangul(data["plot"]) == False
+            ):
                 return
 
             cls.set_metadata(code, data, keyword)
-            logger.debug(f'set metadata uncensored complete, {code}')
+            logger.debug(f"set metadata uncensored complete, {code}")
 
-        except Exception as exception: 
-            logger.error('Exception:%s', exception)
+        except Exception as exception:
+            logger.error("Exception:%s", exception)
             logger.error(traceback.format_exc())
 
-    
-    
     @classmethod
     def get_meta_extra(cls, code):
         try:
             from framework import py_urllib
+
             url = f"{app.config['DEFINE']['WEB_DIRECT_URL']}/meta/get_meta.php?"
-            url += py_urllib.urlencode({'type':'extra', 'code':code})
+            url += py_urllib.urlencode({"type": "extra", "code": code})
             data = requests.get(url).json()
-            if data['ret'] == 'success':
-                return data['data']
-        except Exception as exception: 
-            logger.error('metaserver connection fail.. get_meta_extra')
+            if data["ret"] == "success":
+                return data["data"]
+        except Exception as exception:
+            logger.error("metaserver connection fail.. get_meta_extra")
