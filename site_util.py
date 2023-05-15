@@ -73,6 +73,35 @@ class SiteUtil:
         return res
 
     @classmethod
+    def imopen(cls, im, proxy_url=None):
+        if isinstance(im, Image.Image):
+            return im
+        if isinstance(im, str):
+            res = cls.get_response(im, proxy_url=proxy_url)
+            return Image.open(BytesIO(res.content))
+        return None
+
+    @classmethod
+    def imcrop(cls, im, position=None, box_only=False):
+        """원본 이미지에서 잘라내 세로로 긴 포스터를 만드는 함수"""
+
+        if not isinstance(im, Image.Image):
+            return im
+        width, height = im.size
+        new_w = height / 1.414213562373095
+        if position == "l":
+            left = 0
+        elif position == "c":
+            left = (width - new_w) / 2
+        else:
+            # default: from right
+            left = width - new_w
+        box = (left, 0, left + new_w, height)
+        if box_only:
+            return box
+        return im.crop(box)
+
+    @classmethod
     def process_image_mode(cls, image_mode, image_url, proxy_url=None):
         # logger.debug('process_image_mode : %s %s', image_mode, image_url)
         if image_url is None:
@@ -97,16 +126,12 @@ class SiteUtil:
             # ret = Util.make_apikey(tmp)
         elif image_mode == "5":  # 로컬에 포스터를 만들고
             # image_url : 디스코드에 올라간 표지 url 임.
-            im = Image.open(BytesIO(cls.session.get(image_url).content))
+            im = cls.imopen(image_url)
             width, height = im.size
             filename = f"proxy_{time.time()}.jpg"
             filepath = os.path.join(path_data, "tmp", filename)
             if width > height:
-                left = width / 1.895734597
-                top = 0
-                right = width
-                bottom = height
-                im = im.crop((left, top, right, bottom))
+                im = cls.imcrop(im)
             im.save(filepath)
             # poster_url = '{ddns}/file/data/tmp/%s' % filename
             # poster_url = Util.make_apikey(poster_url)
@@ -211,7 +236,7 @@ class SiteUtil:
     @classmethod
     def trans(cls, text, do_trans=True, source="ja", target="ko"):
         if do_trans:
-            return SystemLogicTrans.trans(text, source=source, target=target)
+            return SystemLogicTrans.trans(text, source=source, target=target).strip()
         return text
 
     """
@@ -271,7 +296,7 @@ class SiteUtil:
                 # ret['poster_image_url'] = cls.discord_proxy_get_target_poster(image_url)
                 # if ret['poster_image_url'] is None:
                 if image_mode == "1":
-                    im = Image.open(BytesIO(cls.session.get(image_url).content))
+                    im = cls.imopen(image_url, proxy_url=proxy_url)
                     w, h = im.size
                     if w > h:
                         # landscape to poster
@@ -292,29 +317,23 @@ class SiteUtil:
         return ret
 
     @classmethod
-    def is_hq_poster(cls, im_sm, im_lg):
+    def is_hq_poster(cls, im_sm, im_lg, proxy_url=None):
         def imhist(im, pdf=True):
+            if not isinstance(im, Image.Image):
+                return im
             arr = np.asarray(im.convert("RGB")).reshape(-1, 3)
-            return np.apply_along_axis(
-                lambda x: np.histogram(x, bins=255, range=(1, 256), density=pdf)[0],
-                0,
-                arr,
-            )
+            return np.apply_along_axis(lambda x: np.histogram(x, bins=255, range=(1, 256), density=pdf)[0], 0, arr)
 
         def imdist(_im1, _im2):
             """based on bhattacharyya distance"""
             h1, h2 = imhist(_im1), imhist(_im2)
             return -np.log(np.sum(np.sqrt(h1 * h2), axis=0, keepdims=True).min()) * 255.0
 
-        def imopen(im):
-            if not isinstance(im, Image.Image) and isinstance(im, str):
-                return Image.open(BytesIO(cls.session.get(im).content))
-            return im
-
         try:
             import numpy as np
 
-            im_sm, im_lg = imopen(im_sm), imopen(im_lg)
+            im_sm = cls.imopen(im_sm, proxy_url=proxy_url)
+            im_lg = cls.imopen(im_lg, proxy_url=proxy_url)
             ws, hs = im_sm.size
             wl, hl = im_lg.size
             if ws > wl or hs > hl:
@@ -328,14 +347,12 @@ class SiteUtil:
             return False
 
     @classmethod
-    def is_same_image(cls, url1, url2, part1=False, part2=False):
+    def has_hq_poster(cls, im_sm, im_lg, proxy_url=None):
         def imhist(im, pdf=True):
+            if not isinstance(im, Image.Image):
+                return im
             arr = np.asarray(im.convert("RGB")).reshape(-1, 3)
-            return np.apply_along_axis(
-                lambda x: np.histogram(x, bins=255, range=(1, 256), density=pdf)[0],
-                0,
-                arr,
-            )
+            return np.apply_along_axis(lambda x: np.histogram(x, bins=255, range=(1, 256), density=pdf)[0], 0, arr)
 
         def imdist(_im1, _im2):
             """based on bhattacharyya distance"""
@@ -345,17 +362,22 @@ class SiteUtil:
         try:
             import numpy as np
 
-            im1 = Image.open(BytesIO(cls.session.get(url1).content))
-            im2 = Image.open(BytesIO(cls.session.get(url2).content))
-            w, h = im1.size
-            if w > h and part1:
-                im1 = im1.crop((w / 1.895734597, 0, w, h))
-            w, h = im2.size
-            if w > h and part2:
-                im2 = im2.crop((w / 1.895734597, 0, w, h))
-            return imdist(im1, im2) < 5.0
+            im_sm = cls.imopen(im_sm, proxy_url=proxy_url)
+            im_lg = cls.imopen(im_lg, proxy_url=proxy_url)
+            ws, hs = im_sm.size
+            wl, hl = im_lg.size
+            if ws > wl or hs > hl:
+                # large image is not large enough
+                return None
+
+            histsm = imhist(im_sm)  # reference
+
+            for pos in ["r", "l"]:
+                val = imdist(histsm, cls.imcrop(im_lg, position=pos))
+                if val < 5.0:
+                    return cls.imcrop(im_lg, position=pos, box_only=True)
         except Exception:
-            return False
+            pass
 
     @classmethod
     def change_html(cls, text):
@@ -759,8 +781,8 @@ class SiteUtil:
 
     @classmethod
     def process_image_book(cls, url):
-        im = Image.open(BytesIO(cls.session.get(url).content))
-        width, height = im.size
+        im = cls.imopen(url)
+        width, _ = im.size
         filename = f"proxy_{time.time()}.jpg"
         filepath = os.path.join(path_data, "tmp", filename)
         left = 0
@@ -777,14 +799,8 @@ class SiteUtil:
         return ret
 
     @classmethod
-    def get_treefromcontent(cls, url, proxy_url=None, headers=None, post_data=None, cookies=None):
-        text = SiteUtil.get_response(
-            url,
-            proxy_url=proxy_url,
-            headers=headers,
-            post_data=post_data,
-            cookies=cookies,
-        ).content
+    def get_treefromcontent(cls, url, **kwargs):
+        text = SiteUtil.get_response(url, **kwargs).content
         # logger.debug(text)
         if text is None:
             return

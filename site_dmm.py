@@ -1,6 +1,5 @@
 import re
 import json
-import traceback
 
 from .plugin import P
 from .entity_av import EntityAVSearch
@@ -29,366 +28,361 @@ class SiteDmm:
         "Cookie": "age_check_done=1",
     }
 
+    PTN_SEARCH_CID = re.compile(r"\/cid=(?P<code>.*?)\/")
+    PTN_SEARCH_REAL_NO = re.compile(r"^(h_)?\d*(?P<real>[a-zA-Z]+)(?P<no>\d+)([a-zA-Z]+)?$")
+    PTN_ID = re.compile(r"\d{2}id", re.I)
+    PTN_RATING = re.compile(r"(?P<rating>[\d|_]+)\.gif")
+
+    @classmethod
+    def __search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
+        keyword = keyword.strip().lower()
+        # 2020-06-24
+        if keyword[-3:-1] == "cd":
+            keyword = keyword[:-3]
+        keyword = keyword.replace("-", " ")
+        keyword_tmps = keyword.split(" ")
+        if len(keyword_tmps) == 2:
+            dmm_keyword = keyword_tmps[0] + keyword_tmps[1].zfill(5)
+        else:
+            dmm_keyword = keyword
+        logger.debug("keyword [%s] -> [%s]", keyword, dmm_keyword)
+
+        url = f"{cls.site_base_url}/digital/videoa/-/list/search/=/?searchstr={dmm_keyword}"
+        # url = '%s/search/=/?searchstr=%s' % (cls.site_base_url, dmm_keyword)
+        # https://www.dmm.co.jp/search/=/searchstr=tsms00060/
+        tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers)
+        lists = tree.xpath('//*[@id="list"]/li')
+        logger.debug("dmm search len lists2 :%s", len(lists))
+
+        score = 60  # default score
+        ret = []
+        for node in lists[:10]:
+            try:
+                item = EntityAVSearch(cls.site_name)
+                tag = node.xpath('.//div/p[@class="tmb"]/a')[0]
+                href = tag.attrib["href"].lower()
+                match = cls.PTN_SEARCH_CID.search(href)
+                if match:
+                    item.code = cls.module_char + cls.site_char + match.group("code")
+                already_exist = False
+                for exist_item in ret:
+                    if exist_item["code"] == item.code:
+                        already_exist = True
+                        break
+                if already_exist:
+                    continue
+
+                tag = node.xpath(".//span[1]/img")[0]
+                item.title = item.title_ko = tag.attrib["alt"]
+                item.image_url = tag.attrib["src"]
+
+                # tmp = SiteUtil.discord_proxy_get_target(item.image_url)
+                # 2021-03-22 서치에는 discord 고정 url을 사용하지 않는다. 3번
+                # manual == False  때는 아예 이미치 처리를 할 필요가 없다.
+                # 일치항목 찾기 때는 화면에 보여줄 필요가 있는데 3번은 하면 하지 않는다.
+                if manual:
+                    _image_mode = "0" if image_mode == "3" else image_mode
+                    item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
+
+                if do_trans:
+                    item.title_ko = SiteUtil.trans(item.title)
+
+                match = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
+                if match:
+                    item.ui_code = match.group("real") + match.group("no")
+                else:
+                    item.ui_code = item.code[2:]
+
+                if len(keyword_tmps) == 2:
+                    # 2019-11-20 ntr mntr 둘다100
+                    if item.ui_code == dmm_keyword:
+                        item.score = 100
+                    elif item.ui_code.replace("0", "") == dmm_keyword.replace("0", ""):
+                        item.score = 100
+                    elif dmm_keyword in item.ui_code:  # 전체포함 DAID => AID
+                        item.score = score
+                        score += -5
+                    elif keyword_tmps[0] in item.code and keyword_tmps[1] in item.code:
+                        item.score = score
+                        score += -5
+                    elif keyword_tmps[0] in item.code or keyword_tmps[1] in item.code:
+                        item.score = 60
+                    else:
+                        item.score = 20
+                else:
+                    if item.code == keyword_tmps[0]:
+                        item.score = 100
+                    elif keyword_tmps[0] in item.code:
+                        item.score = score
+                        score += -5
+                    else:
+                        item.score = 20
+
+                if match:
+                    item.ui_code = match.group("real").upper() + "-" + str(int(match.group("no"))).zfill(3)
+                else:
+                    if "0000" in item.ui_code:
+                        item.ui_code = item.ui_code.replace("0000", "-00").upper()
+                    else:
+                        item.ui_code = item.ui_code.replace("00", "-").upper()
+                    if item.ui_code.endswith("-"):
+                        item.ui_code = item.ui_code[:-1] + "00"
+
+                logger.debug("score: %s %s ", item.score, item.ui_code)
+                ret.append(item.as_dict())
+            except Exception:
+                logger.exception("개별 검색 결과 처리 중 예외:")
+        if not ret and len(keyword_tmps) == 2 and len(keyword_tmps[1]) == 5:
+            new_title = keyword_tmps[0] + keyword_tmps[1].zfill(6)
+            return cls.__search(new_title, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode)
+        return sorted(ret, key=lambda k: k["score"], reverse=True)
+
     @classmethod
     def search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
+        ret = {}
         try:
-            ret = {}
-            keyword = keyword.strip().lower()
-            # 2020-06-24
-            if keyword[-3:-1] == "cd":
-                keyword = keyword[:-3]
-            keyword = keyword.replace("-", " ")
-            keyword_tmps = keyword.split(" ")
-            if len(keyword_tmps) == 2:
-                dmm_keyword = keyword_tmps[0] + keyword_tmps[1].zfill(5)
-            else:
-                dmm_keyword = keyword
-            logger.debug("keyword [%s] -> [%s]", keyword, dmm_keyword)
-
-            url = f"{cls.site_base_url}/digital/videoa/-/list/search/=/?searchstr={dmm_keyword}"
-            # url = '%s/search/=/?searchstr=%s' % (cls.site_base_url, dmm_keyword)
-            # https://www.dmm.co.jp/search/=/searchstr=tsms00060/
-            tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers)
-            lists = tree.xpath('//*[@id="list"]/li')
-            ret = {"data": []}
-            score = 60
-            logger.debug("dmm search len lists2 :%s", len(lists))
-            for node in lists[:10]:
-                try:
-                    item = EntityAVSearch(cls.site_name)
-                    tag = node.xpath('.//div/p[@class="tmb"]/a')[0]
-                    href = tag.attrib["href"].lower()
-                    match = re.compile(r"\/cid=(?P<code>.*?)\/").search(href)
-                    if match:
-                        item.code = cls.module_char + cls.site_char + match.group("code")
-                    already_exist = False
-                    for exist_item in ret["data"]:
-                        if exist_item["code"] == item.code:
-                            already_exist = True
-                            break
-                    if already_exist:
-                        continue
-
-                    tag = node.xpath(".//span[1]/img")[0]
-                    item.title = item.title_ko = tag.attrib["alt"]
-                    item.image_url = tag.attrib["src"]
-
-                    # tmp = SiteUtil.discord_proxy_get_target(item.image_url)
-                    # 2021-03-22 서치에는 discord 고정 url을 사용하지 않는다. 3번
-                    # manual == False  때는 아예 이미치 처리를 할 필요가 없다.
-                    # 일치항목 찾기 때는 화면에 보여줄 필요가 있는데 3번은 하면 하지 않는다.
-                    if manual:
-                        if image_mode == "3":
-                            image_mode = "0"
-                        item.image_url = SiteUtil.process_image_mode(image_mode, item.image_url, proxy_url=proxy_url)
-
-                    if do_trans:
-                        item.title_ko = SiteUtil.trans(item.title)
-
-                    match = re.compile(r"^(h_)?\d*(?P<real>[a-zA-Z]+)(?P<no>\d+)([a-zA-Z]+)?$").search(item.code[2:])
-                    if match:
-                        item.ui_code = match.group("real") + match.group("no")
-                    else:
-                        item.ui_code = item.code[2:]
-
-                    if len(keyword_tmps) == 2:
-                        # 2019-11-20 ntr mntr 둘다100
-                        if item.ui_code == dmm_keyword:
-                            item.score = 100
-                        elif item.ui_code.replace("0", "") == dmm_keyword.replace("0", ""):
-                            item.score = 100
-                        elif item.ui_code.find(dmm_keyword) != -1:  # 전체포함 DAID => AID
-                            item.score = score
-                            score += -5
-                        elif item.code.find(keyword_tmps[0]) != -1 and item.code.find(keyword_tmps[1]) != -1:
-                            item.score = score
-                            score += -5
-                        elif item.code.find(keyword_tmps[0]) != -1 or item.code.find(keyword_tmps[1]) != -1:
-                            item.score = 60
-                        else:
-                            item.score = 20
-                    else:
-                        if item.code == keyword_tmps[0]:
-                            item.score = 100
-                        elif item.code.find(keyword_tmps[0]) != -1:
-                            item.score = score
-                            score += -5
-                        else:
-                            item.score = 20
-
-                    if match:
-                        item.ui_code = match.group("real").upper() + "-" + str(int(match.group("no"))).zfill(3)
-                    else:
-                        if item.ui_code.find("0000") != -1:
-                            item.ui_code = item.ui_code.replace("0000", "-00").upper()
-                        else:
-                            item.ui_code = item.ui_code.replace("00", "-").upper()
-                        if item.ui_code.endswith("-"):
-                            item.ui_code = item.ui_code[:-1] + "00"
-
-                    logger.debug("score :%s %s ", item.score, item.ui_code)
-                    ret["data"].append(item.as_dict())
-                except Exception:
-                    logger.exception("개별 검색 결과 처리 중 예외:")
-            ret["data"] = sorted(ret["data"], key=lambda k: k["score"], reverse=True)
-            ret["ret"] = "success"
-            if len(ret["data"]) == 0 and len(keyword_tmps) == 2 and len(keyword_tmps[1]) == 5:
-                new_title = keyword_tmps[0] + keyword_tmps[1].zfill(6)
-                return cls.search(new_title, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode)
+            data = cls.__search(keyword, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode, manual=manual)
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
             ret["ret"] = "exception"
             ret["data"] = str(exception)
+        else:
+            ret["ret"] = "success" if data else "no_match"
+            ret["data"] = data
         return ret
 
     @classmethod
-    def info(cls, code, do_trans=True, proxy_url=None, image_mode="0", small_image_to_poster_list=None):
+    def __info(cls, code, do_trans=True, proxy_url=None, image_mode="0", small_image_to_poster_list=None):
         if small_image_to_poster_list is None:
             small_image_to_poster_list = []
-        try:
-            ret = {}
-            url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={code[2:]}/"
-            tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers)
 
-            entity = EntityMovie(cls.site_name, code)
-            entity.country = ["일본"]
-            entity.mpaa = "청소년 관람불가"
-            entity.thumb = []
-            basetag = '//*[@id="mu"]/div/table//tr/td[1]'
-            nodes = tree.xpath(f"{basetag}/div[1]/div[1]")
-            if not nodes:
-                ret["ret"] = "fail_tag_not_exist"
-                logger.error("html 페이지에서 정보를 찾을 수 없음: url='%s', xpath='%s'", url, f"{basetag}/div[1]/div[1]")
-                return ret
+        url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={code[2:]}/"
+        tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers)
 
-            # 2021-12-01 : div[2]/img  인 것들이 있음
-            # 예) thtp00052
-            tmp_nodes = tree.xpath(f"{basetag}/div[1]/div")
-            if len(tmp_nodes) == 2:
-                nodes = [tmp_nodes[1]]
+        entity = EntityMovie(cls.site_name, code)
+        entity.country = ["일본"]
+        entity.mpaa = "청소년 관람불가"
+        entity.thumb = []
+        basetag = '//*[@id="mu"]/div/table//tr/td[1]'
+        nodes = tree.xpath(f"{basetag}/div[1]/div[1]")
+        if not nodes:
+            raise ValueError(f"html 페이지에서 정보를 찾을 수 없음: url='{url}', xpath='{basetag}/div[1]/div[1]'")
 
-            # logger.debug('crs-full :%s ', len(a_nodes))
-            # 2020-05-31 A태그가 없는 경우가 있음. 확대이미지가 없는 경우  tsds-42464
-            # if a_nodes:
-            # svoks stvf - 확대이미지가 포스터. 이미지 크기로 자르지 않고 포스터러 결정됨
-            # stcead - 확대이지미가 랜드스케이프. 축소 이미지를 포스터로 사용
+        # 2021-12-01 : div[2]/img  인 것들이 있음
+        # 예) thtp00052
+        tmp_nodes = tree.xpath(f"{basetag}/div[1]/div")
+        if len(tmp_nodes) == 2:
+            nodes = [tmp_nodes[1]]
 
-            small_img_to_poster = False
-            for tmp in small_image_to_poster_list:
-                if code.find(tmp) != -1:
-                    small_img_to_poster = True
-                    break
+        # logger.debug('crs-full :%s ', len(a_nodes))
+        # 2020-05-31 A태그가 없는 경우가 있음. 확대이미지가 없는 경우  tsds-42464
+        # if a_nodes:
+        # svoks stvf - 확대이미지가 포스터. 이미지 크기로 자르지 않고 포스터러 결정됨
+        # stcead - 확대이지미가 랜드스케이프. 축소 이미지를 포스터로 사용
 
-            try:
-                a_nodes = nodes[0].xpath(".//a")
-                anodes = a_nodes
-                # logger.debug(html.tostring(anodes[0]))
-                img_tag = anodes[0].xpath(".//img")[0]
-                if small_img_to_poster:
-                    data = SiteUtil.get_image_url(
-                        a_nodes[0].attrib["href"], image_mode, proxy_url=proxy_url, with_poster=False
-                    )
-                    entity.thumb.append(EntityThumb(aspect="landscape", value=data["image_url"]))
-                else:
-                    img_url_ps = nodes[0].xpath(".//img/@src")[0]  # poster small
-                    img_url_ls = nodes[0].xpath(".//a/@href")[0]  # landscape but not always landscape
-                    img_url_arts = tree.xpath('//*[starts-with(@id,"sample-image")]/@href')  # fanart 즉 sample image
-                    if img_url_arts and SiteUtil.is_hq_poster(img_url_ps, img_url_arts[0]):
-                        data = {
-                            "image_url": SiteUtil.process_image_mode(image_mode, img_url_ls, proxy_url=proxy_url),
-                            "poster_image_url": SiteUtil.process_image_mode(
-                                image_mode, img_url_arts[0], proxy_url=proxy_url
-                            ),
-                        }
-                    elif img_url_arts and SiteUtil.is_hq_poster(img_url_ps, img_url_arts[-1]):
-                        data = {
-                            "image_url": SiteUtil.process_image_mode(image_mode, img_url_ls, proxy_url=proxy_url),
-                            "poster_image_url": SiteUtil.process_image_mode(
-                                image_mode, img_url_arts[-1], proxy_url=proxy_url
-                            ),
-                        }
-                    else:
-                        data = SiteUtil.get_image_url(
-                            img_url_ls,
-                            image_mode,
-                            proxy_url=proxy_url,
-                            with_poster=True,
-                        )
-                    entity.thumb.append(EntityThumb(aspect="landscape", value=data["image_url"]))
-                    entity.thumb.append(EntityThumb(aspect="poster", value=data["poster_image_url"]))
-            except Exception:
+        small_img_to_poster = False
+        for tmp in small_image_to_poster_list:
+            if tmp in code:
                 small_img_to_poster = True
+                break
 
+        try:
+            a_nodes = nodes[0].xpath(".//a")
+            anodes = a_nodes
+            # logger.debug(html.tostring(anodes[0]))
+            img_tag = anodes[0].xpath(".//img")[0]
             if small_img_to_poster:
-                img_tag = nodes[0].xpath(".//img")[0]
-                entity.thumb.append(
-                    EntityThumb(
-                        aspect="poster",
-                        value=SiteUtil.process_image_mode(image_mode, img_tag.attrib["src"], proxy_url=proxy_url),
-                    )
+                data = SiteUtil.get_image_url(
+                    a_nodes[0].attrib["href"], image_mode, proxy_url=proxy_url, with_poster=False
                 )
+                entity.thumb.append(EntityThumb(aspect="landscape", value=data["image_url"]))
+            else:
+                img_url_ps = nodes[0].xpath(".//img/@src")[0]  # poster small
+                img_url_ls = nodes[0].xpath(".//a/@href")[0]  # landscape but not always landscape
+                img_url_arts = tree.xpath('//*[starts-with(@id,"sample-image")]/@href')  # fanart 즉 sample image
+                if img_url_arts and SiteUtil.is_hq_poster(img_url_ps, img_url_arts[0]):
+                    data = {
+                        "image_url": SiteUtil.process_image_mode(image_mode, img_url_ls, proxy_url=proxy_url),
+                        "poster_image_url": SiteUtil.process_image_mode(
+                            image_mode, img_url_arts[0], proxy_url=proxy_url
+                        ),
+                    }
+                elif img_url_arts and SiteUtil.is_hq_poster(img_url_ps, img_url_arts[-1]):
+                    data = {
+                        "image_url": SiteUtil.process_image_mode(image_mode, img_url_ls, proxy_url=proxy_url),
+                        "poster_image_url": SiteUtil.process_image_mode(
+                            image_mode, img_url_arts[-1], proxy_url=proxy_url
+                        ),
+                    }
+                else:
+                    data = SiteUtil.get_image_url(
+                        img_url_ls,
+                        image_mode,
+                        proxy_url=proxy_url,
+                        with_poster=True,
+                    )
+                entity.thumb.append(EntityThumb(aspect="landscape", value=data["image_url"]))
+                entity.thumb.append(EntityThumb(aspect="poster", value=data["poster_image_url"]))
+        except Exception:
+            small_img_to_poster = True
 
-            entity.tagline = (
-                SiteUtil.trans(img_tag.attrib["alt"], do_trans=do_trans)
-                .replace("[배달 전용]", "")
-                .replace("[특가]", "")
-                .strip()
+        if small_img_to_poster:
+            img_tag = nodes[0].xpath(".//img")[0]
+            entity.thumb.append(
+                EntityThumb(
+                    aspect="poster",
+                    value=SiteUtil.process_image_mode(image_mode, img_tag.attrib["src"], proxy_url=proxy_url),
+                )
             )
-            tags = tree.xpath(f"{basetag}/table//tr")
-            tmp_premiered = None
-            for tag in tags:
-                td_tag = tag.xpath(".//td")
-                if len(td_tag) != 2:
-                    continue
-                key = td_tag[0].text_content().strip()
-                value = td_tag[1].text_content().strip()
-                if value == "----":
-                    continue
-                if key == "商品発売日：":
-                    entity.premiered = value.replace("/", "-")
-                    entity.year = int(value[:4])
-                elif key == "配信開始日：":
-                    tmp_premiered = value.replace("/", "-")
-                elif key == "収録時間：":
-                    entity.runtime = int(value.replace("分", ""))
-                elif key == "出演者：":
-                    entity.actor = []
-                    a_tags = tag.xpath(".//a")
-                    for a_tag in a_tags:
-                        tmp = a_tag.text_content().strip()
-                        if tmp == "▼すべて表示する":
-                            break
-                        entity.actor.append(EntityActor(tmp))
-                    # for v in value.split(' '):
-                    #    entity.actor.append(EntityActor(v.strip()))
-                elif key == "監督：":
-                    entity.director = value
-                elif key == "シリーズ：":
+
+        entity.tagline = (
+            SiteUtil.trans(img_tag.attrib["alt"], do_trans=do_trans).replace("[배달 전용]", "").replace("[특가]", "")
+        )
+        tags = tree.xpath(f"{basetag}/table//tr")
+        tmp_premiered = None
+        for tag in tags:
+            td_tag = tag.xpath(".//td")
+            if len(td_tag) != 2:
+                continue
+            key = td_tag[0].text_content().strip()
+            value = td_tag[1].text_content().strip()
+            if value == "----":
+                continue
+            if key == "商品発売日：":
+                entity.premiered = value.replace("/", "-")
+                entity.year = int(value[:4])
+            elif key == "配信開始日：":
+                tmp_premiered = value.replace("/", "-")
+            elif key == "収録時間：":
+                entity.runtime = int(value.replace("分", ""))
+            elif key == "出演者：":
+                entity.actor = []
+                a_tags = tag.xpath(".//a")
+                for a_tag in a_tags:
+                    tmp = a_tag.text_content().strip()
+                    if tmp == "▼すべて表示する":
+                        break
+                    entity.actor.append(EntityActor(tmp))
+                # for v in value.split(' '):
+                #    entity.actor.append(EntityActor(v.strip()))
+            elif key == "監督：":
+                entity.director = value
+            elif key == "シリーズ：":
+                if entity.tag is None:
+                    entity.tag = []
+                entity.tag.append(SiteUtil.trans(value, do_trans=do_trans))
+            elif key == "レーベル：":
+                entity.studio = value
+                if do_trans:
+                    if value in SiteUtil.av_studio:
+                        entity.studio = SiteUtil.av_studio[value]
+                    else:
+                        entity.studio = SiteUtil.change_html(SiteUtil.trans(value, do_trans=do_trans))
+            elif key == "ジャンル：":
+                a_tags = td_tag[1].xpath(".//a")
+                entity.genre = []
+                for tag in a_tags:
+                    tmp = tag.text_content().strip()
+                    if "％OFF" in tmp:
+                        continue
+                    if tmp in SiteUtil.av_genre:
+                        entity.genre.append(SiteUtil.av_genre[tmp])
+                    elif tmp in SiteUtil.av_genre_ignore_ja:
+                        continue
+                    else:
+                        genre_tmp = SiteUtil.trans(tmp, do_trans=do_trans).replace(" ", "")
+                        if genre_tmp not in SiteUtil.av_genre_ignore_ko:
+                            entity.genre.append(genre_tmp)
+            elif key == "品番：":
+                # 24id
+                match = cls.PTN_ID.search(value)
+                id_before = None
+                if match:
+                    id_before = match.group(0)
+                    value = value.lower().replace(id_before, "zzid")
+
+                match = cls.PTN_SEARCH_REAL_NO.match(value)
+                if match:
+                    label = match.group("real").upper()
+                    if id_before is not None:
+                        label = label.replace("ZZID", id_before.upper())
+
+                    value = label + "-" + str(int(match.group("no"))).zfill(3)
                     if entity.tag is None:
                         entity.tag = []
-                    entity.tag.append(SiteUtil.trans(value, do_trans=do_trans))
-                elif key == "レーベル：":
-                    entity.studio = value
-                    if do_trans:
-                        if value in SiteUtil.av_studio:
-                            entity.studio = SiteUtil.av_studio[value]
-                        else:
-                            entity.studio = SiteUtil.change_html(SiteUtil.trans(value, do_trans=do_trans))
-                elif key == "ジャンル：":
-                    a_tags = td_tag[1].xpath(".//a")
-                    entity.genre = []
-                    for tag in a_tags:
-                        tmp = tag.text_content().strip()
-                        if tmp.find("％OFF") != -1:
-                            continue
-                        if tmp in SiteUtil.av_genre:
-                            entity.genre.append(SiteUtil.av_genre[tmp])
-                        elif tmp in SiteUtil.av_genre_ignore_ja:
-                            continue
-                        else:
-                            genre_tmp = SiteUtil.trans(tmp, do_trans=do_trans).replace(" ", "")
-                            if genre_tmp not in SiteUtil.av_genre_ignore_ko:
-                                entity.genre.append(genre_tmp)
-                elif key == "品番：":
-                    # 24id
-                    match = re.compile(r"\d{2}id", re.I).search(value)
-                    id_before = None
-                    if match:
-                        id_before = match.group(0)
-                        value = value.lower().replace(id_before, "zzid")
+                    entity.tag.append(label)
+                entity.title = entity.originaltitle = entity.sorttitle = value
 
-                    match = re.compile(r"^(h_)?\d*(?P<real>[a-zA-Z]+)(?P<no>\d+)([a-zA-Z]+)?$").match(value)
-                    if match:
-                        label = match.group("real").upper()
-                        if id_before is not None:
-                            label = label.replace("ZZID", id_before.upper())
+        if entity.premiered is None and tmp_premiered is not None:
+            entity.premiered = tmp_premiered
+            entity.year = int(tmp_premiered[:4])
 
-                        value = label + "-" + str(int(match.group("no"))).zfill(3)
-                        if entity.tag is None:
-                            entity.tag = []
-                        entity.tag.append(label)
-                    entity.title = entity.originaltitle = entity.sorttitle = value
-            if entity.premiered is None and tmp_premiered is not None:
-                entity.premiered = tmp_premiered
-                entity.year = int(tmp_premiered[:4])
+        try:
+            tag = tree.xpath(f"{basetag}/table//tr[13]/td[2]/img")
+            if tag:
+                match = cls.PTN_RATING.search(tag[0].attrib["src"])
+                if match:
+                    tmp = match.group("rating").replace("_", ".")
+                    entity.ratings = [EntityRatings(float(tmp), max=5, name="dmm", image_url=tag[0].attrib["src"])]
+        except Exception:
+            logger.exception("평점 정보 처리 중 예외:")
 
-            try:
-                tag = tree.xpath(f"{basetag}/table//tr[13]/td[2]/img")
-                if tag:
-                    match = re.compile(r"(?P<rating>[\d|_]+)\.gif").search(tag[0].attrib["src"])
-                    if match:
-                        tmp = match.group("rating")
-                        entity.ratings = [
-                            EntityRatings(
-                                float(tmp.replace("_", ".")),
-                                max=5,
-                                name="dmm",
-                                image_url=tag[0].attrib["src"],
-                            )
-                        ]
-            except Exception:
-                logger.exception("평점 정보 처리 중 예외:")
+        tmp = tree.xpath(f"{basetag}/div[4]/text()")[0]
+        tmp = tmp.split("※")[0].strip()
+        entity.plot = SiteUtil.trans(tmp, do_trans=do_trans)
 
-            tmp = tree.xpath(f"{basetag}/div[4]/text()")[0]
-            tmp = tmp.split("※")[0].strip()
-            entity.plot = SiteUtil.trans(tmp, do_trans=do_trans)
+        entity.fanart = tree.xpath('//a[@name="sample-image"]/@href')[:10]
 
-            nodes = tree.xpath('//*[@id="sample-image-block"]/a')
-            entity.fanart = []
-            for idx, node in enumerate(nodes):
-                if idx > 9:
-                    break
-                tag = node.xpath(".//img")
-                tmp = tag[0].attrib["src"]
-                image_url = tag[0].attrib["src"].replace(entity.code[2:] + "-", entity.code[2:] + "jp-")
-                # discord_url = SiteUtil.process_image_mode(image_mode, image_url, proxy_url=proxy_url)
-                entity.fanart.append(image_url)
+        try:
+            tmp = tree.xpath('//div[@class="d-review__points"]/p/strong')
+            if len(tmp) == 2 and entity.ratings:
+                point = float(tmp[0].text_content().replace("点", "").strip())
+                votes = int(tmp[1].text_content().strip())
+                entity.ratings[0].value = point
+                entity.ratings[0].votes = votes
+        except Exception:
+            logger.exception("평점 정보 업데이트 중 예외:")
 
-            try:
-                if tree.xpath('//div[@class="d-review__points"]/p[1]/strong'):
-                    point = float(
-                        tree.xpath('//div[@class="d-review__points"]/p[1]/strong')[0]
-                        .text_content()
-                        .replace("点", "")
-                        .strip()
+        try:
+            tmp = tree.xpath('//*[@id="detail-sample-movie"]/div/a')
+            if tmp:
+                tmp = tmp[0].attrib["onclick"]
+                url = cls.site_base_url + tmp.split("'")[1]
+                url = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers).xpath("//iframe/@src")[0]
+                text = SiteUtil.get_text(url, proxy_url=proxy_url, headers=cls.dmm_headers)
+                pos = text.find("const args = {")
+                data = json.loads(text[text.find("{", pos) : text.find(";", pos)])
+                # logger.debug(json.dumps(data, indent=4))
+                data["bitrates"] = sorted(data["bitrates"], key=lambda k: k["bitrate"], reverse=True)
+                entity.extras = [
+                    EntityExtra(
+                        "trailer",
+                        SiteUtil.trans(data["title"], do_trans=do_trans),
+                        "mp4",
+                        "https:" + data["bitrates"][0]["src"],
                     )
-                    votes = int(tree.xpath('//div[@class="d-review__points"]/p[2]/strong')[0].text_content().strip())
-                    entity.ratings[0].value = point
-                    entity.ratings[0].votes = votes
-            except Exception as exception:
-                logger.error("Exception:%s", exception)
-                logger.error(traceback.format_exc())
+                ]
+        except Exception:
+            logger.exception("미리보기 처리 중 예외:")
 
-            try:
-                tmp = tree.xpath('//*[@id="detail-sample-movie"]/div/a')
-                if tmp:
-                    tmp = tmp[0].attrib["onclick"]
-                    url = cls.site_base_url + tmp.split("'")[1]
-                    url = (
-                        SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers)
-                        .xpath("//iframe")[0]
-                        .attrib["src"]
-                    )
-                    text = SiteUtil.get_text(url, proxy_url=proxy_url, headers=cls.dmm_headers)
-                    pos = text.find("const args = {")
-                    data = json.loads(text[text.find("{", pos) : text.find(";", pos)])
-                    # logger.debug(json.dumps(data, indent=4))
-                    data["bitrates"] = sorted(data["bitrates"], key=lambda k: k["bitrate"], reverse=True)
-                    entity.extras = [
-                        EntityExtra(
-                            "trailer",
-                            SiteUtil.trans(data["title"], do_trans=do_trans),
-                            "mp4",
-                            "https:" + data["bitrates"][0]["src"],
-                        )
-                    ]
-            except Exception:
-                logger.exception("미리보기 동영상 처리 중 예외:")
-            ret["ret"] = "success"
-            ret["data"] = entity.as_dict()
+        return entity
 
+    @classmethod
+    def info(cls, code, do_trans=True, proxy_url=None, image_mode="0", small_image_to_poster_list=None):
+        ret = {}
+        try:
+            entity = cls.__info(
+                code,
+                do_trans=do_trans,
+                proxy_url=proxy_url,
+                image_mode=image_mode,
+                small_image_to_poster_list=small_image_to_poster_list,
+            )
         except Exception as exception:
             logger.exception("메타 정보 처리 중 예외:")
             ret["ret"] = "exception"
             ret["data"] = str(exception)
+        else:
+            ret["ret"] = "success"
+            ret["data"] = entity.as_dict()
         return ret
