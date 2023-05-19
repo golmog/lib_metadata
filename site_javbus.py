@@ -1,6 +1,6 @@
 from .plugin import P
 from .entity_av import EntityAVSearch
-from .entity_base import EntityMovie, EntityThumb, EntityActor
+from .entity_base import EntityMovie, EntityActor
 from .site_util import SiteUtil
 
 logger = P.logger
@@ -11,6 +11,12 @@ class SiteJavbus:
     site_base_url = "https://www.javbus.com"
     module_char = "C"
     site_char = "B"
+
+    @classmethod
+    def __fix_url(cls, url):
+        if not url.startswith("http"):
+            return cls.site_base_url + url
+        return url
 
     @classmethod
     def __search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
@@ -28,18 +34,11 @@ class SiteJavbus:
             try:
                 item = EntityAVSearch(cls.site_name)
                 item.image_url = node.xpath(".//img/@src")[0].lower()
-                if not item.image_url.startswith("http"):
-                    item.image_url = cls.site_base_url + item.image_url
+                item.image_url = cls.__fix_url(item.image_url)
                 if manual:
                     _image_mode = "0" if image_mode == "3" else image_mode
                     item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
-                """
-                tmp = SiteUtil.discord_proxy_get_target(item.image_url)
-                if tmp is None:
-                    item.image_url = SiteUtil.process_image_mode(image_mode, item.image_url, proxy_url=proxy_url)
-                else:
-                    item.image_url = tmp
-                """
+
                 tag = node.xpath(".//date")
                 item.ui_code = tag[0].text_content().strip()
                 item.code = cls.module_char + cls.site_char + node.attrib["href"].split("/")[-1]
@@ -72,6 +71,35 @@ class SiteJavbus:
         return ret
 
     @classmethod
+    def __img_urls(cls, tree):
+        """collect raw image urls from html page"""
+
+        # poster large
+        # 보통 가로 이미지
+        pl = tree.xpath('//a[@class="bigImage"]/img/@src')
+        pl = pl[0] if pl else ""
+        if pl:
+            pl = cls.__fix_url(pl)
+        else:
+            logger.warning("이미지 URL을 얻을 수 없음: poster large")
+
+        # poster small
+        # 세로 이미지 / 저화질 썸네일
+        ps = ""
+        if pl:
+            filename = pl.split("/")[-1].replace("_b.", ".")
+            ps = cls.__fix_url(f"/pics/thumb/{filename}")
+
+        # fanart
+        # 없는 경우도 있음
+        # 첫번째 혹은 마지막에 고화질 포스터가 있을 수 있음
+        arts = []
+        for href in tree.xpath('//*[@id="sample-waterfall"]/a/@href'):
+            arts.append(cls.__fix_url(href))
+
+        return {"ps": ps, "pl": pl, "arts": arts}
+
+    @classmethod
     def __info(cls, code, do_trans=True, proxy_url=None, image_mode="0"):
         url = f"{cls.site_base_url}/{code[2:]}"
         tree = SiteUtil.get_tree(url, proxy_url=proxy_url)
@@ -79,17 +107,21 @@ class SiteJavbus:
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]
         entity.mpaa = "청소년 관람불가"
-        entity.thumb = []
 
-        # 2021-10-14
-        img_url = tree.xpath("/html/body/div[5]/div[1]/div[1]/a/img/@src")[0]
-        if not img_url.startswith("http"):
-            img_url = cls.site_base_url + img_url
+        #
+        # 이미지 관련 시작
+        #
+        img_urls = cls.__img_urls(tree)
+        SiteUtil.resolve_jav_imgs(img_urls, proxy_url=proxy_url)
 
-        data = SiteUtil.get_image_url(img_url, image_mode, proxy_url=proxy_url, with_poster=True)
+        entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
 
-        entity.thumb.append(EntityThumb(aspect="landscape", value=data["image_url"]))
-        entity.thumb.append(EntityThumb(aspect="poster", value=data["poster_image_url"]))
+        entity.fanart = []
+        for href in img_urls["arts"][:10]:
+            entity.fanart.append(SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url))
+        #
+        # 이미지 관련 끝
+        #
 
         tags = tree.xpath("/html/body/div[5]/div[1]/div[2]/p")
         for tag in tags:
@@ -153,12 +185,10 @@ class SiteJavbus:
                     entity.actor.append(EntityActor(tmp.strip()))
 
         tagline = tree.xpath("/html/body/div[5]/h3/text()")[0].lstrip(entity.title).strip()
-        entity.tagline = SiteUtil.trans(tagline, do_trans=do_trans).replace(entity.title, "").replace("[배달 전용]", "")
+        entity.tagline = (
+            SiteUtil.trans(tagline, do_trans=do_trans).replace(entity.title, "").replace("[배달 전용]", "").strip()
+        )
         entity.plot = entity.tagline
-
-        entity.fanart = []
-        for href in tree.xpath('//*[@id="sample-waterfall"]/a/@href'):
-            entity.fanart.append(SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url))
 
         return entity
 

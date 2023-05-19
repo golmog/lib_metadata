@@ -6,7 +6,6 @@ from .plugin import P
 from .entity_av import EntityAVSearch
 from .entity_base import (
     EntityMovie,
-    EntityThumb,
     EntityActor,
     EntityRatings,
     EntityExtra,
@@ -71,6 +70,34 @@ class SiteJav321:
             ret["ret"] = "success" if data else "no_match"
             ret["data"] = data
         return ret
+
+    @classmethod
+    def __img_urls(cls, tree):
+        """collect raw image urls from html page"""
+
+        base_xpath = "/html/body/div[2]/div[1]/div[1]"
+
+        # poster small
+        # 세로 이미지 / 저화질 썸네일
+        ps = tree.xpath(f"{base_xpath}/div[2]/div[1]/div[1]/img/@src")
+        ps = ps[0] if ps else ""
+        if not ps:
+            logger.warning("이미지 URL을 얻을 수 없음: poster small")
+
+        # poster large
+        # 보통 가로 이미지
+        pl = tree.xpath('//*[@id="vjs_sample_player"]/@poster')
+        pl = pl[0] if pl else ""
+
+        # fanart
+        # 첫번째 혹은 마지막에 고화질 포스터가 있을 수 있음
+        arts = []
+        for img_src in tree.xpath("/html/body/div[2]/div[2]/div//img/@src"):
+            if img_src == pl:
+                continue
+            arts.append(img_src)
+
+        return {"ps": ps, "pl": pl, "arts": arts}
 
     @classmethod
     def __info(cls, code, do_trans=True, proxy_url=None, image_mode="0"):
@@ -145,53 +172,21 @@ class SiteJav321:
                 # entity.studio = value
                 entity.studio = node.xpath(".//following-sibling::a")[0].text_content().strip()
 
-        # low-res image poster - assuming always available
-        image_url_thumb = tree.xpath(f"{base_xpath}/div[2]/div[1]/div[1]/img/@src")[0]
+        #
+        # 이미지 관련 시작
+        #
+        img_urls = cls.__img_urls(tree)
+        SiteUtil.resolve_jav_imgs(img_urls, proxy_url=proxy_url)
 
-        image_url_landscape = ""
-        for node in tree.xpath('//*[@id="vjs_sample_player"]'):
-            image_url_landscape = node.attrib["poster"]
-            entity.extras = [EntityExtra("trailer", entity.title, "mp4", node.xpath(".//source")[0].attrib["src"])]
+        entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
 
-        image_url_arts = []
-        for img_src in tree.xpath("/html/body/div[2]/div[2]/div//img/@src"):
-            if img_src == image_url_landscape:
-                continue
-            image_url_arts.append(img_src)
-
-        # first art to landscape
-        if image_url_arts and not image_url_landscape:
-            image_url_landscape = image_url_arts.pop(0)
-
-        # resolving image_url_poster
-        image_url_poster, poster_from_landscape = "", False
-        if image_url_arts:
-            if SiteUtil.is_hq_poster(image_url_thumb, image_url_arts[0]):
-                # first art to poster
-                image_url_poster = image_url_arts[0]
-            elif SiteUtil.is_hq_poster(image_url_thumb, image_url_arts[-1]):
-                # last art to poster
-                image_url_poster = image_url_arts[-1]
-        if not image_url_poster and SiteUtil.has_hq_poster(image_url_thumb, image_url_landscape):
-            image_url_poster = image_url_landscape
-            poster_from_landscape = True
-        if not image_url_poster:
-            image_url_poster = image_url_thumb
-
-        entity.thumb = []
-        if poster_from_landscape:
-            tmp = SiteUtil.get_image_url(image_url_poster, image_mode, proxy_url=proxy_url, with_poster=True)
-            entity.thumb.append(EntityThumb(aspect="poster", value=tmp["poster_image_url"]))
-        else:
-            entity.thumb.append(
-                EntityThumb(
-                    aspect="poster",
-                    value=SiteUtil.process_image_mode(image_mode, image_url_poster, proxy_url=proxy_url),
-                )
-            )
-        if image_url_landscape:
-            tmp = SiteUtil.get_image_url(image_url_landscape, image_mode, proxy_url=proxy_url)
-            entity.thumb.append(EntityThumb(aspect="landscape", value=tmp["image_url"]))
+        entity.fanart = []
+        for img_url in img_urls["arts"][:10]:
+            value = SiteUtil.process_image_mode(image_mode, img_url, proxy_url=proxy_url)
+            entity.fanart.append(value)
+        #
+        # 이미지 관련 끝
+        #
 
         # entity.plot = SiteUtil.trans(tree.xpath(f'{base_xpath}/div[1]/h3/text()')[0], do_trans=do_trans)
         tmp = tree.xpath(f"{base_xpath}/div[2]/div[3]/div/text()")
@@ -216,12 +211,8 @@ class SiteJav321:
                 entity.plot += SiteUtil.trans(tmp, do_trans=do_trans)
         # logger.debug(entity.plot)
 
-        entity.fanart = []
-        for idx, img_url in enumerate(image_url_arts):
-            if idx > 9:
-                break
-            value = SiteUtil.process_image_mode(image_mode, img_url, proxy_url=proxy_url)
-            entity.fanart.append(value)
+        for node in tree.xpath('//*[@id="vjs_sample_player"]'):
+            entity.extras = [EntityExtra("trailer", entity.title, "mp4", node.xpath(".//source")[0].attrib["src"])]
 
         entity.tagline = entity.plot
 

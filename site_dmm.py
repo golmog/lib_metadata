@@ -5,7 +5,6 @@ from .plugin import P
 from .entity_av import EntityAVSearch
 from .entity_base import (
     EntityMovie,
-    EntityThumb,
     EntityActor,
     EntityRatings,
     EntityExtra,
@@ -152,6 +151,32 @@ class SiteDmm:
         return ret
 
     @classmethod
+    def __img_urls(cls, tree):
+        """collect raw image urls from html page"""
+
+        # poster small
+        # 세로 이미지 / 저화질 썸네일
+        # 없는 경우가 있나?
+        ps = tree.xpath('//div[@id="sample-video"]//img/@src')
+        ps = ps[0] if ps else ""
+        if not ps:
+            logger.warning("이미지 URL을 얻을 수 없음: poster small")
+
+        # poster large
+        # 보통 가로 이미지
+        # 세로도 있음 zooo-067
+        # 없는 경우도 있음 tsds-42464
+        pl = tree.xpath('//div[@id="sample-video"]/a/@href')
+        pl = pl[0] if pl else ""
+
+        # fanart
+        # 없는 경우도 있음 h_1237thtp00052
+        # 첫번째 혹은 마지막에 고화질 포스터가 있을 수 있음
+        arts = tree.xpath('//a[@name="sample-image"]/@href')
+
+        return {"ps": ps, "pl": pl, "arts": arts}
+
+    @classmethod
     def __info(cls, code, do_trans=True, proxy_url=None, image_mode="0", small_image_to_poster_list=None):
         if small_image_to_poster_list is None:
             small_image_to_poster_list = []
@@ -162,82 +187,30 @@ class SiteDmm:
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]
         entity.mpaa = "청소년 관람불가"
-        entity.thumb = []
-        basetag = '//*[@id="mu"]/div/table//tr/td[1]'
-        nodes = tree.xpath(f"{basetag}/div[1]/div[1]")
-        if not nodes:
-            raise ValueError(f"html 페이지에서 정보를 찾을 수 없음: url='{url}', xpath='{basetag}/div[1]/div[1]'")
 
-        # 2021-12-01 : div[2]/img  인 것들이 있음
-        # 예) thtp00052
-        tmp_nodes = tree.xpath(f"{basetag}/div[1]/div")
-        if len(tmp_nodes) == 2:
-            nodes = [tmp_nodes[1]]
-
-        # logger.debug('crs-full :%s ', len(a_nodes))
-        # 2020-05-31 A태그가 없는 경우가 있음. 확대이미지가 없는 경우  tsds-42464
-        # if a_nodes:
-        # svoks stvf - 확대이미지가 포스터. 이미지 크기로 자르지 않고 포스터러 결정됨
-        # stcead - 확대이지미가 랜드스케이프. 축소 이미지를 포스터로 사용
-
+        #
+        # 이미지 관련 시작
+        #
         small_img_to_poster = False
         for tmp in small_image_to_poster_list:
             if tmp in code:
                 small_img_to_poster = True
                 break
 
-        try:
-            a_nodes = nodes[0].xpath(".//a")
-            anodes = a_nodes
-            # logger.debug(html.tostring(anodes[0]))
-            img_tag = anodes[0].xpath(".//img")[0]
-            if small_img_to_poster:
-                data = SiteUtil.get_image_url(
-                    a_nodes[0].attrib["href"], image_mode, proxy_url=proxy_url, with_poster=False
-                )
-                entity.thumb.append(EntityThumb(aspect="landscape", value=data["image_url"]))
-            else:
-                img_url_ps = nodes[0].xpath(".//img/@src")[0]  # poster small
-                img_url_ls = nodes[0].xpath(".//a/@href")[0]  # landscape but not always landscape
-                img_url_arts = tree.xpath('//*[starts-with(@id,"sample-image")]/@href')  # fanart 즉 sample image
-                if img_url_arts and SiteUtil.is_hq_poster(img_url_ps, img_url_arts[0]):
-                    data = {
-                        "image_url": SiteUtil.process_image_mode(image_mode, img_url_ls, proxy_url=proxy_url),
-                        "poster_image_url": SiteUtil.process_image_mode(
-                            image_mode, img_url_arts[0], proxy_url=proxy_url
-                        ),
-                    }
-                elif img_url_arts and SiteUtil.is_hq_poster(img_url_ps, img_url_arts[-1]):
-                    data = {
-                        "image_url": SiteUtil.process_image_mode(image_mode, img_url_ls, proxy_url=proxy_url),
-                        "poster_image_url": SiteUtil.process_image_mode(
-                            image_mode, img_url_arts[-1], proxy_url=proxy_url
-                        ),
-                    }
-                else:
-                    data = SiteUtil.get_image_url(
-                        img_url_ls,
-                        image_mode,
-                        proxy_url=proxy_url,
-                        with_poster=True,
-                    )
-                entity.thumb.append(EntityThumb(aspect="landscape", value=data["image_url"]))
-                entity.thumb.append(EntityThumb(aspect="poster", value=data["poster_image_url"]))
-        except Exception:
-            small_img_to_poster = True
+        img_urls = cls.__img_urls(tree)
+        SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=small_img_to_poster, proxy_url=proxy_url)
 
-        if small_img_to_poster:
-            img_tag = nodes[0].xpath(".//img")[0]
-            entity.thumb.append(
-                EntityThumb(
-                    aspect="poster",
-                    value=SiteUtil.process_image_mode(image_mode, img_tag.attrib["src"], proxy_url=proxy_url),
-                )
-            )
+        entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
+        entity.fanart = img_urls["arts"][:10]  # proxy 필요 없나?
+        #
+        # 이미지 관련 끝
+        #
 
-        entity.tagline = (
-            SiteUtil.trans(img_tag.attrib["alt"], do_trans=do_trans).replace("[배달 전용]", "").replace("[특가]", "")
-        )
+        alt = tree.xpath('//div[@id="sample-video"]//img/@alt')[0]
+        entity.tagline = SiteUtil.trans(alt, do_trans=do_trans).replace("[배달 전용]", "").replace("[특가]", "").strip()
+
+        basetag = '//*[@id="mu"]/div/table//tr/td[1]'
+
         tags = tree.xpath(f"{basetag}/table//tr")
         tmp_premiered = None
         for tag in tags:
@@ -330,8 +303,6 @@ class SiteDmm:
         tmp = tree.xpath(f"{basetag}/div[4]/text()")[0]
         tmp = tmp.split("※")[0].strip()
         entity.plot = SiteUtil.trans(tmp, do_trans=do_trans)
-
-        entity.fanart = tree.xpath('//a[@name="sample-image"]/@href')[:10]
 
         try:
             tmp = tree.xpath('//div[@class="d-review__points"]/p/strong')

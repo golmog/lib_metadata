@@ -1,21 +1,34 @@
 import json
 import os
+import random
 import re
 import time
 from datetime import timedelta
 from io import BytesIO
+from pathlib import Path
 
 import requests
+from discord_webhook import DiscordEmbed, DiscordWebhook
 from lxml import html
 from PIL import Image
 
 from framework import SystemModelSetting, path_data, py_urllib
 from framework.util import Util
 from system import SystemLogicTrans
+from tool_expand import ToolExpandDiscord
 
+from .entity_base import EntityThumb
 from .plugin import P
 
 logger = P.logger
+
+try:
+    webhook_file = Path(path_data).joinpath("db/lib_metadata.webhook")
+    with open(webhook_file, encoding="utf-8") as fp:
+        my_webhooks = list(filter(str, fp.read().splitlines()))
+except Exception as e:
+    logger.warning("나만의 웹훅 사용 안함: %s", e)
+    my_webhooks = []
 
 
 class SiteUtil:
@@ -62,24 +75,32 @@ class SiteUtil:
 
         kwargs.setdefault("headers", cls.default_headers)
 
+        method = kwargs.pop("method", "GET")
         post_data = kwargs.pop("post_data", None)
-        if post_data is None:
-            res = cls.session.get(url, **kwargs)
-        else:
+        if post_data:
+            method = "POST"
             kwargs["data"] = post_data
-            res = cls.session.post(url, **kwargs)
+
+        res = cls.session.request(method, url, **kwargs)
         # logger.debug(res.headers)
         # logger.debug(res.text)
         return res
 
     @classmethod
-    def imopen(cls, im, proxy_url=None):
-        if isinstance(im, Image.Image):
-            return im
-        if isinstance(im, str):
-            res = cls.get_response(im, proxy_url=proxy_url)
-            return Image.open(BytesIO(res.content))
-        return None
+    def imopen(cls, img_src, proxy_url=None):
+        if isinstance(img_src, Image.Image):
+            return img_src
+        try:
+            # local file
+            return Image.open(img_src)
+        except (FileNotFoundError, OSError):
+            # remote url
+            try:
+                res = cls.get_response(img_src, proxy_url=proxy_url)
+                return Image.open(BytesIO(res.content))
+            except Exception:
+                logger.exception("이미지 여는 중 예외:")
+                return None
 
     @classmethod
     def imcrop(cls, im, position=None, box_only=False):
@@ -88,7 +109,7 @@ class SiteUtil:
         if not isinstance(im, Image.Image):
             return im
         width, height = im.size
-        new_w = height / 1.414213562373095
+        new_w = height / 1.4225
         if position == "l":
             left = 0
         elif position == "c":
@@ -102,7 +123,74 @@ class SiteUtil:
         return im.crop(box)
 
     @classmethod
-    def process_image_mode(cls, image_mode, image_url, proxy_url=None):
+    def resolve_jav_imgs(cls, img_urls: dict, ps_to_poster: bool = False, proxy_url: str = None):
+        ps = img_urls.get("ps", "")  # poster small
+        pl = img_urls.get("pl", "")  # poster large
+        arts = img_urls.get("arts", [])  # arts
+
+        # poster 기본값
+        poster = ps if ps_to_poster else ""
+        poster_crop = None
+
+        if not poster and arts:
+            if cls.is_hq_poster(ps, arts[0], proxy_url=proxy_url):
+                # first art to poster
+                poster = arts[0]
+            elif cls.is_hq_poster(ps, arts[-1], proxy_url=proxy_url):
+                # last art to poster
+                poster = arts[-1]
+        if not poster and pl:
+            if cls.is_hq_poster(ps, pl, proxy_url=proxy_url):
+                # pl이 세로로 큰 이미지
+                poster = pl
+            else:
+                loc = cls.has_hq_poster(ps, pl, proxy_url=proxy_url)
+                if loc:
+                    # pl의 일부를 crop해서 포스터로...
+                    poster, poster_crop = pl, loc
+        if not poster:
+            # 그래도 없으면...
+            poster = ps
+
+        # # first art to landscape
+        # if arts and not pl:
+        #     pl = arts.pop(0)
+
+        img_urls.update(
+            {
+                "poster": poster,
+                "poster_crop": poster_crop,
+                "landscape": pl,
+            }
+        )
+
+    @classmethod
+    def process_jav_imgs(cls, image_mode: str, img_urls: dict, proxy_url: str = None):
+        thumbs = []
+        cache = {}
+
+        landscape = img_urls["landscape"]
+        if landscape:
+            if landscape not in cache:
+                cache[landscape] = cls.process_image_mode(image_mode, landscape, proxy_url=proxy_url)
+            thumbs.append(EntityThumb(aspect="landscape", value=cache[landscape]))
+
+        poster, poster_crop = img_urls["poster"], img_urls["poster_crop"]
+        if poster and not poster_crop:
+            if poster not in cache:
+                cache[poster] = cls.process_image_mode(image_mode, poster, proxy_url=proxy_url)
+            thumbs.append(EntityThumb(aspect="poster", value=cache[poster]))
+        if poster and poster_crop:
+            if image_mode == "1":
+                _url = cls.process_image_mode("4", poster, proxy_url=proxy_url)
+            else:
+                _url = cls.process_image_mode(image_mode, poster, proxy_url=proxy_url, crop_mode=poster_crop)
+            thumbs.append(EntityThumb(aspect="poster", value=_url))
+
+        return thumbs
+
+    @classmethod
+    def process_image_mode(cls, image_mode, image_url, proxy_url=None, crop_mode=None):
         # logger.debug('process_image_mode : %s %s', image_mode, image_url)
         if image_url is None:
             return
@@ -116,7 +204,7 @@ class SiteUtil:
             tmp = "{ddns}/metadata/api/discord_proxy?url=" + py_urllib.quote_plus(image_url)
             ret = Util.make_apikey(tmp)
         elif image_mode == "3":  # 고정 디스코드 URL.
-            ret = cls.discord_proxy_image(image_url)
+            ret = cls.discord_proxy_image(image_url, proxy_url=proxy_url, crop_mode=crop_mode)
         elif image_mode == "4":  # landscape to poster
             # logger.debug(image_url)
             ret = "{ddns}/metadata/normal/image_process.jpg?mode=landscape_to_poster&url=" + py_urllib.quote_plus(
@@ -126,13 +214,13 @@ class SiteUtil:
             # ret = Util.make_apikey(tmp)
         elif image_mode == "5":  # 로컬에 포스터를 만들고
             # image_url : 디스코드에 올라간 표지 url 임.
-            im = cls.imopen(image_url)
+            im = cls.imopen(image_url, proxy_url=proxy_url)
             width, height = im.size
             filename = f"proxy_{time.time()}.jpg"
             filepath = os.path.join(path_data, "tmp", filename)
             if width > height:
                 im = cls.imcrop(im)
-            im.save(filepath)
+            im.save(filepath, quality=95)
             # poster_url = '{ddns}/file/data/tmp/%s' % filename
             # poster_url = Util.make_apikey(poster_url)
             # logger.debug('poster_url : %s', poster_url)
@@ -239,41 +327,61 @@ class SiteUtil:
             return SystemLogicTrans.trans(text, source=source, target=target).strip()
         return text
 
-    """
     @classmethod
-    def discord_proxy_get_target(cls, image_url):
-        from tool_expand import ToolExpandDiscord
-        return ToolExpandDiscord.discord_proxy_get_target(image_url)
-    """
+    def __discord_proxy_image(cls, image_url, webhook_url, proxy_url=None, crop_mode=None):
+        if not image_url:
+            return image_url
+
+        im = cls.imopen(image_url, proxy_url=proxy_url)
+        if im is None:
+            return image_url
+
+        if crop_mode is not None:
+            imformat = im.format  # retain original image's format like "JPEG", "PNG"
+            im = cls.imcrop(im, position=crop_mode)
+            im.format = imformat
+
+        webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
+
+        # 파일 이름이 대충 이상한 값이면 첨부가 안될 수 있음
+        mode = f"crop{crop_mode}" if crop_mode else "original"
+        filename = f"{mode}.{im.format.lower().replace('jpeg', 'jpg')}"
+        with BytesIO() as buf:
+            im.save(buf, format=im.format, quality=95)
+            webhook.add_file(buf.getvalue(), filename=filename)
+        embed = DiscordEmbed(title=image_url, color=16164096)
+        embed.set_footer(text="lib_metadata")
+        embed.set_timestamp()
+        embed.set_image(url=f"attachment://{filename}")
+        embed.add_embed_field(name="mode", value=mode)
+        webhook.add_embed(embed)
+
+        res = webhook.execute()
+        try:
+            return res.json()["embeds"][0]["image"]["url"]
+        except AttributeError:
+            return res[0].json()["embeds"][0]["image"]["url"]
 
     @classmethod
-    def discord_proxy_get_target_poster(cls, image_url):
-        from tool_expand import ToolExpandDiscord
-
-        return ToolExpandDiscord.discord_proxy_get_target(image_url + "av_poster")
-
-    @classmethod
-    def discord_proxy_set_target(cls, source, target):
-        from tool_expand import ToolExpandDiscord
-
-        return ToolExpandDiscord.discord_proxy_set_target(source, target)
-
-    @classmethod
-    def discord_proxy_set_target_poster(cls, source, target):
-        from tool_expand import ToolExpandDiscord
-
-        return ToolExpandDiscord.discord_proxy_set_target(source + "av_poster", target)
-
-    @classmethod
-    def discord_proxy_image(cls, image_url):
-        from tool_expand import ToolExpandDiscord
-
+    def discord_proxy_image(cls, image_url, **kwargs):
+        if my_webhooks:
+            kwargs.setdefault("proxy_url", None)
+            kwargs.setdefault("crop_mode", None)
+            try:
+                return cls.__discord_proxy_image(image_url, random.choice(my_webhooks), **kwargs)
+            except Exception:
+                logger.exception("이미지 프록시 중 예외:")
+                return image_url
         return ToolExpandDiscord.discord_proxy_image(image_url)
 
     @classmethod
     def discord_proxy_image_localfile(cls, filepath):
-        from tool_expand import ToolExpandDiscord
-
+        if my_webhooks:
+            try:
+                return cls.__discord_proxy_image(filepath, random.choice(my_webhooks))
+            except Exception:
+                logger.exception("이미지 프록시 중 예외:")
+                return filepath
         return ToolExpandDiscord.discord_proxy_image_localfile(filepath)
 
     @classmethod
@@ -295,20 +403,10 @@ class SiteUtil:
                 logger.debug(ret["image_url"])
                 # ret['poster_image_url'] = cls.discord_proxy_get_target_poster(image_url)
                 # if ret['poster_image_url'] is None:
-                if image_mode == "1":
-                    im = cls.imopen(image_url, proxy_url=proxy_url)
-                    w, h = im.size
-                    if w > h:
-                        # landscape to poster
-                        ret["poster_image_url"] = cls.process_image_mode("4", image_url, proxy_url=proxy_url)
-                    else:
-                        # already poster
-                        ret["poster_image_url"] = cls.process_image_mode("1", image_url, proxy_url=proxy_url)
-                else:
-                    ret["poster_image_url"] = cls.process_image_mode("5", ret["image_url"])  # 포스터이미지 url 본인 sjva
-                    # if image_mode == '3': # 디스코드 url 모드일때만 포스터도 디스코드로
-                    # ret['poster_image_url'] = cls.process_image_mode('3', tmp) #디스코드 url / 본인 sjva가 소스이므로 공용으로 등록
-                    # cls.discord_proxy_set_target_poster(image_url, ret['poster_image_url'])
+                ret["poster_image_url"] = cls.process_image_mode("5", ret["image_url"])  # 포스터이미지 url 본인 sjva
+                # if image_mode == '3': # 디스코드 url 모드일때만 포스터도 디스코드로
+                # ret['poster_image_url'] = cls.process_image_mode('3', tmp) #디스코드 url / 본인 sjva가 소스이므로 공용으로 등록
+                # cls.discord_proxy_set_target_poster(image_url, ret['poster_image_url'])
 
         except Exception:
             logger.exception("Image URL 생성 중 예외:")
@@ -372,10 +470,11 @@ class SiteUtil:
 
             histsm = imhist(im_sm)  # reference
 
-            for pos in ["r", "l"]:
+            for pos in ["r", "l", "c"]:
                 val = imdist(histsm, cls.imcrop(im_lg, position=pos))
                 if val < 5.0:
-                    return cls.imcrop(im_lg, position=pos, box_only=True)
+                    return pos
+                    # return cls.imcrop(im_lg, position=pos, box_only=True)
         except Exception:
             pass
 
@@ -743,6 +842,7 @@ class SiteUtil:
     @classmethod
     def get_tree_daum(cls, url, post_data=None):
         from system.logic_site import SystemLogicSite
+
         from .site_daum import SiteDaum
 
         return cls.get_tree(
@@ -756,6 +856,7 @@ class SiteUtil:
     @classmethod
     def get_text_daum(cls, url, post_data=None):
         from system.logic_site import SystemLogicSite
+
         from .site_daum import SiteDaum
 
         return cls.get_text(
@@ -769,6 +870,7 @@ class SiteUtil:
     @classmethod
     def get_response_daum(cls, url, post_data=None):
         from system.logic_site import SystemLogicSite
+
         from .site_daum import SiteDaum
 
         return cls.get_response(
@@ -791,16 +893,16 @@ class SiteUtil:
         bottom = width
         poster = im.crop((left, top, right, bottom))
         try:
-            poster.save(filepath)
+            poster.save(filepath, quality=95)
         except Exception:
             poster = poster.convert("RGB")
-            poster.save(filepath)
+            poster.save(filepath, quality=95)
         ret = cls.discord_proxy_image_localfile(filepath)
         return ret
 
     @classmethod
     def get_treefromcontent(cls, url, **kwargs):
-        text = SiteUtil.get_response(url, **kwargs).content
+        text = cls.get_response(url, **kwargs).content
         # logger.debug(text)
         if text is None:
             return
