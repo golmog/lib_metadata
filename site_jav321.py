@@ -107,7 +107,6 @@ class SiteJav321:
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]
         entity.mpaa = "청소년 관람불가"
-        entity.tag = []
 
         base_xpath = "/html/body/div[2]/div[1]/div[1]"
         nodes = tree.xpath(f"{base_xpath}/div[2]/div[1]/div[2]/b")

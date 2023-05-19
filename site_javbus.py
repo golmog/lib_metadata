@@ -137,7 +137,10 @@ class SiteJavbus:
 
             logger.debug("key:%s value:%s", key, value)
             if key == "識別碼":
-                entity.title = entity.originaltitle = entity.sorttitle = value
+                entity.title = entity.originaltitle = entity.sorttitle = value.upper()
+                if entity.tag is None:
+                    entity.tag = []
+                entity.tag.append(entity.title.split("-")[0])
             elif key == "發行日期":
                 if value != "0000-00-00":
                     entity.premiered = value
@@ -160,10 +163,9 @@ class SiteJavbus:
             # elif key == u'發行商':
             #    entity.studio = value
             elif key == "系列":
-                entity.tag = [
-                    SiteUtil.trans(value, do_trans=do_trans),
-                    entity.title.split("-")[0],
-                ]
+                if entity.tag is None:
+                    entity.tag = []
+                entity.tag.append(SiteUtil.trans(value, do_trans=do_trans))
             elif key == "類別":
                 entity.genre = []
                 for tmp in value.split(" "):
