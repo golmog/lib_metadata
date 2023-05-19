@@ -16,13 +16,13 @@ class P(object):
     blueprint = menu = None
 
     plugin_info = {
-        'version' : '0.2.0.0',
+        'version' : '0.2.0.0p',
         'type' : 'library',
         'name' : package_name,
         'category_name' : 'library',
-        'developer' : u'soju6jan',
+        'developer' : u'by275',
         'description' : u'메타데이터를 얻기 위한 개별 사이트 크롤링 라이브러리',
-        'home' : 'https://github.com/soju6jan/%s' % package_name,
+        'home' : 'https://github.com/by275/%s' % package_name,
         'more' : '',
     }
     ModelSetting = get_model_setting(package_name, logger)

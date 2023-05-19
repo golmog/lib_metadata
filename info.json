@@ -1,10 +1,10 @@
 {
-    "version": "0.2.0.0",
+    "version": "0.2.0.0p",
     "type": "library",
     "name": "lib_metadata",
     "category_name": "library",
-    "developer": "soju6jan",
+    "developer": "by275",
     "description": "메타데이터를 얻기 위한 개별 사이트 크롤링 라이브러리",
-    "home": "https://github.com/soju6jan/lib_metadata",
+    "home": "https://github.com/by275/lib_metadata",
     "more": ""
 }

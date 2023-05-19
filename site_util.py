@@ -31,9 +31,16 @@ except Exception as e:
     my_webhooks = []
 
 try:
-    import imagehash
-except ImportError:
-    logger.warning("imagehash 패키지를 설치하세요.")
+    from sqlitedict import SqliteDict
+
+    cache_file = Path(path_data).joinpath("db/lib_metadata.db")
+    cache = SqliteDict(
+        cache_file, tablename="lib_metadata_cache", encode=json.dumps, decode=json.loads, autocommit=True
+    )
+    cache.clear()
+except Exception as e:
+    logger.warning("캐시 초기화 실패: %s", e)
+    cache = {}
 
 
 class SiteUtil:
@@ -172,19 +179,16 @@ class SiteUtil:
     @classmethod
     def process_jav_imgs(cls, image_mode: str, img_urls: dict, proxy_url: str = None):
         thumbs = []
-        cache = {}
 
         landscape = img_urls["landscape"]
         if landscape:
-            if landscape not in cache:
-                cache[landscape] = cls.process_image_mode(image_mode, landscape, proxy_url=proxy_url)
-            thumbs.append(EntityThumb(aspect="landscape", value=cache[landscape]))
+            _url = cls.process_image_mode(image_mode, landscape, proxy_url=proxy_url)
+            thumbs.append(EntityThumb(aspect="landscape", value=_url))
 
         poster, poster_crop = img_urls["poster"], img_urls["poster_crop"]
         if poster and not poster_crop:
-            if poster not in cache:
-                cache[poster] = cls.process_image_mode(image_mode, poster, proxy_url=proxy_url)
-            thumbs.append(EntityThumb(aspect="poster", value=cache[poster]))
+            _url = cls.process_image_mode(image_mode, poster, proxy_url=proxy_url)
+            thumbs.append(EntityThumb(aspect="poster", value=_url))
         if poster and poster_crop:
             if image_mode == "1":
                 _url = cls.process_image_mode("4", poster, proxy_url=proxy_url)
@@ -328,14 +332,22 @@ class SiteUtil:
 
     @classmethod
     def trans(cls, text, do_trans=True, source="ja", target="ko"):
-        if do_trans:
-            return SystemLogicTrans.trans(text, source=source, target=target).strip()
+        if do_trans and text:
+            if text not in cache:
+                cache[text] = SystemLogicTrans.trans(text, source=source, target=target).strip()
+            return cache[text]
         return text
 
     @classmethod
     def __discord_proxy_image(cls, image_url, webhook_url, proxy_url=None, crop_mode=None):
         if not image_url:
             return image_url
+
+        cached = cache.get(image_url, {})
+
+        mode = f"crop{crop_mode}" if crop_mode is not None else "original"
+        if mode in cached:
+            return cached[mode]
 
         im = cls.imopen(image_url, proxy_url=proxy_url)
         if im is None:
@@ -349,7 +361,6 @@ class SiteUtil:
         webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
 
         # 파일 이름이 대충 이상한 값이면 첨부가 안될 수 있음
-        mode = f"crop{crop_mode}" if crop_mode else "original"
         filename = f"{mode}.{im.format.lower().replace('jpeg', 'jpg')}"
         with BytesIO() as buf:
             im.save(buf, format=im.format, quality=95)
@@ -363,9 +374,12 @@ class SiteUtil:
 
         res = webhook.execute()
         try:
-            return res.json()["embeds"][0]["image"]["url"]
+            cached[mode] = res.json()["embeds"][0]["image"]["url"]
         except AttributeError:
-            return res[0].json()["embeds"][0]["image"]["url"]
+            cached[mode] = res[0].json()["embeds"][0]["image"]["url"]
+
+        cache[image_url] = cached
+        return cached[mode]
 
     @classmethod
     def discord_proxy_image(cls, image_url, **kwargs):
