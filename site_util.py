@@ -30,6 +30,11 @@ except Exception as e:
     logger.warning("나만의 웹훅 사용 안함: %s", e)
     my_webhooks = []
 
+try:
+    import imagehash
+except ImportError:
+    logger.warning("imagehash 패키지를 설치하세요.")
+
 
 class SiteUtil:
     try:
@@ -416,19 +421,8 @@ class SiteUtil:
 
     @classmethod
     def is_hq_poster(cls, im_sm, im_lg, proxy_url=None):
-        def imhist(im, pdf=True):
-            if not isinstance(im, Image.Image):
-                return im
-            arr = np.asarray(im.convert("RGB")).reshape(-1, 3)
-            return np.apply_along_axis(lambda x: np.histogram(x, bins=255, range=(1, 256), density=pdf)[0], 0, arr)
-
-        def imdist(_im1, _im2):
-            """based on bhattacharyya distance"""
-            h1, h2 = imhist(_im1), imhist(_im2)
-            return -np.log(np.sum(np.sqrt(h1 * h2), axis=0, keepdims=True).min()) * 255.0
-
         try:
-            import numpy as np
+            from imagehash import dhash as hfun  # threshold = [11, 18]
 
             im_sm = cls.imopen(im_sm, proxy_url=proxy_url)
             im_lg = cls.imopen(im_lg, proxy_url=proxy_url)
@@ -440,25 +434,17 @@ class SiteUtil:
             if abs(ws / hs - wl / hl) > 0.1:
                 # aspect ratio is quite different
                 return False
-            return imdist(im_sm, im_lg) < 5.0
+            return hfun(im_sm) - hfun(im_lg) < 15
+        except ImportError:
+            return False
         except Exception:
+            logger.exception("고화질 포스터 확인 중 예외:")
             return False
 
     @classmethod
     def has_hq_poster(cls, im_sm, im_lg, proxy_url=None):
-        def imhist(im, pdf=True):
-            if not isinstance(im, Image.Image):
-                return im
-            arr = np.asarray(im.convert("RGB")).reshape(-1, 3)
-            return np.apply_along_axis(lambda x: np.histogram(x, bins=255, range=(1, 256), density=pdf)[0], 0, arr)
-
-        def imdist(_im1, _im2):
-            """based on bhattacharyya distance"""
-            h1, h2 = imhist(_im1), imhist(_im2)
-            return -np.log(np.sum(np.sqrt(h1 * h2), axis=0, keepdims=True).min()) * 255.0
-
         try:
-            import numpy as np
+            from imagehash import dhash as hfun  # threshold = [11, 18]
 
             im_sm = cls.imopen(im_sm, proxy_url=proxy_url)
             im_lg = cls.imopen(im_lg, proxy_url=proxy_url)
@@ -468,15 +454,15 @@ class SiteUtil:
                 # large image is not large enough
                 return None
 
-            histsm = imhist(im_sm)  # reference
-
             for pos in ["r", "l", "c"]:
-                val = imdist(histsm, cls.imcrop(im_lg, position=pos))
-                if val < 5.0:
+                val = hfun(im_sm) - hfun(cls.imcrop(im_lg, position=pos))
+                if val < 15.0:
                     return pos
-                    # return cls.imcrop(im_lg, position=pos, box_only=True)
-        except Exception:
+        except ImportError:
             pass
+        except Exception:
+            logger.exception("고화질 포스터 확인 중 예외:")
+        return None
 
     @classmethod
     def change_html(cls, text):
