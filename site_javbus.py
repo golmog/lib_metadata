@@ -33,11 +33,7 @@ class SiteJavbus:
         for node in tree.xpath('//a[@class="movie-box"]')[:10]:
             try:
                 item = EntityAVSearch(cls.site_name)
-                item.image_url = node.xpath(".//img/@src")[0].lower()
-                item.image_url = cls.__fix_url(item.image_url)
-                if manual:
-                    _image_mode = "0" if image_mode == "3" else image_mode
-                    item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
+                item.image_url = cls.__fix_url(node.xpath(".//img/@src")[0])
 
                 tag = node.xpath(".//date")
                 item.ui_code = tag[0].text_content().strip()
@@ -45,8 +41,14 @@ class SiteJavbus:
                 item.desc = "발매일: " + tag[1].text_content().strip()
                 item.year = int(tag[1].text_content().strip()[:4])
                 item.title = item.title_ko = node.xpath(".//span/text()")[0].strip()
-                if do_trans:
-                    item.title_ko = SiteUtil.trans(item.title)
+                if manual:
+                    _image_mode = "0" if image_mode == "3" else image_mode
+                    item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
+                    if do_trans:
+                        item.title_ko = " ".join(["(현재 인터페이스에서는 번역을 제공하지 않습니다.)", item.title])
+                else:
+                    item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
+
                 item.score = 100 if keyword.lower() == item.ui_code.lower() else 60 - (len(ret) * 10)
                 if item.score < 0:
                     item.socre = 0
@@ -158,7 +160,7 @@ class SiteJavbus:
                     if value in SiteUtil.av_studio:
                         entity.studio = SiteUtil.av_studio[value]
                     else:
-                        entity.studio = SiteUtil.trans(value, do_trans=do_trans)
+                        entity.studio = SiteUtil.trans(value)
                 entity.studio = entity.studio.strip()
             # elif key == u'發行商':
             #    entity.studio = value

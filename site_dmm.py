@@ -72,7 +72,7 @@ class SiteDmm:
                     continue
 
                 tag = node.xpath(".//span[1]/img")[0]
-                item.title = item.title_ko = tag.attrib["alt"]
+                item.title = item.title_ko = tag.attrib["alt"].strip()
                 item.image_url = tag.attrib["src"]
 
                 # tmp = SiteUtil.discord_proxy_get_target(item.image_url)
@@ -82,9 +82,10 @@ class SiteDmm:
                 if manual:
                     _image_mode = "0" if image_mode == "3" else image_mode
                     item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
-
-                if do_trans:
-                    item.title_ko = SiteUtil.trans(item.title)
+                    if do_trans:
+                        item.title_ko = " ".join(["(현재 인터페이스에서는 번역을 제공하지 않습니다.)", item.title])
+                else:
+                    item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
 
                 match = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
                 if match:
@@ -206,7 +207,7 @@ class SiteDmm:
         # 이미지 관련 끝
         #
 
-        alt = tree.xpath('//div[@id="sample-video"]//img/@alt')[0]
+        alt = tree.xpath('//div[@id="sample-video"]//img/@alt')[0].strip()
         entity.tagline = SiteUtil.trans(alt, do_trans=do_trans).replace("[배달 전용]", "").replace("[특가]", "").strip()
 
         basetag = '//*[@id="mu"]/div/table//tr/td[1]'
@@ -250,7 +251,7 @@ class SiteDmm:
                     if value in SiteUtil.av_studio:
                         entity.studio = SiteUtil.av_studio[value]
                     else:
-                        entity.studio = SiteUtil.change_html(SiteUtil.trans(value, do_trans=do_trans))
+                        entity.studio = SiteUtil.change_html(SiteUtil.trans(value))
             elif key == "ジャンル：":
                 a_tags = td_tag[1].xpath(".//a")
                 entity.genre = []

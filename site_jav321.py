@@ -39,19 +39,20 @@ class SiteJav321:
             try:
                 base_xpath = "/html/body/div[2]/div[1]/div[1]"
                 tree = html.fromstring(res.text)
-                image_url = tree.xpath(f"{base_xpath}/div[2]/div[1]/div[1]/img/@src")[0]
-                item.image_url = SiteUtil.process_image_mode(image_mode, image_url, proxy_url=proxy_url)
-                if manual:
-                    _image_mode = "0" if image_mode == "3" else image_mode
-                    item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
+                item.image_url = tree.xpath(f"{base_xpath}/div[2]/div[1]/div[1]/img/@src")[0]
                 date = tree.xpath(
                     f'{base_xpath}/div[2]/div[1]/div[2]/b[contains(text(),"配信開始日")]/following-sibling::text()'
                 )[0]
                 item.desc = f"발매일{date}"
                 item.year = int(date.lstrip(":").strip()[:4])
-                item.title = item.title_ok = tree.xpath(f"{base_xpath}/div[1]/h3/text()")[0].strip()
-                if do_trans:
-                    item.title_ko = SiteUtil.trans(item.title)
+                item.title = item.title_ko = tree.xpath(f"{base_xpath}/div[1]/h3/text()")[0].strip()
+                if manual:
+                    _image_mode = "0" if image_mode == "3" else image_mode
+                    item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
+                    if do_trans:
+                        item.title_ko = " ".join(["(현재 인터페이스에서는 번역을 제공하지 않습니다.)", item.title])
+                else:
+                    item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
             except Exception:
                 logger.exception("개별 검색 결과 처리 중 예외:")
             ret.append(item.as_dict())
