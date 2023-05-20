@@ -47,7 +47,7 @@ class SiteJav321:
                 item.year = int(date.lstrip(":").strip()[:4])
                 item.title = item.title_ko = tree.xpath(f"{base_xpath}/div[1]/h3/text()")[0].strip()
                 if manual:
-                    _image_mode = "0" if image_mode == "3" else image_mode
+                    _image_mode = "1" if image_mode != "0" else image_mode
                     item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
                     if do_trans:
                         item.title_ko = " ".join(["(현재 인터페이스에서는 번역을 제공하지 않습니다.)", item.title])

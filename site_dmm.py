@@ -80,7 +80,7 @@ class SiteDmm:
                 # manual == False  때는 아예 이미치 처리를 할 필요가 없다.
                 # 일치항목 찾기 때는 화면에 보여줄 필요가 있는데 3번은 하면 하지 않는다.
                 if manual:
-                    _image_mode = "0" if image_mode == "3" else image_mode
+                    _image_mode = "1" if image_mode != "0" else image_mode
                     item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
                     if do_trans:
                         item.title_ko = " ".join(["(현재 인터페이스에서는 번역을 제공하지 않습니다.)", item.title])
