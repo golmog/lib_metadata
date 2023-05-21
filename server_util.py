@@ -1,8 +1,5 @@
 import json
 
-# third-party
-import requests
-
 # sjva 공용
 from framework import SystemModelSetting, app
 
@@ -29,11 +26,12 @@ class MetadataServerUtil:
             url = f"{app.config['DEFINE']['WEB_DIRECT_URL']}/meta/get_meta.php"
             params = {"type": "meta", "code": code}
             logger.info("서버로부터 메타데이터를 가져오는 중: %s", params)
-            data = requests.get(url, params=params, timeout=30).json()
+            data = SiteUtil.get_response(url, params=params, timeout=30).json()
             if data["ret"] == "success":
                 return data["data"]
         except Exception:
             logger.exception("서버로부터 메타데이터를 가져오는 중 예외:")
+        return None
 
     @classmethod
     def set_metadata(cls, code, data, keyword):
@@ -46,7 +44,7 @@ class MetadataServerUtil:
                 "keyword": keyword,
             }
             logger.debug("서버로 메타데이터 보내는 중: %s", param)
-            data = requests.post(url, data=param, timeout=30).json()
+            data = SiteUtil.get_response(url, post_data=param, timeout=30).json()
             if data["ret"] == "success":
                 logger.info("메타데이터 '%s' 저장 성공. 감사합니다!", code)
         except Exception:
@@ -64,7 +62,7 @@ class MetadataServerUtil:
                 value = thumb.get("value", "")
                 if ".discordapp." not in value:
                     return
-                if not requests.get(thumb["value"], timeout=30).ok:
+                if not SiteUtil.get_response(thumb["value"], method="HEAD", timeout=30).ok:
                     return
             if not SiteUtil.is_include_hangul(data.get("plot", "")):
                 return
@@ -81,7 +79,7 @@ class MetadataServerUtil:
                 value = thumb.get("value", "")
                 if ".discordapp." not in value:
                     return
-                if not requests.get(thumb["value"], timeout=30).ok:
+                if not SiteUtil.get_response(thumb["value"], method="HEAD", timeout=30).ok:
                     return
             if not SiteUtil.is_include_hangul(data.get("tagline", "")):
                 return
@@ -98,8 +96,9 @@ class MetadataServerUtil:
             url = f"{app.config['DEFINE']['WEB_DIRECT_URL']}/meta/get_meta.php"
             params = {"type": "extra", "code": code}
             logger.info("서버로부터 메타데이터를 가져오는 중: %s", params)
-            data = requests.get(url, params=params, timeout=30).json()
+            data = SiteUtil.get_response(url, params=params, timeout=30).json()
             if data["ret"] == "success":
                 return data["data"]
         except Exception:
             logger.exception("서버로부터 메타데이터를 가져오는 중 예외:")
+        return None
