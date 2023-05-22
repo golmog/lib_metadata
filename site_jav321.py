@@ -30,39 +30,41 @@ class SiteJav321:
         url = f"{cls.site_base_url}/search"
         res = SiteUtil.get_response(url, proxy_url=proxy_url, post_data={"sn": keyword.lower()})
 
+        if not res.history:
+            return []
+
         ret = []
-        if res.history:
+        try:
             item = EntityAVSearch(cls.site_name)
             item.code = cls.module_char + cls.site_char + res.url.split("/")[-1]
             item.score = 100
             item.ui_code = keyword.upper()
-            try:
-                base_xpath = "/html/body/div[2]/div[1]/div[1]"
-                tree = html.fromstring(res.text)
-                item.image_url = tree.xpath(f"{base_xpath}/div[2]/div[1]/div[1]/img/@src")[0]
-                date = tree.xpath(
-                    f'{base_xpath}/div[2]/div[1]/div[2]/b[contains(text(),"配信開始日")]/following-sibling::text()'
-                )[0]
-                item.desc = f"발매일{date}"
-                item.year = int(date.lstrip(":").strip()[:4])
-                item.title = item.title_ko = tree.xpath(f"{base_xpath}/div[1]/h3/text()")[0].strip()
-                if manual:
-                    _image_mode = "1" if image_mode != "0" else image_mode
-                    item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
-                    if do_trans:
-                        item.title_ko = " ".join(["(현재 인터페이스에서는 번역을 제공하지 않습니다.)", item.title])
-                else:
-                    item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
-            except Exception:
-                logger.exception("개별 검색 결과 처리 중 예외:")
+            base_xpath = "/html/body/div[2]/div[1]/div[1]"
+            tree = html.fromstring(res.text)
+            item.image_url = tree.xpath(f"{base_xpath}/div[2]/div[1]/div[1]/img/@src")[0]
+            date = tree.xpath(
+                f'{base_xpath}/div[2]/div[1]/div[2]/b[contains(text(),"配信開始日")]/following-sibling::text()'
+            )[0]
+            item.desc = f"발매일{date}"
+            item.year = int(date.lstrip(":").strip()[:4])
+            item.title = item.title_ko = tree.xpath(f"{base_xpath}/div[1]/h3/text()")[0].strip()
+            if manual:
+                _image_mode = "1" if image_mode != "0" else image_mode
+                item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
+                if do_trans:
+                    item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
+            else:
+                item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
             ret.append(item.as_dict())
+        except Exception:
+            logger.exception("개별 검색 결과 처리 중 예외:")
         return ret
 
     @classmethod
-    def search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
+    def search(cls, keyword, **kwargs):
         ret = {}
         try:
-            data = cls.__search(keyword, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode, manual=manual)
+            data = cls.__search(keyword, **kwargs)
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
             ret["ret"] = "exception"
@@ -219,10 +221,10 @@ class SiteJav321:
         return entity
 
     @classmethod
-    def info(cls, code, do_trans=True, proxy_url=None, image_mode="0"):
+    def info(cls, code, **kwargs):
         ret = {}
         try:
-            entity = cls.__info(code, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode)
+            entity = cls.__info(code, **kwargs)
         except Exception as exception:
             logger.exception("메타 정보 처리 중 예외:")
             ret["ret"] = "exception"

@@ -4,6 +4,7 @@ import random
 import re
 import time
 from datetime import timedelta
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from tool_expand import ToolExpandDiscord
 
 from .entity_base import EntityThumb
 from .plugin import P
+from .cache_util import CacheUtil
 
 logger = P.logger
 
@@ -29,18 +31,6 @@ try:
 except Exception as e:
     logger.warning("나만의 웹훅 사용 안함: %s", e)
     my_webhooks = []
-
-try:
-    from sqlitedict import SqliteDict
-
-    cache_file = Path(path_data).joinpath("db/lib_metadata.db")
-    cache = SqliteDict(
-        cache_file, tablename="lib_metadata_cache", encode=json.dumps, decode=json.loads, autocommit=True
-    )
-    cache.clear()
-except Exception as e:
-    logger.warning("캐시 초기화 실패: %s", e)
-    cache = {}
 
 
 class SiteUtil:
@@ -186,14 +176,8 @@ class SiteUtil:
             thumbs.append(EntityThumb(aspect="landscape", value=_url))
 
         poster, poster_crop = img_urls["poster"], img_urls["poster_crop"]
-        if poster and not poster_crop:
-            _url = cls.process_image_mode(image_mode, poster, proxy_url=proxy_url)
-            thumbs.append(EntityThumb(aspect="poster", value=_url))
-        if poster and poster_crop:
-            if image_mode == "1":
-                _url = cls.process_image_mode("4", poster, proxy_url=proxy_url)
-            else:
-                _url = cls.process_image_mode(image_mode, poster, proxy_url=proxy_url, crop_mode=poster_crop)
+        if poster:
+            _url = cls.process_image_mode(image_mode, poster, proxy_url=proxy_url, crop_mode=poster_crop)
             thumbs.append(EntityThumb(aspect="poster", value=_url))
 
         return thumbs
@@ -208,9 +192,15 @@ class SiteUtil:
             tmp = "{ddns}/metadata/api/image_proxy?url=" + py_urllib.quote_plus(image_url)
             if proxy_url is not None:
                 tmp += "&proxy_url=" + py_urllib.quote_plus(proxy_url)
+            if crop_mode is not None:
+                tmp += "&crop_mode=" + py_urllib.quote_plus(crop_mode)
             ret = Util.make_apikey(tmp)
         elif image_mode == "2":
             tmp = "{ddns}/metadata/api/discord_proxy?url=" + py_urllib.quote_plus(image_url)
+            if proxy_url is not None:
+                tmp += "&proxy_url=" + py_urllib.quote_plus(proxy_url)
+            if crop_mode is not None:
+                tmp += "&crop_mode=" + py_urllib.quote_plus(crop_mode)
             ret = Util.make_apikey(tmp)
         elif image_mode == "3":  # 고정 디스코드 URL.
             ret = cls.discord_proxy_image(image_url, proxy_url=proxy_url, crop_mode=crop_mode)
@@ -331,18 +321,26 @@ class SiteUtil:
     }
 
     @classmethod
+    @lru_cache(maxsize=100)
+    def __trans(cls, text):
+        return SystemLogicTrans.trans(text, source="ja", target="ko")
+
+    @classmethod
     def trans(cls, text, do_trans=True, source="ja", target="ko"):
+        text = text.strip()
         if do_trans and text:
-            if text not in cache:
-                cache[text] = SystemLogicTrans.trans(text, source=source, target=target).strip()
-            return cache[text]
-        return text
+            if source == "ja" and target == "ko":
+                text = cls.__trans(text)
+            else:
+                text = SystemLogicTrans.trans(text, source=source, target=target)
+        return text.strip()
 
     @classmethod
     def __discord_proxy_image(cls, image_url, webhook_url, proxy_url=None, crop_mode=None):
         if not image_url:
             return image_url
 
+        cache = CacheUtil.get_cache()
         cached = cache.get(image_url, {})
 
         mode = f"crop{crop_mode}" if crop_mode is not None else "original"
@@ -918,7 +916,7 @@ class SiteUtil:
             if tag in tags[tag_type]:
                 return tags[tag_type][tag]
 
-            trans_text = SystemLogicTrans.trans(tag, source="ja", target="ko").strip()
+            trans_text = cls.trans(tag, source="ja", target="ko").strip()
             # logger.debug(f'태그 번역: {tag} - {trans_text}')
             if cls.is_include_hangul(trans_text) or trans_text.replace(" ", "").isalnum():
                 tags[tag_type][tag] = trans_text

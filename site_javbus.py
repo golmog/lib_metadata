@@ -45,7 +45,7 @@ class SiteJavbus:
                     _image_mode = "1" if image_mode != "0" else image_mode
                     item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
                     if do_trans:
-                        item.title_ko = " ".join(["(현재 인터페이스에서는 번역을 제공하지 않습니다.)", item.title])
+                        item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 else:
                     item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
 
@@ -59,10 +59,10 @@ class SiteJavbus:
         return sorted(ret, key=lambda k: k["score"], reverse=True)
 
     @classmethod
-    def search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
+    def search(cls, keyword, **kwargs):
         ret = {}
         try:
-            data = cls.__search(keyword, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode, manual=manual)
+            data = cls.__search(keyword, **kwargs)
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
             ret["ret"] = "exception"
@@ -197,10 +197,10 @@ class SiteJavbus:
         return entity
 
     @classmethod
-    def info(cls, code, do_trans=True, proxy_url=None, image_mode="0"):
+    def info(cls, code, **kwargs):
         ret = {}
         try:
-            entity = cls.__info(code, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode)
+            entity = cls.__info(code, **kwargs)
         except Exception as exception:
             logger.exception("메타 정보 처리 중 예외:")
             ret["ret"] = "exception"
