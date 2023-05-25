@@ -102,7 +102,17 @@ class SiteJavbus:
         return {"ps": ps, "pl": pl, "arts": arts}
 
     @classmethod
-    def __info(cls, code, do_trans=True, proxy_url=None, image_mode="0"):
+    def __info(
+        cls,
+        code,
+        do_trans=True,
+        proxy_url=None,
+        image_mode="0",
+        max_arts=10,
+        use_extras=True,
+        ps_to_poster=False,
+        crop_mode=None,
+    ):
         url = f"{cls.site_base_url}/{code[2:]}"
         tree = SiteUtil.get_tree(url, proxy_url=proxy_url)
 
@@ -114,12 +124,12 @@ class SiteJavbus:
         # 이미지 관련 시작
         #
         img_urls = cls.__img_urls(tree)
-        SiteUtil.resolve_jav_imgs(img_urls, proxy_url=proxy_url)
+        SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
 
         entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
 
         entity.fanart = []
-        for href in img_urls["arts"][:10]:
+        for href in img_urls["arts"][:max_arts]:
             entity.fanart.append(SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url))
         #
         # 이미지 관련 끝
@@ -193,6 +203,9 @@ class SiteJavbus:
             SiteUtil.trans(tagline, do_trans=do_trans).replace(entity.title, "").replace("[배달 전용]", "").strip()
         )
         entity.plot = entity.tagline
+
+        if use_extras or not use_extras:
+            entity.extras = []
 
         return entity
 

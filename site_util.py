@@ -125,10 +125,10 @@ class SiteUtil:
         return im.crop(box)
 
     @classmethod
-    def resolve_jav_imgs(cls, img_urls: dict, ps_to_poster: bool = False, proxy_url: str = None):
-        ps = img_urls.get("ps", "")  # poster small
-        pl = img_urls.get("pl", "")  # poster large
-        arts = img_urls.get("arts", [])  # arts
+    def resolve_jav_imgs(cls, img_urls: dict, ps_to_poster: bool = False, proxy_url: str = None, crop_mode: str = None):
+        ps = img_urls["ps"]  # poster small
+        pl = img_urls["pl"]  # poster large
+        arts = img_urls["arts"]  # arts
 
         # poster 기본값
         poster = ps if ps_to_poster else ""
@@ -138,13 +138,16 @@ class SiteUtil:
             if cls.is_hq_poster(ps, arts[0], proxy_url=proxy_url):
                 # first art to poster
                 poster = arts[0]
-            elif cls.is_hq_poster(ps, arts[-1], proxy_url=proxy_url):
+            elif len(arts) > 1 and cls.is_hq_poster(ps, arts[-1], proxy_url=proxy_url):
                 # last art to poster
                 poster = arts[-1]
         if not poster and pl:
             if cls.is_hq_poster(ps, pl, proxy_url=proxy_url):
                 # pl이 세로로 큰 이미지
                 poster = pl
+            elif crop_mode is not None:
+                # 사용자 설정에 따름
+                poster, poster_crop = pl, crop_mode
             else:
                 loc = cls.has_hq_poster(ps, pl, proxy_url=proxy_url)
                 if loc:

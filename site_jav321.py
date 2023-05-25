@@ -103,7 +103,17 @@ class SiteJav321:
         return {"ps": ps, "pl": pl, "arts": arts}
 
     @classmethod
-    def __info(cls, code, do_trans=True, proxy_url=None, image_mode="0"):
+    def __info(
+        cls,
+        code,
+        do_trans=True,
+        proxy_url=None,
+        image_mode="0",
+        max_arts=10,
+        use_extras=True,
+        ps_to_poster=False,
+        crop_mode=None,
+    ):
         url = f"{cls.site_base_url}/video/{code[2:]}"
         tree = SiteUtil.get_tree(url, proxy_url=proxy_url)
 
@@ -178,12 +188,12 @@ class SiteJav321:
         # 이미지 관련 시작
         #
         img_urls = cls.__img_urls(tree)
-        SiteUtil.resolve_jav_imgs(img_urls, proxy_url=proxy_url)
+        SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
 
         entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
 
         entity.fanart = []
-        for img_url in img_urls["arts"][:10]:
+        for img_url in img_urls["arts"][:max_arts]:
             value = SiteUtil.process_image_mode(image_mode, img_url, proxy_url=proxy_url)
             entity.fanart.append(value)
         #
@@ -213,8 +223,10 @@ class SiteJav321:
                 entity.plot += SiteUtil.trans(tmp, do_trans=do_trans)
         # logger.debug(entity.plot)
 
-        for node in tree.xpath('//*[@id="vjs_sample_player"]'):
-            entity.extras = [EntityExtra("trailer", entity.title, "mp4", node.xpath(".//source")[0].attrib["src"])]
+        entity.extras = []
+        if use_extras:
+            for node in tree.xpath('//*[@id="vjs_sample_player"]'):
+                entity.extras = [EntityExtra("trailer", entity.title, "mp4", node.xpath(".//source")[0].attrib["src"])]
 
         entity.tagline = entity.plot
 

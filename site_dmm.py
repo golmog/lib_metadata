@@ -178,10 +178,17 @@ class SiteDmm:
         return {"ps": ps, "pl": pl, "arts": arts}
 
     @classmethod
-    def __info(cls, code, do_trans=True, proxy_url=None, image_mode="0", small_image_to_poster_list=None):
-        if small_image_to_poster_list is None:
-            small_image_to_poster_list = []
-
+    def __info(
+        cls,
+        code,
+        do_trans=True,
+        proxy_url=None,
+        image_mode="0",
+        max_arts=10,
+        use_extras=True,
+        ps_to_poster=False,
+        crop_mode=None,
+    ):
         url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={code[2:]}/"
         tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers)
 
@@ -192,17 +199,14 @@ class SiteDmm:
         #
         # 이미지 관련 시작
         #
-        small_img_to_poster = False
-        for tmp in small_image_to_poster_list:
-            if tmp in code:
-                small_img_to_poster = True
-                break
-
         img_urls = cls.__img_urls(tree)
-        SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=small_img_to_poster, proxy_url=proxy_url)
+        SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
 
         entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
-        entity.fanart = img_urls["arts"][:10]  # proxy 필요 없나?
+
+        entity.fanart = []
+        for href in img_urls["arts"][:max_arts]:
+            entity.fanart.append(SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url))
         #
         # 이미지 관련 끝
         #
@@ -315,27 +319,27 @@ class SiteDmm:
         except Exception:
             logger.exception("평점 정보 업데이트 중 예외:")
 
-        try:
-            tmp = tree.xpath('//*[@id="detail-sample-movie"]/div/a')
-            if tmp:
-                tmp = tmp[0].attrib["onclick"]
-                url = cls.site_base_url + tmp.split("'")[1]
-                url = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers).xpath("//iframe/@src")[0]
-                text = SiteUtil.get_text(url, proxy_url=proxy_url, headers=cls.dmm_headers)
-                pos = text.find("const args = {")
-                data = json.loads(text[text.find("{", pos) : text.find(";", pos)])
-                # logger.debug(json.dumps(data, indent=4))
-                data["bitrates"] = sorted(data["bitrates"], key=lambda k: k["bitrate"], reverse=True)
-                entity.extras = [
-                    EntityExtra(
-                        "trailer",
-                        SiteUtil.trans(data["title"], do_trans=do_trans),
-                        "mp4",
-                        "https:" + data["bitrates"][0]["src"],
-                    )
-                ]
-        except Exception:
-            logger.exception("미리보기 처리 중 예외:")
+        entity.extras = []
+        if use_extras:
+            try:
+                for tmp in tree.xpath('//*[@id="detail-sample-movie"]/div/a/@onclick'):
+                    url = cls.site_base_url + tmp.split("'")[1]
+                    url = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers).xpath("//iframe/@src")[0]
+                    text = SiteUtil.get_text(url, proxy_url=proxy_url, headers=cls.dmm_headers)
+                    pos = text.find("const args = {")
+                    data = json.loads(text[text.find("{", pos) : text.find(";", pos)])
+                    # logger.debug(json.dumps(data, indent=4))
+                    data["bitrates"] = sorted(data["bitrates"], key=lambda k: k["bitrate"], reverse=True)
+                    entity.extras = [
+                        EntityExtra(
+                            "trailer",
+                            SiteUtil.trans(data["title"], do_trans=do_trans),
+                            "mp4",
+                            "https:" + data["bitrates"][0]["src"],
+                        )
+                    ]
+            except Exception:
+                logger.exception("미리보기 처리 중 예외:")
 
         return entity
 
