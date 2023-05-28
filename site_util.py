@@ -449,7 +449,15 @@ class SiteUtil:
             if abs(ws / hs - wl / hl) > 0.1:
                 # aspect ratio is quite different
                 return False
-            return hfun(im_sm) - hfun(im_lg) < 15
+            hdis = hfun(im_sm) - hfun(im_lg)
+            if hdis >= 14:
+                return False
+            if hdis <= 6:
+                return True
+            from imagehash import phash as hfun
+
+            hdis += hfun(im_sm) - hfun(im_lg)
+            return hdis < 20  # threshold = [15, 25]
         except ImportError:
             return False
         except Exception:
@@ -459,7 +467,7 @@ class SiteUtil:
     @classmethod
     def has_hq_poster(cls, im_sm, im_lg, proxy_url=None):
         try:
-            from imagehash import dhash as hfun  # threshold = [11, 18]
+            from imagehash import average_hash as hfun  # crop한 이미지의 align이 확실하지 않아서 average_hash가 더 적합함
 
             im_sm = cls.imopen(im_sm, proxy_url=proxy_url)
             im_lg = cls.imopen(im_lg, proxy_url=proxy_url)
@@ -471,7 +479,7 @@ class SiteUtil:
 
             for pos in ["r", "l", "c"]:
                 val = hfun(im_sm) - hfun(cls.imcrop(im_lg, position=pos))
-                if val < 15.0:
+                if val <= 10:
                     return pos
         except ImportError:
             pass
