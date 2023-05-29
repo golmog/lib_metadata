@@ -162,7 +162,7 @@ class SiteJav321:
                 entity.year = int(value[:4])
             elif key in ["播放时长", "収録時間"]:
                 try:
-                    entity.runtime = int(re.compile(r"(?P<no>\d{2,3})").search(url).group("no"))
+                    entity.runtime = int(re.compile(r"(?P<no>\d{2,3})").search(value).group("no"))
                 except Exception:
                     pass
             elif key == "赞":
