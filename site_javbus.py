@@ -36,7 +36,12 @@ class SiteJavbus:
                 item.image_url = cls.__fix_url(node.xpath(".//img/@src")[0])
 
                 tag = node.xpath(".//date")
-                item.ui_code = tag[0].text_content().strip()
+                ui_code = tag[0].text_content().strip()
+                try:
+                    label, num = ui_code.split("-")  # 4자리 숫자 품번 대응
+                    item.ui_code = f"{label}-{num.lstrip('0').zfill(3)}"
+                except Exception:
+                    item.ui_code = ui_code
                 item.code = cls.module_char + cls.site_char + node.attrib["href"].split("/")[-1]
                 item.desc = "발매일: " + tag[1].text_content().strip()
                 item.year = int(tag[1].text_content().strip()[:4])
@@ -149,6 +154,11 @@ class SiteJavbus:
 
             logger.debug("key:%s value:%s", key, value)
             if key == "識別碼":
+                try:
+                    label, num = value.split("-")  # 4자리 숫자 품번 대응
+                    value = f"{label}-{num.lstrip('0').zfill(3)}"
+                except Exception:
+                    pass
                 entity.title = entity.originaltitle = entity.sorttitle = value.upper()
                 if entity.tag is None:
                     entity.tag = []
