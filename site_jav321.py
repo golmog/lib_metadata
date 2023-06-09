@@ -41,7 +41,7 @@ class SiteJav321:
             item.ui_code = keyword.upper()
             base_xpath = "/html/body/div[2]/div[1]/div[1]"
             tree = html.fromstring(res.text)
-            item.image_url = tree.xpath(f"{base_xpath}/div[2]/div[1]/div[1]/img/@src")[0]
+            image_url = tree.xpath(f"{base_xpath}/div[2]/div[1]/div[1]/img/@src")[0]
             date = tree.xpath(
                 f'{base_xpath}/div[2]/div[1]/div[2]/b[contains(text(),"配信開始日")]/following-sibling::text()'
             )[0]
@@ -50,11 +50,17 @@ class SiteJav321:
             item.title = item.title_ko = tree.xpath(f"{base_xpath}/div[1]/h3/text()")[0].strip()
             if manual:
                 _image_mode = "1" if image_mode != "0" else image_mode
-                item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
+                item.image_url = SiteUtil.process_image_mode(_image_mode, image_url, proxy_url=proxy_url)
                 if do_trans:
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
             else:
+                item.image_url = image_url
                 item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
+
+            if keyword.lower() != item.ui_code.lower():
+                item.score = 60
+            if len(image_url.split("//")) > 2:  # 이미지 링크가 깨진 경우
+                item.score = 60
             ret.append(item.as_dict())
         except Exception:
             logger.exception("개별 검색 결과 처리 중 예외:")
