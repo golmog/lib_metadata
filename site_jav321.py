@@ -236,7 +236,11 @@ class SiteJav321:
 
         entity.tagline = entity.plot
 
-        return entity
+        try:
+            return SiteUtil.shiroutoname_info(entity)
+        except Exception:
+            logger.exception("shiroutoname.com을 이용해 메타 보정 중 예외:")
+            return entity
 
     @classmethod
     def info(cls, code, **kwargs):

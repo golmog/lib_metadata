@@ -18,7 +18,7 @@ from framework.util import Util
 from system import SystemLogicTrans
 from tool_expand import ToolExpandDiscord
 
-from .entity_base import EntityThumb
+from .entity_base import EntityThumb, EntityActor
 from .plugin import P
 from .cache_util import CacheUtil
 
@@ -228,6 +228,76 @@ class SiteUtil:
             # logger.debug('poster_url : %s', poster_url)
             ret = cls.discord_proxy_image_localfile(filepath)
         return ret
+
+    @classmethod
+    def __shiroutoname_info(cls, keyword):
+        url = "https://shiroutoname.com/"
+        tree = cls.get_tree(url, params={"s": keyword}, timeout=30)
+
+        results = []
+        for article in tree.xpath("//section//article"):
+            title = article.xpath("./h2")[0].text_content()
+            title = title[title.find("【") + 1 : title.rfind("】")]
+
+            link = article.xpath(".//a/@href")[0]
+            thumb_url = article.xpath(".//a/img/@data-src")[0]
+            title_alt = article.xpath(".//a/img/@alt")[0]
+            assert title == title_alt  # 다르면?
+
+            result = {"title": title, "link": link, "thumb_url": thumb_url}
+
+            for div in article.xpath("./div/div"):
+                kv = div.xpath("./div")
+                if len(kv) != 2:
+                    continue
+                key, value = [x.text_content().strip() for x in kv]
+                if not key.endswith("："):
+                    continue
+
+                if key.startswith("品番"):
+                    result["code"] = value
+                    another_link = kv[1].xpath("./a/@href")[0]
+                    assert link == another_link  # 다르면?
+                elif key.startswith("素人名"):
+                    result["name"] = value
+                elif key.startswith("配信日"):
+                    result["premiered"] = value
+                    # format - YYYY/MM/DD
+                elif key.startswith("シリーズ"):
+                    result["series"] = value
+                else:
+                    logger.warning("UNKNOWN: %s=%s", key, value)
+
+            a_class = "mlink" if "mgstage.com" in link else "flink"
+            actors = []
+            for a_tag in article.xpath(f'./div/div/a[@class="{a_class}"]'):
+                actors.append(
+                    {
+                        "name": a_tag.text_content().strip(),
+                        "href": a_tag.xpath("./@href")[0],
+                    }
+                )
+            result["actors"] = actors
+            results.append(result)
+        return results
+
+    @classmethod
+    def shiroutoname_info(cls, entity):
+        """upgrade entity(meta info) by shiroutoname"""
+        data = None
+        for d in cls.__shiroutoname_info(entity.originaltitle):
+            if entity.originaltitle.lower() in d["code"].lower():
+                data = d
+                break
+        if data is None:
+            return entity
+        if data.get("premiered", None):
+            value = data["premiered"].replace("/", "-")
+            entity.premiered = value
+            entity.year = int(value[:4])
+        if data.get("actors", []):
+            entity.actor = [EntityActor(a["name"]) for a in data["actors"]]
+        return entity
 
     av_genre = {
         "巨尻": "큰엉덩이",
