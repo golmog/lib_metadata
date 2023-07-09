@@ -1,14 +1,11 @@
 import json
 
-# sjva 공용
 from framework import SystemModelSetting, app
 
 from .plugin import P
-
-logger = P.logger
 from .site_util import SiteUtil
 
-# 패키지
+logger = P.logger
 
 
 server_plugin_ddns = app.config["DEFINE"]["METADATA_SERVER_URL"]
@@ -20,6 +17,23 @@ except Exception:
 
 
 class MetadataServerUtil:
+    @classmethod
+    def imagehash_ok(cls) -> bool:
+        try:
+            import imagehash
+
+            return True
+        except ImportError:
+            return False
+
+    @classmethod
+    def thumb_ok(cls, thumb_url) -> bool:
+        if ".discordapp." not in thumb_url:
+            return False
+        if not SiteUtil.get_response(thumb_url, method="HEAD", timeout=30).ok:
+            return False
+        return True
+
     @classmethod
     def get_metadata(cls, code):
         try:
@@ -53,16 +67,17 @@ class MetadataServerUtil:
     @classmethod
     def set_metadata_jav_censored(cls, code, data, keyword):
         try:
+            if not cls.imagehash_ok():
+                return
             thumbs = data.get("thumb", [])
             if code.startswith("C") and len(thumbs) < 2:
+                # censored dvd
                 return
             if code.startswith("D") and len(thumbs) < 1:
+                # censored ama
                 return
             for thumb in thumbs:
-                value = thumb.get("value", "")
-                if ".discordapp." not in value:
-                    return
-                if not SiteUtil.get_response(thumb["value"], method="HEAD", timeout=30).ok:
+                if not cls.thumb_ok(thumb.get("value", "")):
                     return
             if not SiteUtil.is_include_hangul(data.get("plot", "")):
                 return
@@ -76,10 +91,7 @@ class MetadataServerUtil:
         try:
             thumbs = data.get("thumb", [])
             for thumb in thumbs:
-                value = thumb.get("value", "")
-                if ".discordapp." not in value:
-                    return
-                if not SiteUtil.get_response(thumb["value"], method="HEAD", timeout=30).ok:
+                if not cls.thumb_ok(thumb.get("value", "")):
                     return
             if not SiteUtil.is_include_hangul(data.get("tagline", "")):
                 return
