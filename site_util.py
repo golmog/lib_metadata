@@ -53,6 +53,16 @@ class SiteUtil:
         # 'Cookie' : 'over18=1;age_check_done=1;',
     }
 
+    webhook_list = []
+
+    @classmethod
+    def get_webhook_url(cls):
+        if not my_webhooks:
+            return None
+        if not cls.webhook_list:
+            cls.webhook_list = random.sample(my_webhooks, k=len(my_webhooks))
+        return cls.webhook_list.pop()
+
     @classmethod
     def get_tree(cls, url, **kwargs):
         text = cls.get_text(url, **kwargs)
@@ -409,7 +419,7 @@ class SiteUtil:
         return text.strip()
 
     @classmethod
-    def __discord_proxy_image(cls, image_url, webhook_url, proxy_url=None, crop_mode=None):
+    def __discord_proxy_image(cls, image_url, proxy_url=None, crop_mode=None):
         if not image_url:
             return image_url
 
@@ -429,7 +439,7 @@ class SiteUtil:
             im = cls.imcrop(im, position=crop_mode)
             im.format = imformat
 
-        webhook = DiscordWebhook(url=webhook_url, rate_limit_retry=True)
+        webhook = DiscordWebhook(url=cls.get_webhook_url())
 
         # 파일 이름이 대충 이상한 값이면 첨부가 안될 수 있음
         filename = f"{mode}.{im.format.lower().replace('jpeg', 'jpg')}"
@@ -443,7 +453,18 @@ class SiteUtil:
         embed.add_embed_field(name="mode", value=mode)
         webhook.add_embed(embed)
 
-        res = webhook.execute()
+        num_retries = 2
+        sleep_sec = 1
+        for retry_num in range(num_retries + 1):
+            if retry_num > 0:
+                logger.warning("[%d/%d] Sleeping %.2f secs before executing webhook", retry_num, num_retries, sleep_sec)
+                webhook.url = cls.get_webhook_url()
+                time.sleep(sleep_sec)
+
+            res = webhook.execute()
+            if res.status_code != 429:
+                break
+
         try:
             cached[mode] = res.json()["embeds"][0]["image"]["url"]
         except AttributeError:
@@ -458,7 +479,7 @@ class SiteUtil:
             kwargs.setdefault("proxy_url", None)
             kwargs.setdefault("crop_mode", None)
             try:
-                return cls.__discord_proxy_image(image_url, random.choice(my_webhooks), **kwargs)
+                return cls.__discord_proxy_image(image_url, **kwargs)
             except Exception:
                 logger.exception("이미지 프록시 중 예외:")
                 return image_url
@@ -468,7 +489,7 @@ class SiteUtil:
     def discord_proxy_image_localfile(cls, filepath):
         if my_webhooks:
             try:
-                return cls.__discord_proxy_image(filepath, random.choice(my_webhooks))
+                return cls.__discord_proxy_image(filepath)
             except Exception:
                 logger.exception("이미지 프록시 중 예외:")
                 return filepath
