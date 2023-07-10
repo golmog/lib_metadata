@@ -380,6 +380,8 @@ class SiteUtil:
                 time.sleep(sleep_sec)
 
             res = webhook.execute()
+            if isinstance(res, list):
+                res = res[0]
             if res.status_code != 429:
                 break
 
