@@ -35,6 +35,14 @@ class MetadataServerUtil:
         return True
 
     @classmethod
+    def hangul_ok(cls, data) -> bool:
+        for key in ["tagline", "plot"]:
+            value = (data.get(key, "") or "").strip()
+            if value and not SiteUtil.is_include_hangul(value):
+                return False
+        return True
+
+    @classmethod
     def get_metadata(cls, code):
         try:
             url = f"{app.config['DEFINE']['WEB_DIRECT_URL']}/meta/get_meta.php"
@@ -79,7 +87,7 @@ class MetadataServerUtil:
             for thumb in thumbs:
                 if not cls.thumb_ok(thumb.get("value", "")):
                     return
-            if not SiteUtil.is_include_hangul(data.get("plot", "")):
+            if not cls.hangul_ok(data):
                 return
         except Exception:
             logger.exception("보낼 메타데이터 확인 중 예외:")
@@ -93,9 +101,7 @@ class MetadataServerUtil:
             for thumb in thumbs:
                 if not cls.thumb_ok(thumb.get("value", "")):
                     return
-            if not SiteUtil.is_include_hangul(data.get("tagline", "")):
-                return
-            if not SiteUtil.is_include_hangul(data.get("plot", "")):
+            if not cls.hangul_ok(data):
                 return
         except Exception:
             logger.exception("보낼 메타데이터 확인 중 예외:")
