@@ -16,10 +16,10 @@ class SiteAvdbs:
     def __get_actor_info(originalname, proxy_url=None, image_mode="0"):
         url = "https://www.avdbs.com/w2017/api/iux_kwd_srch_log.php"
         params = {"op": "srch", "kwd": originalname}
-        seq = SiteUtil.get_response(url, params=params, proxy_url=proxy_url, timeout=5).json()["seq"]
+        seq = SiteUtil.get_response(url, params=params, proxy_url=proxy_url, timeout=30).json()["seq"]
         url = "https://www.avdbs.com/w2017/page/search/search_actor.php"
         params = {"kwd": originalname, "seq": seq}
-        tree = SiteUtil.get_tree(url, params=params, proxy_url=proxy_url, timeout=5)
+        tree = SiteUtil.get_tree(url, params=params, proxy_url=proxy_url, timeout=30)
 
         img_src = tree.xpath(".//img/@src")
         if not img_src:
