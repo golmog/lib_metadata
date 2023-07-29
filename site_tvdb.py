@@ -18,16 +18,7 @@ from .entity_base import EntityMovie, EntityThumb, EntityActor, EntityRatings,  
 from .site_util import SiteUtil
 logger = P.logger
 
-try:
-    import tvdb_api
-except:
-    try:
-        os.system("{} install requests_cache==0.5.2".format(app.config['config']['pip']))
-        os.system("{} install tvdb-api".format(app.config['config']['pip']))
-        import tvdb_api
-    except Exception as exception: 
-        logger.error('Exception:%s', exception)
-        logger.error(traceback.format_exc())
+from .tvdb_api import tvdb_api
 
 APIKEY = 'D4DDDAEFAD083E6F'
 
