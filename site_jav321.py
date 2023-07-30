@@ -106,6 +106,11 @@ class SiteJav321:
                 continue
             arts.append(img_src)
 
+        # 예외 1: aventertainments.com 링크 중 pl은 없고 pl이 ps 자리에 있는 경우
+        if "aventertainments.com" in ps and "/bigcover/" in ps and not pl:
+            pl = ps
+            ps = ps.replace("/bigcover/", "/jacket_images/")
+
         return {"ps": ps, "pl": pl, "arts": arts}
 
     @classmethod
