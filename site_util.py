@@ -106,7 +106,6 @@ class SiteUtil:
             kwargs["data"] = post_data
 
         res = cls.session.request(method, url, **kwargs)
-        res.raise_for_status()
         # logger.debug(res.headers)
         # logger.debug(res.text)
         return res
