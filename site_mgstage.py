@@ -24,7 +24,7 @@ class SiteMgstage:
     PTN_SEARCH_PID = re.compile(r"\/product_detail\/(?P<code>.*?)\/")
     PTN_SEARCH_REAL_NO = re.compile(r"^(?P<real>[a-zA-Z]+)\-(?P<no>\d+)$")
     PTN_TEXT_SUB = [
-        re.compile(r"【(?<=【).+?(?=】)】"),
+        re.compile(r"【(?<=【)(?:MGSだけのおまけ映像付き|期間限定).+?(?=】)】"),
     ]
     PTN_RATING = re.compile(r"\s(?P<rating>[\d\.]+)点\s.+\s(?P<vote>\d+)\s件")
 
@@ -245,10 +245,14 @@ class SiteMgstageDvd(SiteMgstage):
             entity.premiered = tmp_premiered
             entity.year = int(tmp_premiered[:4])
 
-        tmp = tree.xpath('//*[@id="introduction"]//p[1]/text()')[0]
+        for br in tree.xpath('//*[@id="introduction"]//p//br'):
+            br.tail = "\n" + br.tail if br.tail else "\n"
+        tmp = tree.xpath('//*[@id="introduction"]//p[1]')[0].text_content()
+        if not tmp:
+            tmp = tree.xpath('//*[@id="introduction"]//p[2]')[0].text_content()
         for ptn in cls.PTN_TEXT_SUB:
             tmp = ptn.sub("", tmp)
-        entity.plot = SiteUtil.trans(tmp, do_trans=do_trans)
+        entity.plot = SiteUtil.trans(tmp, do_trans=do_trans)  # NOTE: 번역을 거치면서 newline이 모두 사라진다.
 
         try:
             tag = tree.xpath('//div[@class="user_review_head"]/p[@class="detail"]/text()')
