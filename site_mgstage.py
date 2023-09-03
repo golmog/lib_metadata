@@ -24,7 +24,8 @@ class SiteMgstage:
     PTN_SEARCH_PID = re.compile(r"\/product_detail\/(?P<code>.*?)\/")
     PTN_SEARCH_REAL_NO = re.compile(r"^(?P<real>[a-zA-Z]+)\-(?P<no>\d+)$")
     PTN_TEXT_SUB = [
-        re.compile(r"【(?<=【)(?:MGSだけのおまけ映像付き|期間限定).+?(?=】)】"),
+        re.compile(r"【(?<=【)(?:MGSだけのおまけ映像付き|期間限定).*(?=】)】(:?\s?\+\d+分\s?)?"),
+        re.compile(r"※通常版\+\d+分の特典映像付のスペシャルバージョン！"),
     ]
     PTN_RATING = re.compile(r"\s(?P<rating>[\d\.]+)点\s.+\s(?P<vote>\d+)\s件")
 
