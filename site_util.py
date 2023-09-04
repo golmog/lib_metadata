@@ -4,7 +4,6 @@ import random
 import re
 import time
 from datetime import timedelta
-from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 
@@ -13,15 +12,15 @@ from discord_webhook import DiscordEmbed, DiscordWebhook
 from lxml import html
 from PIL import Image
 
-from framework import SystemModelSetting, path_data, py_urllib
-from framework.util import Util
-from system import SystemLogicTrans
-from tool_expand import ToolExpandDiscord
+from framework import SystemModelSetting, path_data, py_urllib  # pylint: disable=import-error
+from framework.util import Util  # pylint: disable=import-error
+from tool_expand import ToolExpandDiscord  # pylint: disable=import-error
 
 from .cache_util import CacheUtil
 from .constants import AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO, AV_STUDIO, COUNTRY_CODE_TRANSLATE, GENRE_MAP
 from .entity_base import EntityThumb, EntityActor
 from .plugin import P
+from .trans_util import TransUtil
 
 
 logger = P.logger
@@ -322,19 +321,11 @@ class SiteUtil:
         return entity
 
     @classmethod
-    @lru_cache(maxsize=100)
-    def __trans(cls, text):
-        return SystemLogicTrans.trans(text, source="ja", target="ko")
-
-    @classmethod
     def trans(cls, text, do_trans=True, source="ja", target="ko"):
         text = text.strip()
         if do_trans and text:
-            if source == "ja" and target == "ko":
-                text = cls.__trans(text)
-            else:
-                text = SystemLogicTrans.trans(text, source=source, target=target)
-        return text.strip()
+            return TransUtil.trans(text, source=source, target=target).strip()
+        return text
 
     @classmethod
     def __discord_proxy_image(cls, image_url, proxy_url=None, crop_mode=None):
@@ -619,7 +610,7 @@ class SiteUtil:
     # 의미상으로 여기 있으면 안되나 예전 코드에서 많이 사용하기 때문에 잠깐만 나둔다.
     @classmethod
     def get_tree_daum(cls, url, post_data=None):
-        from system.logic_site import SystemLogicSite
+        from system.logic_site import SystemLogicSite  # pylint: disable=import-error
 
         from .site_daum import SiteDaum
 
@@ -633,7 +624,7 @@ class SiteUtil:
 
     @classmethod
     def get_text_daum(cls, url, post_data=None):
-        from system.logic_site import SystemLogicSite
+        from system.logic_site import SystemLogicSite  # pylint: disable=import-error
 
         from .site_daum import SiteDaum
 
@@ -647,7 +638,7 @@ class SiteUtil:
 
     @classmethod
     def get_response_daum(cls, url, post_data=None):
-        from system.logic_site import SystemLogicSite
+        from system.logic_site import SystemLogicSite  # pylint: disable=import-error
 
         from .site_daum import SiteDaum
 
