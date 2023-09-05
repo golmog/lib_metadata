@@ -116,7 +116,188 @@ class SiteMgstage:
 
 
 class SiteMgstageAma(SiteMgstage):
-    pass
+    module_char = "D"
+
+    @classmethod
+    def __img_urls(cls, tree):
+        """collect raw image urls from html page"""
+
+        # poster large
+        pl = tree.xpath('//*[@id="package"]/a/@href')
+        pl = pl[0] if pl else ""
+        if not pl:
+            logger.warning("이미지 URL을 얻을 수 없음: poster large")
+
+        # poster small
+        # 세로 이미지 / 저화질 썸네일
+        # 없는 경우 있음: SIRO GANA
+        ps = tree.xpath('//div[@class="detail_photo"]//img/@src')
+        ps = ps[0] if ps else ""
+        if not ps and "pb_e_" in pl:
+            ps = pl.replace("pb_e_", "pf_o1_")
+
+        # fanart
+        arts = tree.xpath('//*[@id="sample-photo"]//ul/li/a/@href')
+        arts.insert(0, pl.replace("pb_e_", "pf_e_"))  # 세로 고화질 이미지
+
+        return {"ps": ps, "pl": pl, "arts": arts}
+
+    @classmethod
+    def __info(
+        cls,
+        code,
+        do_trans=True,
+        proxy_url=None,
+        image_mode="0",
+        max_arts=10,
+        use_extras=True,
+        ps_to_poster=False,
+        crop_mode=None,
+    ):
+        url = cls.site_base_url + f"/product/product_detail/{code[2:]}/"
+        tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.headers)
+
+        entity = EntityMovie(cls.site_name, code)
+        entity.country = ["일본"]
+        entity.mpaa = "청소년 관람불가"
+
+        #
+        # 이미지 관련 시작
+        #
+        img_urls = cls.__img_urls(tree)
+        SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
+
+        entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
+
+        entity.fanart = []
+        for href in img_urls["arts"][:max_arts]:
+            entity.fanart.append(SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url))
+        #
+        # 이미지 관련 끝
+        #
+
+        h1 = tree.xpath('//h1[@class="tag"]/text()')[0]
+        for ptn in cls.PTN_TEXT_SUB:
+            h1 = ptn.sub("", h1)
+        entity.tagline = SiteUtil.trans(h1, do_trans=do_trans)
+
+        basetag = '//div[@class="detail_data"]'
+
+        tags = tree.xpath(f"{basetag}//tr")
+        tmp_premiered = None
+        for tag in tags:
+            key = tag.xpath("./th")
+            if not key:
+                continue
+            key = key[0].text_content().strip()
+            value = tag.xpath("./td")[0].text_content().strip()
+            if key == "商品発売日：":
+                try:
+                    entity.year = int(value[:4])
+                    entity.premiered = value.replace("/", "-")
+                except Exception:
+                    pass
+            elif key == "配信開始日：":
+                tmp_premiered = value.replace("/", "-")
+            elif key == "収録時間：":
+                entity.runtime = int(value.replace("min", ""))
+            elif key == "出演：":
+                entity.actor = [EntityActor(x.strip()) for x in tag.xpath("./td/a/text()")]
+            elif key == "監督：":
+                entity.director = value
+            elif key == "シリーズ：":
+                # series
+                if entity.tag is None:
+                    entity.tag = []
+                entity.tag.append(SiteUtil.trans(value, do_trans=do_trans))
+            elif key == "レーベル：":
+                # label
+                entity.studio = value
+                if do_trans:
+                    if value in SiteUtil.av_studio:
+                        entity.studio = SiteUtil.av_studio[value]
+                    else:
+                        entity.studio = SiteUtil.change_html(SiteUtil.trans(value))
+            elif key == "ジャンル：":
+                # genre
+                a_tags = tag.xpath("./td/a")
+                entity.genre = []
+                for tag in a_tags:
+                    tmp = tag.text_content().strip()
+                    if "MGSだけのおまけ映像付き" in tmp:
+                        continue
+                    if tmp in SiteUtil.av_genre:
+                        entity.genre.append(SiteUtil.av_genre[tmp])
+                    elif tmp in SiteUtil.av_genre_ignore_ja:
+                        continue
+                    else:
+                        genre_tmp = SiteUtil.trans(tmp, do_trans=do_trans).replace(" ", "")
+                        if genre_tmp not in SiteUtil.av_genre_ignore_ko:
+                            entity.genre.append(genre_tmp)
+            elif key == "品番：":
+                match = cls.PTN_SEARCH_REAL_NO.match(value)
+                if match:
+                    label = match.group("real").upper()
+                    value = label + "-" + str(int(match.group("no"))).zfill(3)
+                    if entity.tag is None:
+                        entity.tag = []
+                    entity.tag.append(label)
+                entity.title = entity.originaltitle = entity.sorttitle = value
+
+        if entity.premiered is None and tmp_premiered is not None:
+            entity.premiered = tmp_premiered
+            entity.year = int(tmp_premiered[:4])
+
+        for br in tree.xpath('//*[@id="introduction"]//p//br'):
+            br.tail = "\n" + br.tail if br.tail else "\n"
+        tmp = tree.xpath('//*[@id="introduction"]//p[1]')[0].text_content()
+        if not tmp:
+            tmp = tree.xpath('//*[@id="introduction"]//p[2]')[0].text_content()
+        for ptn in cls.PTN_TEXT_SUB:
+            tmp = ptn.sub("", tmp)
+        entity.plot = SiteUtil.trans(tmp, do_trans=do_trans)  # NOTE: 번역을 거치면서 newline이 모두 사라진다.
+
+        try:
+            tag = tree.xpath('//div[@class="user_review_head"]/p[@class="detail"]/text()')
+            if tag:
+                match = cls.PTN_RATING.search(tag[0])
+                if match:
+                    tmp = float(match.group("rating"))
+                    entity.ratings = [EntityRatings(tmp, max=5, name="mgs", votes=int(match.group("vote")))]
+        except Exception:
+            logger.exception("평점 정보 처리 중 예외:")
+
+        entity.extras = []
+        if use_extras:
+            try:
+                tag = tree.xpath('//*[@class="sample_movie_btn"]/a/@href')
+                if tag:
+                    pid = tag[0].split("/")[-1]
+                    url = f"https://www.mgstage.com/sampleplayer/sampleRespons.php?pid={pid}"
+                    res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=cls.headers).json()["url"]
+                    entity.extras = [EntityExtra("trailer", entity.tagline, "mp4", res.split(".ism")[0] + ".mp4")]
+            except Exception:
+                logger.exception("미리보기 처리 중 예외:")
+
+        try:
+            return SiteUtil.shiroutoname_info(entity)
+        except Exception:
+            logger.exception("shiroutoname.com을 이용해 메타 보정 중 예외:")
+            return entity
+
+    @classmethod
+    def info(cls, code, **kwargs):
+        ret = {}
+        try:
+            entity = cls.__info(code, **kwargs)
+        except Exception as exception:
+            logger.exception("메타 정보 처리 중 예외:")
+            ret["ret"] = "exception"
+            ret["data"] = str(exception)
+        else:
+            ret["ret"] = "success"
+            ret["data"] = entity.as_dict()
+        return ret
 
 
 class SiteMgstageDvd(SiteMgstage):
