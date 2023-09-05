@@ -4,7 +4,7 @@ from collections.abc import MutableMapping
 
 from pathlib import Path
 
-from framework import path_data
+from framework import path_data  # pylint: disable=import-error
 
 from .plugin import P
 

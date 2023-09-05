@@ -1,6 +1,6 @@
 import json
 
-from framework import SystemModelSetting, app
+from framework import SystemModelSetting, app  # pylint: disable=import-error
 
 from .plugin import P
 from .site_util import SiteUtil
@@ -20,7 +20,7 @@ class MetadataServerUtil:
     @classmethod
     def imagehash_ok(cls) -> bool:
         try:
-            import imagehash
+            import imagehash  # pylint: disable=unused-import
 
             return True
         except ImportError:
