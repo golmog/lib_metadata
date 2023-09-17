@@ -4,6 +4,7 @@ from .entity_av import EntityAVSearch
 from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings
 from .plugin import P
 from .site_util import SiteUtil
+from .constants import MGS_LABEL_MAP
 
 logger = P.logger
 
@@ -22,7 +23,7 @@ class SiteMgstage:
     }
 
     PTN_SEARCH_PID = re.compile(r"\/product_detail\/(?P<code>.*?)\/")
-    PTN_SEARCH_REAL_NO = re.compile(r"^(?P<real>[a-zA-Z]+)\-(?P<no>\d+)$")
+    PTN_SEARCH_REAL_NO = re.compile(r"^\d*(?P<real>[a-zA-Z]+)\-(?P<no>\d+)$")
     PTN_TEXT_SUB = [
         re.compile(r"【(?<=【)(?:MGSだけのおまけ映像付き|期間限定).*(?=】)】(:?\s?\+\d+分\s?)?"),
         re.compile(r"※通常版\+\d+分の特典映像付のスペシャルバージョン！"),
@@ -46,7 +47,7 @@ class SiteMgstage:
         url = f"{cls.site_base_url}/search/cSearch.php?search_word={keyword}&x=0&y=0{module_query}"
         tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.headers)
         lists = tree.xpath('//div[@class="search_list"]/div/ul/li')
-        logger.debug("mgs search len lists2: %s", len(lists))
+        logger.debug("mgs search kwd=%s len=%d", keyword, len(lists))
 
         ret = []
         for node in lists[:10]:
@@ -92,7 +93,12 @@ class SiteMgstage:
                 else:
                     item.ui_code = item.code[2:]
 
-                item.score = 100 if item.ui_code.lower() == keyword.lower() else 60 - (len(ret) * 10)
+                if item.ui_code == keyword.upper():
+                    item.score = 100
+                elif keyword.upper().replace(item.ui_code, "").isnumeric():
+                    item.score = 100
+                else:
+                    item.score = 60 - (len(ret) * 10)
                 if item.score < 0:
                     item.socre = 0
                 ret.append(item.as_dict())
@@ -105,6 +111,12 @@ class SiteMgstage:
         ret = {}
         try:
             data = cls.__search(keyword, **kwargs)
+            tmps = keyword.upper().split("-")
+            if not data and len(tmps) == 2:
+                label, code = tmps
+                data = []
+                for numlabel in MGS_LABEL_MAP.get(label) or []:
+                    data += cls.__search(f"{numlabel}-{code}", **kwargs)
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
             ret["ret"] = "exception"
