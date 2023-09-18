@@ -110,13 +110,18 @@ class SiteMgstage:
     def search(cls, keyword, **kwargs):
         ret = {}
         try:
-            data = cls.__search(keyword, **kwargs)
-            tmps = keyword.upper().split("-")
-            if not data and len(tmps) == 2:
+            data = []
+            tmps = keyword.upper().replace("-", " ").split()
+            if len(tmps) == 2:
                 label, code = tmps
-                data = []
-                for numlabel in MGS_LABEL_MAP.get(label) or []:
-                    data += cls.__search(f"{numlabel}-{code}", **kwargs)
+                numlabels = MGS_LABEL_MAP.get(label) or []
+                for l in numlabels + [label]:
+                    _d = cls.__search(f"{l}-{code}", **kwargs)
+                    if _d:
+                        data += _d
+                        break
+            if not data:
+                data = cls.__search(keyword, **kwargs)
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
             ret["ret"] = "exception"
