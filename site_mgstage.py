@@ -115,11 +115,18 @@ class SiteMgstage:
             if len(tmps) == 2:
                 label, code = tmps
                 numlabels = MGS_LABEL_MAP.get(label) or []
-                for l in numlabels + [label]:
-                    _d = cls.__search(f"{l}-{code}", **kwargs)
-                    if _d:
-                        data += _d
-                        break
+                if numlabels:
+                    if label not in numlabels:
+                        numlabels.append(label)
+                    for idx, lab in enumerate(numlabels):
+                        _d = cls.__search(f"{lab}-{code}", **kwargs)
+                        if _d:
+                            data += _d
+                            if idx > 0:
+                                # last hit to first by keeping mutability
+                                numlabels.remove(lab)
+                                numlabels.insert(0, lab)
+                            break
             if not data:
                 data = cls.__search(keyword, **kwargs)
         except Exception as exception:
