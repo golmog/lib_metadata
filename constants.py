@@ -337,7 +337,6 @@ MGS_LABEL_MAP = {
     "AAK": ["052AAK"],
     "AAO": ["052AAO"],
     "AARM": ["033AARM"],
-    "ABF": ["077ABF"],
     "ABM": ["077ABM"],
     "ACGJV": ["062ACGJV"],
     "ACME": ["116ACME"],
