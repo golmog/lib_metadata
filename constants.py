@@ -784,6 +784,7 @@ MGS_LABEL_MAP = {
     "GYAN": ["278GYAN"],
     "GYH": ["077GYH"],
     "GZAP": ["278GZAP"],
+    "H": ["376H"],
     "HAME": ["561HAME", "716HAME"],
     "HAMEREN": ["370HAMEREN"],
     "HARJ": ["031HARJ"],
