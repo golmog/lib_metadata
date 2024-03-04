@@ -1,5 +1,8 @@
 import time
 
+import requests
+from lxml import html
+
 from .plugin import P
 from .site_util import SiteUtil
 
@@ -13,13 +16,19 @@ class SiteAvdbs:
     site_name = "avdbs"
 
     @staticmethod
-    def __get_actor_info(originalname, proxy_url=None, image_mode="0"):
-        url = "https://www.avdbs.com/w2017/api/iux_kwd_srch_log.php"
-        params = {"op": "srch", "kwd": originalname}
-        seq = SiteUtil.get_response(url, params=params, proxy_url=proxy_url, timeout=30).json()["seq"]
-        url = "https://www.avdbs.com/w2017/page/search/search_actor.php"
-        params = {"kwd": originalname, "seq": seq}
-        tree = SiteUtil.get_tree(url, params=params, proxy_url=proxy_url, timeout=30)
+    def __get_actor_info(originalname, proxy_url=None, image_mode="0") -> dict:
+        with requests.Session() as s:
+            s.headers.update(SiteUtil.default_headers)
+            if proxy_url:
+                s.proxies.update({"http": proxy_url, "https": proxy_url})
+            base_url = "https://www.avdbs.com"
+            s.get(base_url)  # 한번 접속해서 쿠키를 받아와야 함
+            url = base_url + "/w2017/api/iux_kwd_srch_log.php"
+            params = {"op": "srch", "kwd": originalname}
+            seq = s.get(url, params=params).json()["seq"]
+            url = base_url + "/w2017/page/search/search_actor.php"
+            params = {"kwd": originalname, "seq": seq}
+            tree = html.fromstring(s.get(url, params=params).text)
 
         img_src = tree.xpath(".//img/@src")
         if not img_src:
