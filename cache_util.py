@@ -1,7 +1,6 @@
 import json
 from collections import OrderedDict
 from collections.abc import MutableMapping
-
 from pathlib import Path
 
 from framework import path_data  # pylint: disable=import-error

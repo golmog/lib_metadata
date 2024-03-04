@@ -1,14 +1,9 @@
-import re
 import json
+import re
 
-from .plugin import P
 from .entity_av import EntityAVSearch
-from .entity_base import (
-    EntityMovie,
-    EntityActor,
-    EntityRatings,
-    EntityExtra,
-)
+from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings
+from .plugin import P
 from .site_util import SiteUtil
 
 logger = P.logger

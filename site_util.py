@@ -9,19 +9,17 @@ from pathlib import Path
 
 import requests
 from discord_webhook import DiscordEmbed, DiscordWebhook
-from lxml import html
-from PIL import Image
-
 from framework import SystemModelSetting, path_data, py_urllib  # pylint: disable=import-error
 from framework.util import Util  # pylint: disable=import-error
+from lxml import html
+from PIL import Image
 from tool_expand import ToolExpandDiscord  # pylint: disable=import-error
 
 from .cache_util import CacheUtil
 from .constants import AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO, AV_STUDIO, COUNTRY_CODE_TRANSLATE, GENRE_MAP
-from .entity_base import EntityThumb, EntityActor
+from .entity_base import EntityActor, EntityThumb
 from .plugin import P
 from .trans_util import TransUtil
-
 
 logger = P.logger
 
@@ -469,7 +467,9 @@ class SiteUtil:
     @classmethod
     def has_hq_poster(cls, im_sm, im_lg, proxy_url=None):
         try:
-            from imagehash import average_hash as hfun  # crop한 이미지의 align이 확실하지 않아서 average_hash가 더 적합함
+            from imagehash import (
+                average_hash as hfun,
+            )  # crop한 이미지의 align이 확실하지 않아서 average_hash가 더 적합함
 
             im_sm = cls.imopen(im_sm, proxy_url=proxy_url)
             im_lg = cls.imopen(im_lg, proxy_url=proxy_url)

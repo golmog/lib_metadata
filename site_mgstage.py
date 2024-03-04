@@ -1,10 +1,10 @@
 import re
 
+from .constants import MGS_LABEL_MAP
 from .entity_av import EntityAVSearch
 from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings
 from .plugin import P
 from .site_util import SiteUtil
-from .constants import MGS_LABEL_MAP
 
 logger = P.logger
 

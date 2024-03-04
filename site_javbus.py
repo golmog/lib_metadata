@@ -1,6 +1,6 @@
-from .plugin import P
 from .entity_av import EntityAVSearch
-from .entity_base import EntityMovie, EntityActor
+from .entity_base import EntityActor, EntityMovie
+from .plugin import P
 from .site_util import SiteUtil
 
 logger = P.logger

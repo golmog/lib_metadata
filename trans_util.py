@@ -1,7 +1,6 @@
 from functools import lru_cache
 
 import requests
-
 from framework import SystemModelSetting  # pylint: disable=import-error
 from system import SystemLogicTrans  # pylint: disable=import-error
 
