@@ -1,35 +1,25 @@
 import json
 import os
-import random
 import re
 import time
 from datetime import timedelta
 from io import BytesIO
-from pathlib import Path
 
 import requests
-from discord_webhook import DiscordEmbed, DiscordWebhook
-from framework import SystemModelSetting, path_data, py_urllib  # pylint: disable=import-error
+from framework import SystemModelSetting  # pylint: disable=import-error
+from framework import path_data, py_urllib  # pylint: disable=import-error
 from framework.util import Util  # pylint: disable=import-error
 from lxml import html
 from PIL import Image
-from tool_expand import ToolExpandDiscord  # pylint: disable=import-error
 
 from .cache_util import CacheUtil
 from .constants import AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO, AV_STUDIO, COUNTRY_CODE_TRANSLATE, GENRE_MAP
+from .discord import DiscordUtil
 from .entity_base import EntityActor, EntityThumb
 from .plugin import P
 from .trans_util import TransUtil
 
 logger = P.logger
-
-try:
-    webhook_file = Path(path_data).joinpath("db/lib_metadata.webhook")
-    with open(webhook_file, encoding="utf-8") as fp:
-        my_webhooks = list(filter(str, fp.read().splitlines()))
-except Exception as e:
-    logger.warning("나만의 웹훅 사용 안함: %s", e)
-    my_webhooks = []
 
 
 class SiteUtil:
@@ -61,16 +51,6 @@ class SiteUtil:
 
     PTN_SPECIAL_CHAR = re.compile(r"[-=+,#/\?:^$.@*\"※~&%ㆍ!』\\‘|\(\)\[\]\<\>`'…》]")
     PTN_HANGUL_CHAR = re.compile(r"[ㄱ-ㅣ가-힣]+")
-
-    webhook_list = []
-
-    @classmethod
-    def get_webhook_url(cls):
-        if not my_webhooks:
-            return None
-        if not cls.webhook_list:
-            cls.webhook_list = random.sample(my_webhooks, k=len(my_webhooks))
-        return cls.webhook_list.pop()
 
     @classmethod
     def get_tree(cls, url, **kwargs):
@@ -326,83 +306,49 @@ class SiteUtil:
         return text
 
     @classmethod
-    def __discord_proxy_image(cls, image_url, proxy_url=None, crop_mode=None):
+    def discord_proxy_image(cls, image_url: str, **kwargs) -> str:
         if not image_url:
             return image_url
 
         cache = CacheUtil.get_cache()
         cached = cache.get(image_url, {})
 
+        crop_mode = kwargs.pop("crop_mode", None)
         mode = f"crop{crop_mode}" if crop_mode is not None else "original"
         if mode in cached:
             return cached[mode]
 
-        im = cls.imopen(image_url, proxy_url=proxy_url)
-        if im is None:
+        proxy_url = kwargs.pop("proxy_url", None)
+        if (im := cls.imopen(image_url, proxy_url=proxy_url)) is None:
             return image_url
 
-        if crop_mode is not None:
-            imformat = im.format  # retain original image's format like "JPEG", "PNG"
-            im = cls.imcrop(im, position=crop_mode)
-            im.format = imformat
-
-        webhook = DiscordWebhook(url=cls.get_webhook_url())
-
-        # 파일 이름이 대충 이상한 값이면 첨부가 안될 수 있음
-        filename = f"{mode}.{im.format.lower().replace('jpeg', 'jpg')}"
-        with BytesIO() as buf:
-            im.save(buf, format=im.format, quality=95)
-            webhook.add_file(buf.getvalue(), filename=filename)
-        embed = DiscordEmbed(title=image_url, color=16164096)
-        embed.set_footer(text="lib_metadata")
-        embed.set_timestamp()
-        embed.set_image(url=f"attachment://{filename}")
-        embed.add_embed_field(name="mode", value=mode)
-        webhook.add_embed(embed)
-
-        num_retries = 2
-        sleep_sec = 1
-        for retry_num in range(num_retries + 1):
-            if retry_num > 0:
-                logger.warning("[%d/%d] Sleeping %.2f secs before executing webhook", retry_num, num_retries, sleep_sec)
-                webhook.url = cls.get_webhook_url()
-                time.sleep(sleep_sec)
-
-            res = webhook.execute()
-            if isinstance(res, list):
-                res = res[0]
-            if res.status_code != 429:
-                break
-
         try:
-            cached[mode] = res.json()["embeds"][0]["image"]["url"]
-        except AttributeError:
-            cached[mode] = res[0].json()["embeds"][0]["image"]["url"]
-
-        cache[image_url] = cached
-        return cached[mode]
-
-    @classmethod
-    def discord_proxy_image(cls, image_url, **kwargs):
-        if my_webhooks:
-            kwargs.setdefault("proxy_url", None)
-            kwargs.setdefault("crop_mode", None)
-            try:
-                return cls.__discord_proxy_image(image_url, **kwargs)
-            except Exception:
-                logger.exception("이미지 프록시 중 예외:")
-                return image_url
-        return ToolExpandDiscord.discord_proxy_image(image_url)
+            if crop_mode is not None:
+                imformat = im.format  # retain original image's format like "JPEG", "PNG"
+                im = cls.imcrop(im, position=crop_mode)
+                im.format = imformat
+            # 파일 이름이 이상한 값이면 첨부가 안될 수 있음
+            filename = f"{mode}.{im.format.lower().replace('jpeg', 'jpg')}"
+            fields = [{"name": "mode", "value": mode}]
+            cached[mode] = DiscordUtil.proxy_image(im, filename, title=image_url, fields=fields)
+            cache[image_url] = cached
+            return cached[mode]
+        except Exception:
+            logger.exception("이미지 프록시 중 예외:")
+            return image_url
 
     @classmethod
-    def discord_proxy_image_localfile(cls, filepath):
-        if my_webhooks:
-            try:
-                return cls.__discord_proxy_image(filepath)
-            except Exception:
-                logger.exception("이미지 프록시 중 예외:")
-                return filepath
-        return ToolExpandDiscord.discord_proxy_image_localfile(filepath)
+    def discord_proxy_image_localfile(cls, filepath: str) -> str:
+        if not filepath:
+            return filepath
+        try:
+            im = Image.open(filepath)
+            # 파일 이름이 이상한 값이면 첨부가 안될 수 있음
+            filename = f"localfile.{im.format.lower().replace('jpeg', 'jpg')}"
+            return DiscordUtil.proxy_image(im, filename, title=filepath)
+        except Exception:
+            logger.exception("이미지 프록시 중 예외:")
+            return filepath
 
     @classmethod
     def get_image_url(cls, image_url, image_mode, proxy_url=None, with_poster=False):
