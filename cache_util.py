@@ -1,4 +1,4 @@
-import json
+import sqlite3
 from collections import OrderedDict
 from collections.abc import MutableMapping
 from pathlib import Path
@@ -82,12 +82,14 @@ class CacheUtil:
         if cls.cache_dict is not None:
             return cls.cache_dict
         try:
-            from sqlitedict import SqliteDict
-
-            cls.cache_dict = SqliteDict(
-                cls.cache_file, tablename="lib_metadata_cache", encode=json.dumps, decode=json.loads, autocommit=True
-            )
-        except Exception as e:
-            logger.warning("캐시 초기화 실패: %s", e)
-            cls.cache_dict = MemCache(maxsize=maxsize)
+            con = sqlite3.connect(cls.cache_file)
+            try:
+                with con:
+                    con.executescript("DROP TABLE lib_metadata_cache; VACUUM;")
+            except Exception:
+                pass
+            con.close()
+        except Exception:
+            pass
+        cls.cache_dict = MemCache(maxsize=maxsize)
         return cls.cache_dict

@@ -1,9 +1,11 @@
 import random
 import time
 from base64 import b64decode
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, List
+from urllib.parse import parse_qs, urlparse
 
 from discord_webhook import DiscordEmbed, DiscordWebhook
 from framework import path_data  # pylint: disable=import-error
@@ -48,6 +50,7 @@ except Exception as e:
 
 class DiscordUtil:
     _webhook_list = []
+    MARGIN = timedelta(seconds=60)
 
     @classmethod
     def get_webhook_url(cls):
@@ -87,3 +90,21 @@ class DiscordUtil:
             return res.json()["embeds"][0]["image"]["url"]
         except AttributeError:
             return res[0].json()["embeds"][0]["image"]["url"]
+
+    @classmethod
+    def isurlattachment(cls, url: str) -> bool:
+        if not any(x in url for x in ["cdn.discordapp.com", "media.discordapp.net"]):
+            return False
+        if "/attachments/" not in url:
+            return False
+        return True
+
+    @classmethod
+    def isurlexpired(cls, url: str) -> bool:
+        u = urlparse(url)
+        q = parse_qs(u.query, keep_blank_values=True)
+        try:
+            ex = datetime.utcfromtimestamp(int(q["ex"][0], base=16))
+            return ex - cls.MARGIN < datetime.utcnow()
+        except KeyError:
+            return True

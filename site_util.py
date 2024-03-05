@@ -315,8 +315,10 @@ class SiteUtil:
 
         crop_mode = kwargs.pop("crop_mode", None)
         mode = f"crop{crop_mode}" if crop_mode is not None else "original"
-        if mode in cached:
-            return cached[mode]
+        if cached_url := cached.get(mode):
+            if DiscordUtil.isurlattachment(cached_url):
+                if not DiscordUtil.isurlexpired(cached_url):
+                    return cached_url
 
         proxy_url = kwargs.pop("proxy_url", None)
         if (im := cls.imopen(image_url, proxy_url=proxy_url)) is None:
