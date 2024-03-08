@@ -3,6 +3,7 @@ import time
 from base64 import b64decode
 from datetime import datetime, timedelta
 from io import BytesIO
+from itertools import islice, zip_longest
 from pathlib import Path
 from typing import Dict, List
 from urllib.parse import parse_qs, urlparse
@@ -59,21 +60,8 @@ class DiscordUtil:
         return cls._webhook_list.pop()
 
     @classmethod
-    def proxy_image(cls, im: Image.Image, filename: str, title: str = None, fields: List[Dict] = None):
-        webhook = DiscordWebhook(url=cls.get_webhook_url())
-        with BytesIO() as buf:
-            im.save(buf, format=im.format, quality=95)
-            webhook.add_file(buf.getvalue(), filename)
-        embed = DiscordEmbed(title=title, color=16164096)
-        embed.set_footer(text="lib_metadata")
-        embed.set_timestamp()
-        for field in fields or []:
-            embed.add_embed_field(**field)
-        embed.set_image(url=f"attachment://{filename}")
-        webhook.add_embed(embed)
-
-        num_retries = 2
-        sleep_sec = 1
+    def __execute(cls, webhook: DiscordWebhook, num_retries: int = 2, sleep_sec: int = 1) -> dict:
+        """warps DiscordWebhook.execute() with a retry scheme"""
         for retry_num in range(num_retries + 1):
             if retry_num > 0:
                 logger.warning("[%d/%d] Sleeping %.2f secs before executing webhook", retry_num, num_retries, sleep_sec)
@@ -87,9 +75,26 @@ class DiscordUtil:
                 break
 
         try:
-            return res.json()["embeds"][0]["image"]["url"]
+            return res.json()
         except AttributeError:
-            return res[0].json()["embeds"][0]["image"]["url"]
+            return res[0].json()
+
+    @classmethod
+    def proxy_image(cls, im: Image.Image, filename: str, title: str = None, fields: List[dict] = None) -> str:
+        """proxy image by attachments"""
+        webhook = DiscordWebhook(url=cls.get_webhook_url())
+        with BytesIO() as buf:
+            im.save(buf, format=im.format, quality=95)
+            webhook.add_file(buf.getvalue(), filename)
+        embed = DiscordEmbed(title=title, color=16164096)
+        embed.set_footer(text="lib_metadata")
+        embed.set_timestamp()
+        for field in fields or []:
+            embed.add_embed_field(**field)
+        embed.set_image(url=f"attachment://{filename}")
+        webhook.add_embed(embed)
+
+        return cls.__execute(webhook)["embeds"][0]["image"]["url"]
 
     @classmethod
     def isurlattachment(cls, url: str) -> bool:
@@ -108,3 +113,84 @@ class DiscordUtil:
             return ex - cls.MARGIN < datetime.utcnow()
         except KeyError:
             return True
+
+    @classmethod
+    def iter_attachment_url(cls, data: dict):
+        if isinstance(data, dict):
+            for v in data.values():
+                yield from cls.iter_attachment_url(v)
+        if isinstance(data, list):
+            for v in data:
+                yield from cls.iter_attachment_url(v)
+        if isinstance(data, str) and cls.isurlattachment(data):
+            yield data
+
+    @classmethod
+    def __proxy_image_url(
+        cls,
+        urls: List[str],
+        titles: List[str] = None,
+        lfields: List[List[dict]] = None,  # list of fields
+    ) -> Dict[str, str]:
+        # https://discord.com/safety/using-webhooks-and-embeds
+        assert len(urls) <= 10, "A webhook can have 10 embeds per message"
+
+        webhook = DiscordWebhook(url=cls.get_webhook_url())
+        for url, title, fields in zip_longest(urls, titles, lfields):
+            embed = DiscordEmbed(title=title, color=5814783)
+            embed.set_footer(text="lib_metadata")
+            embed.set_timestamp()
+            for field in fields or []:
+                embed.add_embed_field(**field)
+            embed.set_image(url=url)
+            webhook.add_embed(embed)
+
+        res = cls.__execute(webhook)
+        return {ourl: res["embeds"][n]["image"]["url"] for n, ourl in enumerate(urls)}
+
+    @classmethod
+    def proxy_image_url(
+        cls,
+        urls: List[str],
+        titles: List[str] = None,
+        lfields: List[List[dict]] = None,  # list of fields
+    ) -> Dict[str, str]:
+        urls = list(set(urls))
+
+        def chunker(it, chunk_size=10):
+            it = iter(it)
+            while chunk := list(islice(it, chunk_size)):
+                yield chunk
+
+        titles = titles or []
+        lfields = lfields or []
+        urlmaps = {}
+        for u, t, lf in zip_longest(*[chunker(x) for x in [urls, titles, lfields]]):
+            urlmaps.update(cls.__proxy_image_url(u, t, lf))
+        return urlmaps
+
+    @classmethod
+    def renew_urls(cls, data):
+        """renew and in-place replacement of discord attachments urls in data"""
+
+        def _repl(d, m):
+            if isinstance(d, (dict, list)):
+                for k, v in d.items() if isinstance(d, dict) else enumerate(d):
+                    if isinstance(v, str) and v in m:
+                        d[k] = m[v]
+                    _repl(v, m)
+
+        if isinstance(data, dict):
+            urls = list(filter(cls.isurlexpired, cls.iter_attachment_url(data)))
+            titles = [x.split("?")[0] for x in urls]
+            lfields = [[{"name": "mode", "value": "renew"}]] * len(urls)
+            urlmaps = cls.proxy_image_url(urls, titles=titles, lfields=lfields)
+            _repl(data, urlmaps)
+            return data
+        if isinstance(data, list):
+            urls = list(filter(cls.isurlexpired, data))
+            titles = [x.split("?")[0] for x in urls]
+            lfields = [[{"name": "mode", "value": "renew"}]] * len(urls)
+            urlmaps = cls.proxy_image_url(data)
+            return [urlmaps.get(x, x) for x in data]
+        raise NotImplementedError(f"알 수 없는 데이터 유형: {type(data)}")

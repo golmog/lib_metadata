@@ -50,7 +50,7 @@ class MetadataServerUtil:
             logger.info("서버로부터 메타데이터를 가져오는 중: %s", params)
             data = SiteUtil.get_response(url, params=params, timeout=30).json()
             if data["ret"] == "success":
-                return data["data"]
+                return SiteUtil.discord_renew_urls(data["data"])
         except Exception:
             logger.exception("서버로부터 메타데이터를 가져오는 중 예외:")
         return None
@@ -116,7 +116,7 @@ class MetadataServerUtil:
             logger.info("서버로부터 메타데이터를 가져오는 중: %s", params)
             data = SiteUtil.get_response(url, params=params, timeout=30).json()
             if data["ret"] == "success":
-                return data["data"]
+                return SiteUtil.discord_renew_urls(data["data"])
         except Exception:
             logger.exception("서버로부터 메타데이터를 가져오는 중 예외:")
         return None

@@ -353,6 +353,10 @@ class SiteUtil:
             return filepath
 
     @classmethod
+    def discord_renew_urls(cls, data):
+        return DiscordUtil.renew_urls(data)
+
+    @classmethod
     def get_image_url(cls, image_url, image_mode, proxy_url=None, with_poster=False):
         try:
             # logger.debug('get_image_url')
