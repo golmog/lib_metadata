@@ -1,6 +1,6 @@
 import re
 
-from .constants import MGS_LABEL_MAP
+from .constants import MGS_CODE_LEN, MGS_LABEL_MAP
 from .entity_av import EntityAVSearch
 from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings
 from .plugin import P
@@ -119,6 +119,11 @@ class SiteMgstage:
                     if label not in numlabels:
                         numlabels.append(label)
                     for idx, lab in enumerate(numlabels):
+                        if codelen := MGS_CODE_LEN.get(lab):
+                            try:
+                                code = str(int(code)).zfill(codelen)
+                            except ValueError:
+                                pass
                         _d = cls.__search(f"{lab}-{code}", **kwargs)
                         if _d:
                             data += _d
