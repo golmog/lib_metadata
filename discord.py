@@ -191,6 +191,6 @@ class DiscordUtil:
             urls = list(filter(cls.isurlexpired, data))
             titles = [x.split("?")[0] for x in urls]
             lfields = [[{"name": "mode", "value": "renew"}]] * len(urls)
-            urlmaps = cls.proxy_image_url(data)
+            urlmaps = cls.proxy_image_url(urls, titles=titles, lfields=lfields)
             return [urlmaps.get(x, x) for x in data]
         raise NotImplementedError(f"알 수 없는 데이터 유형: {type(data)}")
