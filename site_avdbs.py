@@ -38,27 +38,25 @@ class SiteAvdbs:
         k_names = tree.xpath('//p[starts-with(@class, "k_name")]/a')
 
         for idx, (e_name, k_name, img) in enumerate(zip(e_names, k_names, img_src)):
-            names = e_name.text_content().strip().strip(")").split("(")
-            if len(names) != 2:
-                logger.debug("검색 결과 %d/%d: 예상치 못한 이름 형식: len(%s) != 2", idx + 1, len(img_src), names)
+            e_name = e_name.text_content()
+            names = [x.strip().strip(")").strip() for x in e_name.split("(")]
+            if len(names) < 2:
+                logger.debug("검색 결과 %d/%d: 처리할 수 없는 이름 형식: len(%s) < 2", idx + 1, len(img_src), e_name)
                 continue
 
-            name_en, name_ja = [x.strip() for x in names]
-            if name_ja != originalname:
-                if "（" + originalname + "）" not in name_ja:
-                    logger.debug(
-                        "검색 결과 %d/%d: 이름을 찾을 수 없음: %s != %s", idx + 1, len(img_src), name_ja, originalname
-                    )
-                    continue
+            name_ja = names[-1]
+            if name_ja != originalname and "（" + originalname + "）" not in name_ja:
+                logger.debug("검색 결과 %d/%d: %s != %s", idx + 1, len(img_src), name_ja, originalname)
+                continue
 
-            logger.debug("검색 결과 %d/%d: 일치!: %s == %s", idx + 1, len(img_src), name_ja, originalname)
+            logger.debug("검색 결과 %d/%d: %s == %s", idx + 1, len(img_src), name_ja, originalname)
             return {
                 "name": k_name.text_content().strip(),
-                "name2": name_en,
+                "name2": names[0],
                 "site": "avdbs",
                 "thumb": SiteUtil.process_image_mode(image_mode, img, proxy_url=proxy_url),
             }
-        logger.debug("검색 결과 중 일치 항목 없음: %s != %s", name_ja, originalname)
+        logger.debug("검색 결과 중 일치 항목 없음: originalname=%s", originalname)
         return None
 
     @staticmethod
