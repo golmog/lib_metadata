@@ -23,7 +23,7 @@ class SiteAvdbs:
                 s.proxies.update({"http": proxy_url, "https": proxy_url})
             base_url = "https://www.avdbs.com"
             s.get(base_url)  # 한번 접속해서 쿠키를 받아와야 함
-            url = base_url + "/w2017/api/iux_kwd_srch_log.php"
+            url = base_url + "/w2017/api/iux_kwd_srch_log2.php"
             params = {"op": "srch", "kwd": originalname}
             seq = s.get(url, params=params).json()["seq"]
             url = base_url + "/w2017/page/search/search_actor.php"
@@ -34,21 +34,29 @@ class SiteAvdbs:
         if not img_src:
             logger.debug("검색 결과 없음: originalname=%s", originalname)
             return None
+        e_names = tree.xpath('//p[starts-with(@class, "e_name")]/a')
+        k_names = tree.xpath('//p[starts-with(@class, "k_name")]/a')
 
-        names = tree.xpath('//p[starts-with(@class, "e_name")]/a')[0].text_content()
-        names = names.strip(")").split("(")
-        if len(names) != 2:
-            logger.debug("검색 결과에서 이름을 찾을 수 없음: len(%s) != 2", names)
-            return None
+        for idx, (e_name, k_name, img) in enumerate(zip(e_names, k_names, img_src)):
+            names = e_name.text_content().strip().strip(")").split("(")
+            if len(names) != 2:
+                logger.debug("검색 결과 %d/%d: 예상치 못한 이름 형식: len(%s) != 2", idx + 1, len(img_src), names)
+                continue
 
-        name_en, name_ja = [x.strip() for x in names]
-        if name_ja == originalname:
-            name_ko = tree.xpath('//p[starts-with(@class, "k_name")]/a')[0].text_content().strip()
+            name_en, name_ja = [x.strip() for x in names]
+            if name_ja != originalname:
+                if "（" + originalname + "）" not in name_ja:
+                    logger.debug(
+                        "검색 결과 %d/%d: 이름을 찾을 수 없음: %s != %s", idx + 1, len(img_src), name_ja, originalname
+                    )
+                    continue
+
+            logger.debug("검색 결과 %d/%d: 일치!: %s == %s", idx + 1, len(img_src), name_ja, originalname)
             return {
-                "name": name_ko,
+                "name": k_name.text_content().strip(),
                 "name2": name_en,
                 "site": "avdbs",
-                "thumb": SiteUtil.process_image_mode(image_mode, img_src[0], proxy_url=proxy_url),
+                "thumb": SiteUtil.process_image_mode(image_mode, img, proxy_url=proxy_url),
             }
         logger.debug("검색 결과 중 일치 항목 없음: %s != %s", name_ja, originalname)
         return None
