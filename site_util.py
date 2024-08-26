@@ -13,7 +13,8 @@ from lxml import html
 from PIL import Image
 
 from .cache_util import CacheUtil
-from .constants import AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO, AV_STUDIO, COUNTRY_CODE_TRANSLATE, GENRE_MAP
+from .constants import (AV_GENRE, AV_GENRE_IGNORE_JA, AV_GENRE_IGNORE_KO,
+                        AV_STUDIO, COUNTRY_CODE_TRANSLATE, GENRE_MAP)
 from .discord import DiscordUtil
 from .entity_base import EntityActor, EntityThumb
 from .plugin import P
@@ -81,6 +82,11 @@ class SiteUtil:
         if post_data:
             method = "POST"
             kwargs["data"] = post_data
+
+        # temporary fix to bypass blocked image url
+        if "javbus.com" in url:
+            kwargs.setdefault("headers", {})
+            kwargs["headers"]["referer"] = "https://www.javbus.com/"
 
         res = cls.session.request(method, url, **kwargs)
         # logger.debug(res.headers)
@@ -419,9 +425,9 @@ class SiteUtil:
     @classmethod
     def has_hq_poster(cls, im_sm, im_lg, proxy_url=None):
         try:
-            from imagehash import (
-                average_hash as hfun,
-            )  # crop한 이미지의 align이 확실하지 않아서 average_hash가 더 적합함
+            from imagehash import \
+                average_hash as \
+                hfun  # crop한 이미지의 align이 확실하지 않아서 average_hash가 더 적합함
 
             im_sm = cls.imopen(im_sm, proxy_url=proxy_url)
             im_lg = cls.imopen(im_lg, proxy_url=proxy_url)
@@ -562,7 +568,8 @@ class SiteUtil:
     # 의미상으로 여기 있으면 안되나 예전 코드에서 많이 사용하기 때문에 잠깐만 나둔다.
     @classmethod
     def get_tree_daum(cls, url, post_data=None):
-        from system.logic_site import SystemLogicSite  # pylint: disable=import-error
+        from system.logic_site import \
+            SystemLogicSite  # pylint: disable=import-error
 
         from .site_daum import SiteDaum
 
@@ -576,7 +583,8 @@ class SiteUtil:
 
     @classmethod
     def get_text_daum(cls, url, post_data=None):
-        from system.logic_site import SystemLogicSite  # pylint: disable=import-error
+        from system.logic_site import \
+            SystemLogicSite  # pylint: disable=import-error
 
         from .site_daum import SiteDaum
 
@@ -590,7 +598,8 @@ class SiteUtil:
 
     @classmethod
     def get_response_daum(cls, url, post_data=None):
-        from system.logic_site import SystemLogicSite  # pylint: disable=import-error
+        from system.logic_site import \
+            SystemLogicSite  # pylint: disable=import-error
 
         from .site_daum import SiteDaum
 
