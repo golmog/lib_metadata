@@ -53,7 +53,7 @@ class SiteDmm:
         for node in lists[:10]:
             try:
                 item = EntityAVSearch(cls.site_name)
-                tag = node.xpath('.//div/p[@class="tmb"]/a')[0]
+                tag = node.xpath('.//div[@class="tmb"]/a')[0]
                 href = tag.attrib["href"].lower()
                 match = cls.PTN_SEARCH_CID.search(href)
                 if match:
