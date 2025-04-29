@@ -158,10 +158,8 @@ class SiteDmm:
 
         logger.debug(f"Using search URL: {url}")
 
-        # 검색 요청 헤더 (Referer는 보통 필요 없음, 필요시 이전 페이지 URL 등 설정)
         search_headers = cls._get_request_headers()
         try:
-            # 명시적 헤더 전달
             tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=search_headers)
         except Exception as e:
             logger.exception(f"Failed to get tree for search URL: {url}")
@@ -171,19 +169,33 @@ class SiteDmm:
             logger.warning(f"Failed to get tree for URL: {url}")
             return []
 
-        lists = tree.xpath('//*[@id="list"]/li')
+        # --- XPath 수정 ---
+        lists = tree.xpath('//ul[@id="list"]/li')
         logger.debug("dmm search len lists2 :%s", len(lists))
 
-        score = 60  # default score
+        score = 60
         ret = []
         for node in lists[:10]:
             try:
                 item = EntityAVSearch(cls.site_name)
-                tag = node.xpath('.//div[@class="tmb"]/a')[0]
-                href = tag.attrib["href"].lower()
+
+                link_tag_xpath = './/p[@class="tmb"]/a'
+                link_tags = node.xpath(link_tag_xpath)
+                if not link_tags:
+                    logger.warning(f"Could not find link tag with XPath: {link_tag_xpath}")
+                    continue # 링크 없으면 다음 아이템
+                link_tag = link_tags[0]
+                href = link_tag.attrib["href"].lower()
+
+                # CID 추출
                 match = cls.PTN_SEARCH_CID.search(href)
                 if match:
                     item.code = cls.module_char + cls.site_char + match.group("code")
+                else:
+                    logger.warning(f"Could not extract CID from href: {href}")
+                    continue # CID 없으면 다음 아이템으로
+
+                # 중복 제거
                 already_exist = False
                 for exist_item in ret:
                     if exist_item["code"] == item.code:
@@ -192,70 +204,78 @@ class SiteDmm:
                 if already_exist:
                     continue
 
-                tag = node.xpath(".//span[1]/img")[0]
-                item.title = item.title_ko = tag.attrib["alt"].strip()
-                item.image_url = tag.attrib["src"]
+                # --- 이미지, 제목 XPath ---
+                img_tag_xpath = './/p[@class="tmb"]/a/span[@class="img"]/img'
+                img_tags = node.xpath(img_tag_xpath)
+                if not img_tags:
+                    logger.warning(f"Could not find image tag with XPath: {img_tag_xpath}")
+                    item.title = item.title_ko = "제목 정보 없음"
+                    item.image_url = None
+                else:
+                    img_tag = img_tags[0]
+                    # 제목 (alt 속성)
+                    item.title = item.title_ko = img_tag.attrib.get("alt", "").strip()
+                    # 이미지 URL (src 속성)
+                    item.image_url = img_tag.attrib.get("src")
+                    if item.image_url and not item.image_url.startswith("http"):
+                        item.image_url = "https:" + item.image_url
 
-                # tmp = SiteUtil.discord_proxy_get_target(item.image_url)
-                # 2021-03-22 서치에는 discord 고정 url을 사용하지 않는다. 3번
-                # manual == False  때는 아예 이미치 처리를 할 필요가 없다.
-                # 일치항목 찾기 때는 화면에 보여줄 필요가 있는데 3번은 하면 하지 않는다.
-                if manual:
+                # 이미지 처리
+                if manual and item.image_url: # 이미지가 있을 때만 처리
                     _image_mode = "1" if image_mode != "0" else image_mode
                     item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
-                    if do_trans:
-                        item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
-                else:
-                    item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
 
-                match = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
-                if match:
-                    item.ui_code = match.group("real") + match.group("no")
+                # 제목 번역
+                if do_trans:
+                    if manual:
+                        item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
+                    elif item.title:
+                        item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
+                else:
+                    item.title_ko = item.title
+
+                # UI 코드 추출 및 점수 계산
+                match_real_no = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
+                if match_real_no:
+                    item.ui_code = match_real_no.group("real") + match_real_no.group("no")
                 else:
                     item.ui_code = item.code[2:]
 
+                # 점수 계산 로직
                 if len(keyword_tmps) == 2:
-                    # 2019-11-20 ntr mntr 둘다100
-                    if item.ui_code == dmm_keyword:
-                        item.score = 100
-                    elif item.ui_code.replace("0", "") == dmm_keyword.replace("0", ""):
-                        item.score = 100
-                    elif dmm_keyword in item.ui_code:  # 전체포함 DAID => AID
-                        item.score = score
-                        score += -5
-                    elif keyword_tmps[0] in item.code and keyword_tmps[1] in item.code:
-                        item.score = score
-                        score += -5
-                    elif keyword_tmps[0] in item.code or keyword_tmps[1] in item.code:
-                        item.score = 60
-                    else:
-                        item.score = 20
+                    if item.ui_code == dmm_keyword: item.score = 100
+                    elif item.ui_code.replace("0", "") == dmm_keyword.replace("0", ""): item.score = 100
+                    elif dmm_keyword in item.ui_code: item.score = score; score -= 5
+                    elif keyword_tmps[0] in item.code and keyword_tmps[1] in item.code: item.score = score; score -= 5
+                    elif keyword_tmps[0] in item.code or keyword_tmps[1] in item.code: item.score = 60
+                    else: item.score = 20
                 else:
-                    if item.code == keyword_tmps[0]:
-                        item.score = 100
-                    elif keyword_tmps[0] in item.code:
-                        item.score = score
-                        score += -5
-                    else:
-                        item.score = 20
+                    # keyword_tmps[0]이 dmm_keyword 와 동일할 것임
+                    if item.ui_code == dmm_keyword: item.score = 100 # 품번 완전 일치 시 100점
+                    elif dmm_keyword in item.ui_code: item.score = score; score -= 5
+                    else: item.score = 20
 
-                if match:
-                    item.ui_code = match.group("real").upper() + "-" + str(int(match.group("no"))).zfill(3)
+                # UI 코드 포맷팅
+                if match_real_no:
+                    item.ui_code = match_real_no.group("real").upper() + "-" + str(int(match_real_no.group("no"))).zfill(3)
                 else:
-                    if "0000" in item.ui_code:
-                        item.ui_code = item.ui_code.replace("0000", "-00").upper()
-                    else:
-                        item.ui_code = item.ui_code.replace("00", "-").upper()
-                    if item.ui_code.endswith("-"):
-                        item.ui_code = item.ui_code[:-1] + "00"
+                    if "0000" in item.ui_code: item.ui_code = item.ui_code.replace("0000", "-00").upper()
+                    else: item.ui_code = item.ui_code.replace("00", "-").upper()
+                    if item.ui_code.endswith("-"): item.ui_code = item.ui_code[:-1] + "00"
 
-                logger.debug("score: %s %s ", item.score, item.ui_code)
+                logger.debug(f"Item found - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title}")
                 ret.append(item.as_dict())
-            except Exception:
-                logger.exception("개별 검색 결과 처리 중 예외:")
+
+            except Exception as e:
+                logger.exception(f"Error processing individual search result item: {e}")
+
+        # 재시도 로직
         if not ret and len(keyword_tmps) == 2 and len(keyword_tmps[1]) == 5:
             new_title = keyword_tmps[0] + keyword_tmps[1].zfill(6)
-            return cls.__search(new_title, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode)
+            logger.debug(f"No results found for {dmm_keyword}, retrying with {new_title}")
+            # manual 인자 전달 확인
+            return cls.__search(new_title, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode, manual=manual)
+
         return sorted(ret, key=lambda k: k["score"], reverse=True)
 
     @classmethod
