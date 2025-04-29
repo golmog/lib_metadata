@@ -169,7 +169,6 @@ class SiteDmm:
             logger.warning(f"Failed to get tree for URL: {url}")
             return []
 
-        # --- XPath 수정 ---
         lists = tree.xpath('//ul[@id="list"]/li')
         logger.debug("dmm search len lists2 :%s", len(lists))
 
@@ -207,18 +206,16 @@ class SiteDmm:
                 # --- 이미지, 제목 XPath ---
                 img_tag_xpath = './/p[@class="tmb"]/a/span[@class="img"]/img'
                 img_tags = node.xpath(img_tag_xpath)
-                if not img_tags:
-                    logger.warning(f"Could not find image tag with XPath: {img_tag_xpath}")
-                    item.title = item.title_ko = "제목 정보 없음"
-                    item.image_url = None
-                else:
+                if img_tags:
                     img_tag = img_tags[0]
-                    # 제목 (alt 속성)
                     item.title = item.title_ko = img_tag.attrib.get("alt", "").strip()
-                    # 이미지 URL (src 속성)
                     item.image_url = img_tag.attrib.get("src")
                     if item.image_url and not item.image_url.startswith("http"):
                         item.image_url = "https:" + item.image_url
+                else:
+                    # 기본값 설정
+                    item.title = item.title_ko = "제목 정보 없음"
+                    item.image_url = None
 
                 # 이미지 처리
                 if manual and item.image_url: # 이미지가 있을 때만 처리
@@ -263,8 +260,8 @@ class SiteDmm:
                     else: item.ui_code = item.ui_code.replace("00", "-").upper()
                     if item.ui_code.endswith("-"): item.ui_code = item.ui_code[:-1] + "00"
 
-                logger.debug(f"Item found - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title}")
-                ret.append(item.as_dict())
+                logger.debug(f"Item found - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title}, ps_url: {item.image_url}")
+                ret.append(item) # 딕셔너리 대신 객체 추가
 
             except Exception as e:
                 logger.exception(f"Error processing individual search result item: {e}")
@@ -281,15 +278,20 @@ class SiteDmm:
     @classmethod
     def search(cls, keyword, **kwargs):
         ret = {}
+        data_list = [] # 최종 반환될 딕셔너리 리스트
         try:
-            data = cls.__search(keyword, **kwargs)
+            # __search는 이제 EntityAVSearch 객체 리스트 반환
+            search_results_obj = cls.__search(keyword, **kwargs)
+            # 객체를 딕셔너리로 변환
+            for item_obj in search_results_obj:
+                data_list.append(item_obj.as_dict())
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
             ret["ret"] = "exception"
             ret["data"] = str(exception)
         else:
-            ret["ret"] = "success" if data else "no_match"
-            ret["data"] = data
+            ret["ret"] = "success" if data_list else "no_match"
+            ret["data"] = data_list # 딕셔너리 리스트 반환
         return ret
 
     @classmethod
@@ -322,6 +324,7 @@ class SiteDmm:
     def __info(
         cls,
         code,
+        ps_url=None,
         do_trans=True,
         proxy_url=None,
         image_mode="0",
@@ -349,31 +352,22 @@ class SiteDmm:
         entity.mpaa = "청소년 관람불가"
 
         # 이미지 관련 시작
-
         img_urls = {}
-        # 고화질 메인 이미지 (pl 역할)
+        # pl 추출 (상세 페이지)
         pl_xpath = '//div[@id="fn-sampleImage-imagebox"]/img/@src'
         pl_tags = tree.xpath(pl_xpath)
-        # pl은 고화질 포스터 또는 가로 이미지일 수 있음. 일단 pl 키에 할당.
         img_urls['pl'] = ("https:" + pl_tags[0]) if pl_tags and not pl_tags[0].startswith("http") else (pl_tags[0] if pl_tags else "")
-        if not img_urls['pl']:
-            logger.warning("고화질 메인 이미지(pl) URL을 얻을 수 없음.")
+        if not img_urls['pl']: logger.warning("고화질 메인 이미지(pl) URL을 얻을 수 없음.")
 
-        # 저화질 첫 번째 샘플 이미지 (ps 역할) - XPath 수정 및 예외 처리 강화
-        # ps_xpath_alt1 = '//ul[@id="sample-image-block"]/div/div/li[@data-slick-index="0"]//img/@src'
-        ps_xpath_alt2 = '//ul[@id="sample-image-block"]/div/div/li[1]//img/@src' # 첫 번째 li 직접 지정 시도
-        ps_tags = tree.xpath(ps_xpath_alt2)
-        if ps_tags:
-            img_urls['ps'] = ("https:" + ps_tags[0]) if ps_tags[0] and not ps_tags[0].startswith("http") else ps_tags[0]
-        else:
-            # 첫 번째 XPath도 시도해 볼 수 있음 (선택적)
-            # ps_xpath_orig = '//li[contains(@class, "fn-sampleImage__zoom") and @data-slick-index="0"]//img/@src'
-            # ps_tags_orig = tree.xpath(ps_xpath_orig)
-            # if ps_tags_orig:
-            #     img_urls['ps'] = ("https:" + ps_tags_orig[0]) if ps_tags_orig[0] and not ps_tags_orig[0].startswith("http") else ps_tags_orig[0]
-            # else:
-            img_urls['ps'] = "" # 최종적으로 못 찾으면 빈 문자열 할당
-            logger.warning("저화질 썸네일 이미지(ps) URL을 얻을 수 없음.")
+        # ps 추출 (search 결과에서 전달받음)
+        img_urls['ps'] = ps_url if ps_url else "" # 전달받은 ps_url 사용
+        if not img_urls['ps']:
+            logger.warning("저화질 썸네일 이미지(ps) URL을 전달받지 못했거나 유효하지 않음.")
+            # ps가 없으면 pl을 fallback으로 사용 (오류 방지)
+            if img_urls.get('pl'):
+                img_urls['ps'] = img_urls['pl']
+            else:
+                logger.error("Both pl and ps URLs are missing.")
 
         # 팬아트 (첫 번째 샘플 제외)
         arts_xpath = '//li[contains(@class, "fn-sampleImage__zoom") and not(@data-slick-index="0")]//img'
