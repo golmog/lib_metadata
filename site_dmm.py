@@ -1,5 +1,7 @@
 import json
 import re
+import requests
+import urllib.parse as py_urllib_parse
 
 from .entity_av import EntityAVSearch
 from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings
