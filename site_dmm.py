@@ -327,22 +327,14 @@ class SiteDmm:
         image_mode="0",
         max_arts=10,
         use_extras=True,
-        ps_to_poster=False,
+        ps_to_poster=False, # 이 옵션은 새 구조에서 의미가 달라질 수 있음
         crop_mode=None,
     ):
-
-        # 연령 확인 선행
-        if not cls._ensure_age_verified(proxy_url=proxy_url):
-            logger.error("DMM age verification failed. Cannot proceed with info.")
-            raise Exception("DMM age verification failed.")
-
-        url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={code[2:]}/" # 상세 페이지 URL 확인 필요! mono 쪽일 수도 있음
+        url = cls.site_base_url + f"/mono/dvd/-/detail/=/cid={code[2:]}/"
         logger.debug(f"Using info URL: {url}")
 
-        # 상세 정보 요청 헤더 (Referer는 검색 결과 페이지 URL 등 설정 가능)
-        info_headers = cls._get_request_headers() # 필요시 referer 추가
+        info_headers = cls._get_request_headers()
         try:
-            # 명시적 헤더 전달
             tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=info_headers)
         except Exception as e:
             logger.exception(f"Failed to get tree for info URL: {url}")
@@ -356,150 +348,390 @@ class SiteDmm:
         entity.country = ["일본"]
         entity.mpaa = "청소년 관람불가"
 
-        #
         # 이미지 관련 시작
-        #
-        img_urls = cls.__img_urls(tree)
+
+        img_urls = {}
+        # 고화질 메인 이미지 (pl 역할)
+        pl_xpath = '//div[@id="fn-sampleImage-imagebox"]/img/@src'
+        pl_tags = tree.xpath(pl_xpath)
+        # pl은 고화질 포스터 또는 가로 이미지일 수 있음. 일단 pl 키에 할당.
+        img_urls['pl'] = ("https:" + pl_tags[0]) if pl_tags and not pl_tags[0].startswith("http") else (pl_tags[0] if pl_tags else "")
+        if not img_urls['pl']:
+            logger.warning("고화질 메인 이미지(pl) URL을 얻을 수 없음.")
+
+        # 저화질 첫 번째 샘플 이미지 (ps 역할)
+        ps_xpath = '//li[contains(@class, "fn-sampleImage__zoom") and @data-slick-index="0"]//img/@src'
+        ps_tags = tree.xpath(ps_xpath)
+        img_urls['ps'] = ("https:" + ps_tags[0]) if ps_tags and not ps_tags[0].startswith("http") else (ps_tags[0] if ps_tags else "")
+        if not img_urls['ps']:
+            logger.warning("저화질 썸네일 이미지(ps) URL을 얻을 수 없음.")
+
+        # 팬아트 (첫 번째 샘플 제외)
+        arts_xpath = '//li[contains(@class, "fn-sampleImage__zoom") and not(@data-slick-index="0")]//img'
+        arts_tags = tree.xpath(arts_xpath)
+        img_urls['arts'] = []
+        for tag in arts_tags:
+            src = tag.attrib.get("src") or tag.attrib.get("data-lazy")
+            if src:
+                if not src.startswith("http"): src = "https:" + src
+                img_urls['arts'].append(src)
+        logger.debug(f"Found {len(img_urls['arts'])} arts images.")
+
         SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
 
+        # resolve_jav_imgs 결과 사용
         entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
 
         entity.fanart = []
-        for href in img_urls["arts"][:max_arts]:
-            entity.fanart.append(SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url))
-        #
-        # 이미지 관련 끝
-        #
+        # resolve_jav_imgs에서 landscape로 분류되지 않은 arts 이미지를 팬아트로 사용
+        resolved_arts = img_urls.get("arts", [])
+        for href in resolved_arts[:max_arts]:
+            # landscape로 사용된 이미지는 팬아트에서 제외 (선택적)
+            if href != img_urls.get("landscape"):
+                entity.fanart.append(SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url))
 
-        alt = tree.xpath('//div[@id="sample-video"]//img/@alt')[0].strip()
-        entity.tagline = SiteUtil.trans(alt, do_trans=do_trans).replace("[배달 전용]", "").replace("[특가]", "").strip()
+        # --- Tagline / Title 처리 ---
+        title_xpath = '//h1[@id="title"]'
+        title_tags = tree.xpath(title_xpath)
+        if title_tags:
+            # h1 태그 내부의 모든 텍스트 노드를 합침 (span 등 내부 태그 제외 가능성 고려)
+            # 먼저 span.txt_before-sale 제외 시도
+            title_text_nodes = title_tags[0].xpath('./text()')
+            title_text = "".join(title_text_nodes).strip()
 
-        basetag = '//*[@id="mu"]/div/table//tr/td[1]'
+            # 만약 위 방식이 잘 안되면, h1 전체 텍스트에서 span 내용 제거
+            if not title_text:
+                h1_full_text = title_tags[0].text_content().strip()
+                span_text_nodes = title_tags[0].xpath('./span[contains(@class, "txt_before-sale")]/text()')
+                span_text = "".join(span_text_nodes).strip()
+                if span_text:
+                    title_text = h1_full_text.replace(span_text, "").strip()
+                else:
+                    title_text = h1_full_text
 
-        tags = tree.xpath(f"{basetag}/table//tr")
-        tmp_premiered = None
+            if title_text:
+                # Tagline 설정 (번역 및 불필요 문자 제거)
+                entity.tagline = SiteUtil.trans(title_text, do_trans=do_trans).replace("[배달 전용]", "").replace("[특가]", "").strip()
+                logger.debug(f"Tagline set from h1 title: {entity.tagline}")
+            else:
+                logger.warning("Could not extract text from h1#title.")
+                entity.tagline = None # 추출 실패 시 None
+        else:
+            logger.warning("h1#title tag not found.")
+            entity.tagline = None # 태그 없음
+
+
+        # 정보 테이블 파싱
+        info_table_xpath = '//div[@class="wrapper-product"]//table//tr'
+        tags = tree.xpath(info_table_xpath)
+
+        # 날짜 정보를 임시 저장할 변수 초기화
+        premiered_shouhin = None # 商品発売日 (우선순위 1)
+        premiered_hatsubai = None # 発売日 (우선순위 2)
+        premiered_haishin = None # 配信開始日 (우선순위 3)
+
         for tag in tags:
-            td_tag = tag.xpath(".//td")
-            if len(td_tag) != 2:
+            td_tags = tag.xpath(".//td")
+            if len(td_tags) != 2:
+                # 평점, 관련 태그 등의 다른 구조 처리 가능성
+                # 예: 평점 처리
+                if td_tags and "平均評価：" in td_tags[0].text_content():
+                    rating_img_xpath = './/img/@src'
+                    rating_img_tags = td_tags[1].xpath(rating_img_xpath)
+                    if rating_img_tags:
+                        match_rating = cls.PTN_RATING.search(rating_img_tags[0])
+                        if match_rating:
+                            rating_value_str = match_rating.group("rating").replace("_", ".")
+                            try:
+                                rating_value = float(rating_value_str)
+                                entity.ratings = [EntityRatings(rating_value, max=5, name="dmm", image_url="https:" + rating_img_tags[0])]
+                                logger.debug(f"Rating found: {rating_value}")
+                            except ValueError:
+                                logger.warning(f"Could not convert rating value to float: {rating_value_str}")
+                        else:
+                            logger.warning(f"Could not parse rating from image src: {rating_img_tags[0]}")
+                continue # key-value 쌍이 아니면 건너뜀
+
+            key = td_tags[0].text_content().strip()
+            value_node = td_tags[1] # 값은 text() 또는 하위 태그 포함 가능
+
+            # 빈 값 처리 (예: "----")
+            value_text_all = value_node.text_content().strip()
+            if value_text_all == "----" or not value_text_all:
                 continue
-            key = td_tag[0].text_content().strip()
-            value = td_tag[1].text_content().strip()
-            if value == "----":
-                continue
+
+            # 임시 변수에 날짜 정보 저장
             if key == "商品発売日：":
-                entity.premiered = value.replace("/", "-")
-                entity.year = int(value[:4])
+                premiered_shouhin = value_text_all.replace("/", "-")
+                logger.debug(f"Found 商品発売日: {premiered_shouhin}")
+            elif key == "発売日：":
+                premiered_hatsubai = value_text_all.replace("/", "-")
+                logger.debug(f"Found 発売日: {premiered_hatsubai}")
             elif key == "配信開始日：":
-                tmp_premiered = value.replace("/", "-")
+                premiered_haishin = value_text_all.replace("/", "-")
+                logger.debug(f"Found 配信開始日: {premiered_haishin}")
+
             elif key == "収録時間：":
-                entity.runtime = int(value.replace("分", ""))
+                match_runtime = re.search(r"(\d+)", value_text_all)
+                if match_runtime:
+                    entity.runtime = int(match_runtime.group(1))
+                    logger.debug(f"Runtime: {entity.runtime}")
             elif key == "出演者：":
                 entity.actor = []
-                a_tags = tag.xpath(".//a")
+                a_tags = value_node.xpath(".//a")
                 for a_tag in a_tags:
-                    tmp = a_tag.text_content().strip()
-                    if tmp == "▼すべて表示する":
-                        break
-                    entity.actor.append(EntityActor(tmp))
-                # for v in value.split(' '):
-                #    entity.actor.append(EntityActor(v.strip()))
+                    actor_name = a_tag.text_content().strip()
+                    if actor_name and actor_name != "▼すべて表示する": # 확인 필요
+                        entity.actor.append(EntityActor(actor_name))
+                logger.debug(f"Actors: {[a.originalname for a in entity.actor]}")
             elif key == "監督：":
-                entity.director = value
+                # 감독은 링크가 있을 수도, 없을 수도 있음
+                a_tags = value_node.xpath(".//a")
+                if a_tags:
+                    entity.director = a_tags[0].text_content().strip()
+                else:
+                    entity.director = value_text_all
+                logger.debug(f"Director: {entity.director}")
             elif key == "シリーズ：":
-                if entity.tag is None:
-                    entity.tag = []
-                entity.tag.append(SiteUtil.trans(value, do_trans=do_trans))
-            elif key == "レーベル：":
-                entity.studio = value
+                if entity.tag is None: entity.tag = []
+                # 시리즈는 링크가 있을 수도, 없을 수도 있음
+                a_tags = value_node.xpath(".//a")
+                series_name = a_tags[0].text_content().strip() if a_tags else value_text_all
+                if series_name:
+                    entity.tag.append(SiteUtil.trans(series_name, do_trans=do_trans))
+                logger.debug(f"Series tags: {entity.tag}")
+            elif key == "メーカー：": # Studio 후보 1
+                if entity.studio is None: # Label이 없으면 Maker를 사용
+                    a_tags = value_node.xpath(".//a")
+                    studio_name = a_tags[0].text_content().strip() if a_tags else value_text_all
+                    entity.studio = SiteUtil.trans(studio_name, do_trans=do_trans) # 번역 적용 고려
+                    logger.debug(f"Studio (from Maker): {entity.studio}")
+            elif key == "レーベル：": # Studio 후보 2 (우선)
+                a_tags = value_node.xpath(".//a")
+                studio_name = a_tags[0].text_content().strip() if a_tags else value_text_all
+                # 기존 번역 로직 적용
                 if do_trans:
-                    if value in SiteUtil.av_studio:
-                        entity.studio = SiteUtil.av_studio[value]
+                    if studio_name in SiteUtil.av_studio:
+                        entity.studio = SiteUtil.av_studio[studio_name]
                     else:
-                        entity.studio = SiteUtil.change_html(SiteUtil.trans(value))
+                        # SiteUtil.change_html 은 필요 없어 보임
+                        entity.studio = SiteUtil.trans(studio_name)
+                else:
+                    entity.studio = studio_name
+                logger.debug(f"Studio (from Label): {entity.studio}")
+
             elif key == "ジャンル：":
-                a_tags = td_tag[1].xpath(".//a")
                 entity.genre = []
-                for tag in a_tags:
-                    tmp = tag.text_content().strip()
-                    if "％OFF" in tmp:
+                a_tags = value_node.xpath(".//a")
+                for tag_a in a_tags:
+                    genre_ja = tag_a.text_content().strip()
+                    if "％OFF" in genre_ja or not genre_ja: # 할인 태그 등 제외
                         continue
-                    if tmp in SiteUtil.av_genre:
-                        entity.genre.append(SiteUtil.av_genre[tmp])
-                    elif tmp in SiteUtil.av_genre_ignore_ja:
+                    # 기존 장르 처리 로직 적용
+                    if genre_ja in SiteUtil.av_genre:
+                        entity.genre.append(SiteUtil.av_genre[genre_ja])
+                    elif genre_ja in SiteUtil.av_genre_ignore_ja:
                         continue
                     else:
-                        genre_tmp = SiteUtil.trans(tmp, do_trans=do_trans).replace(" ", "")
-                        if genre_tmp not in SiteUtil.av_genre_ignore_ko:
-                            entity.genre.append(genre_tmp)
+                        genre_ko = SiteUtil.trans(genre_ja, do_trans=do_trans).replace(" ", "")
+                        if genre_ko not in SiteUtil.av_genre_ignore_ko:
+                            entity.genre.append(genre_ko)
+                logger.debug(f"Genres: {entity.genre}")
             elif key == "品番：":
-                # 24id
-                match = cls.PTN_ID.search(value)
+                # 기존 품번 처리 로직 적용
+                value = value_text_all # td의 전체 텍스트 사용
+                match_id = cls.PTN_ID.search(value)
                 id_before = None
-                if match:
-                    id_before = match.group(0)
+                if match_id:
+                    id_before = match_id.group(0)
                     value = value.lower().replace(id_before, "zzid")
 
-                match = cls.PTN_SEARCH_REAL_NO.match(value)
-                if match:
-                    label = match.group("real").upper()
+                match_real = cls.PTN_SEARCH_REAL_NO.match(value)
+                if match_real:
+                    label = match_real.group("real").upper()
                     if id_before is not None:
                         label = label.replace("ZZID", id_before.upper())
+                    formatted_title = label + "-" + str(int(match_real.group("no"))).zfill(3)
+                    if entity.tag is None: entity.tag = []
+                    entity.tag.append(label) # 품번 앞부분을 태그로 추가
+                else:
+                    # 매칭 실패 시 원본 값 사용 또는 다른 처리
+                    formatted_title = value_text_all.upper()
 
-                    value = label + "-" + str(int(match.group("no"))).zfill(3)
-                    if entity.tag is None:
-                        entity.tag = []
-                    entity.tag.append(label)
-                entity.title = entity.originaltitle = entity.sorttitle = value
+                entity.title = entity.originaltitle = entity.sorttitle = formatted_title
+                logger.debug(f"Title (from 品番): {entity.title}")
+                # Tagline이 비어있으면 제목으로 채우기 (선택적)
+                if entity.tagline is None:
+                    entity.tagline = entity.title
 
-        if entity.premiered is None and tmp_premiered is not None:
-            entity.premiered = tmp_premiered
-            entity.year = int(tmp_premiered[:4])
+        # --- 루프 종료 후 우선순위에 따라 최종 날짜 설정 ---
+        final_premiered = None
+        if premiered_shouhin: # 1순위: 상품 발매일
+            final_premiered = premiered_shouhin
+            logger.debug("Using 商品発売日 for premiered date.")
+        elif premiered_hatsubai: # 2순위: 발매일
+            final_premiered = premiered_hatsubai
+            logger.debug("Using 発売日 for premiered date.")
+        elif premiered_haishin: # 3순위: 전송 시작일
+            final_premiered = premiered_haishin
+            logger.debug("Using 配信開始日 for premiered date.")
+        else:
+            logger.warning("No premiered date found (商品発売日, 発売日, 配信開始日).")
 
-        try:
-            tag = tree.xpath(f"{basetag}/table//tr[13]/td[2]/img")
-            if tag:
-                match = cls.PTN_RATING.search(tag[0].attrib["src"])
-                if match:
-                    tmp = match.group("rating").replace("_", ".")
-                    entity.ratings = [EntityRatings(float(tmp), max=5, name="dmm", image_url=tag[0].attrib["src"])]
-        except Exception:
-            logger.exception("평점 정보 처리 중 예외:")
+        if final_premiered:
+            entity.premiered = final_premiered
+            try:
+                entity.year = int(final_premiered[:4])
+            except ValueError:
+                logger.warning(f"Could not parse year from final premiered date: {final_premiered}")
+                entity.year = None # 파싱 실패 시 None 설정
+        else:
+            # 날짜 정보가 전혀 없으면 None 유지 (EntityMovie 기본값)
+            entity.premiered = None
+            entity.year = None
 
-        tmp = tree.xpath(f"{basetag}/div[4]/text()")[0]
-        tmp = tmp.split("※")[0].strip()
-        entity.plot = SiteUtil.trans(tmp, do_trans=do_trans)
+        # 줄거리 파싱
+        plot_xpath = '//div[@class="mg-b20 lh4"]/p[@class="mg-b20"]/text()'
+        plot_tags = tree.xpath(plot_xpath)
+        if plot_tags:
+            # 여러 줄일 수 있으므로 join 후 처리
+            plot_text = "\n".join([p.strip() for p in plot_tags if p.strip()])
+            # ※ 이후 내용 제거 등 기존 처리 유지 가능
+            plot_text = plot_text.split("※")[0].strip()
+            entity.plot = SiteUtil.trans(plot_text, do_trans=do_trans)
+            logger.debug(f"Plot found: {entity.plot[:50]}...") # 일부만 로그 출력
+        else:
+            logger.warning("Plot not found.")
 
-        try:
-            tmp = tree.xpath('//div[@class="d-review__points"]/p/strong')
-            if len(tmp) == 2 and entity.ratings:
-                point = float(tmp[0].text_content().replace("点", "").strip())
-                votes = int(tmp[1].text_content().strip())
-                entity.ratings[0].value = point
-                entity.ratings[0].votes = votes
-        except Exception:
-            logger.exception("평점 정보 업데이트 중 예외:")
 
+        # --- 리뷰 섹션에서 평점 상세 정보 업데이트 ---
+        review_section_xpath = '//div[@id="review_anchor"]'
+        review_sections = tree.xpath(review_section_xpath)
+        if review_sections:
+            review_section = review_sections[0]
+            try:
+                # 평균 평점 값
+                avg_rating_xpath = './/div[@class="dcd-review__points"]/p[@class="dcd-review__average"]/strong/text()'
+                avg_rating_tags = review_section.xpath(avg_rating_xpath)
+                if avg_rating_tags:
+                    avg_rating_str = avg_rating_tags[0].strip()
+                    try:
+                        avg_rating_value = float(avg_rating_str)
+                        # 기존 entity.ratings가 있으면 업데이트, 없으면 새로 생성
+                        if entity.ratings:
+                            entity.ratings[0].value = avg_rating_value
+                        else:
+                            # 평점 이미지를 못 찾았을 경우 대비
+                            entity.ratings = [EntityRatings(avg_rating_value, max=5, name="dmm")]
+                        logger.debug(f"Updated rating value from review section: {avg_rating_value}")
+                    except ValueError:
+                        logger.warning(f"Could not convert average rating to float: {avg_rating_str}")
+
+                # 총 평가 수 (Votes)
+                votes_xpath = './/div[@class="dcd-review__points"]/p[@class="dcd-review__evaluates"]/strong/text()'
+                votes_tags = review_section.xpath(votes_xpath)
+                if votes_tags:
+                    votes_str = votes_tags[0].strip()
+                    match_votes = re.search(r"(\d+)", votes_str) # 숫자만 추출
+                    if match_votes:
+                        try:
+                            votes_value = int(match_votes.group(1))
+                            if entity.ratings:
+                                entity.ratings[0].votes = votes_value
+                                logger.debug(f"Updated rating votes: {votes_value}")
+                            # else: # ratings 객체가 없으면 votes만 설정할 수 없음
+                        except ValueError:
+                            logger.warning(f"Could not convert votes to int: {votes_str}")
+
+            except Exception as rating_update_e:
+                logger.exception(f"Error updating rating details from review section: {rating_update_e}")
+        else:
+            logger.warning("Review section not found, cannot update rating details.")
+
+
+        # 예고편 (Extras) 처리
         entity.extras = []
         if use_extras:
             try:
-                for tmp in tree.xpath('//*[@id="detail-sample-movie"]/div/a/@onclick'):
-                    url = cls.site_base_url + tmp.split("'")[1]
-                    url = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers).xpath("//iframe/@src")[0]
-                    text = SiteUtil.get_text(url, proxy_url=proxy_url, headers=cls.dmm_headers)
-                    pos = text.find("const args = {")
-                    data = json.loads(text[text.find("{", pos) : text.find(";", pos)])
-                    # logger.debug(json.dumps(data, indent=4))
-                    data["bitrates"] = sorted(data["bitrates"], key=lambda k: k["bitrate"], reverse=True)
-                    entity.extras = [
-                        EntityExtra(
-                            "trailer",
-                            SiteUtil.trans(data["title"], do_trans=do_trans),
-                            "mp4",
-                            "https:" + data["bitrates"][0]["src"],
-                        )
-                    ]
-            except Exception:
-                logger.exception("미리보기 처리 중 예외:")
+                # 방법 1: onclick 속성 파싱 (JSON 유사 구조 분석)
+                onclick_xpath = '//a[@id="sample-video1"]/@onclick'
+                onclick_tags = tree.xpath(onclick_xpath)
+                if onclick_tags:
+                    onclick_text = onclick_tags[0]
+                    # gaEventVideoStart('{"video_url":"..."}','{...}') 형태 분석
+                    match_json = re.search(r"gaEventVideoStart\('(\{.*?\})','(\{.*?\})'\)", onclick_text)
+                    if match_json:
+                        video_data_str = match_json.group(1)
+                        # JSON 디코딩 시 이스케이프 문자 처리 주의
+                        try:
+                            video_data = json.loads(video_data_str.replace('\\"', '"')) # \" 를 " 로 치환
+                            if video_data.get("video_url"):
+                                trailer_url = video_data["video_url"]
+                                # 트레일러 제목은 별도로 없으므로 기본값 사용
+                                trailer_title = f"{entity.title} Trailer" if entity.title else "Trailer"
+                                entity.extras.append(EntityExtra("trailer", SiteUtil.trans(trailer_title, do_trans=do_trans), "mp4", trailer_url))
+                                logger.debug(f"Trailer found from onclick: {trailer_url}")
+                        except json.JSONDecodeError as je:
+                            logger.warning(f"Failed to decode JSON from onclick: {video_data_str} - Error: {je}")
+                        except KeyError as ke:
+                            logger.warning(f"Key 'video_url' not found in onclick JSON: {video_data_str} - Error: {ke}")
+
+                # 방법 2: data-video-url AJAX 요청 (기존 코드 방식 변형) - 방법 1 실패 시 또는 병행
+                # 이 방식은 AJAX 응답 구조를 알아야 함
+                if not entity.extras: # 방법 1 실패 시 시도
+                    ajax_url_xpath = '//a[@id="sample-video1"]/@data-video-url'
+                    ajax_url_tags = tree.xpath(ajax_url_xpath)
+                    if ajax_url_tags:
+                        ajax_relative_url = ajax_url_tags[0]
+                        ajax_full_url = py_urllib_parse.urljoin(url, ajax_relative_url) # 절대 경로로
+                        logger.debug(f"Attempting trailer AJAX request: {ajax_full_url}")
+                        try:
+                            # AJAX 요청 헤더 설정 (X-Requested-With 등 필요할 수 있음)
+                            ajax_headers = cls._get_request_headers(referer=url)
+                            ajax_headers['X-Requested-With'] = 'XMLHttpRequest' # AJAX 요청 표시
+
+                            # SiteUtil.get_text 또는 get_response 사용
+                            ajax_response_text = SiteUtil.get_text(ajax_full_url, proxy_url=proxy_url, headers=ajax_headers)
+                            # ajax_response_text = SiteUtil.get_response(ajax_full_url, proxy_url=proxy_url, headers=ajax_headers).text
+
+                            # AJAX 응답 파싱 (iframe URL 추출 등)
+                            # 예시: iframe src 추출 (응답이 HTML iframe 태그일 경우)
+                            ajax_tree = html.fromstring(ajax_response_text)
+                            iframe_src_xpath = "//iframe/@src"
+                            iframe_srcs = ajax_tree.xpath(iframe_src_xpath)
+                            if iframe_srcs:
+                                iframe_url = iframe_srcs[0]
+                                # iframe 내용 가져오기
+                                iframe_headers = cls._get_request_headers(referer=ajax_full_url)
+                                iframe_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=iframe_headers)
+                                # iframe 내용에서 const args = {...} 파싱 (기존 로직 활용)
+                                pos = iframe_text.find("const args = {")
+                                if pos != -1:
+                                    json_start = iframe_text.find("{", pos)
+                                    json_end = iframe_text.find("};", json_start) # }; 로 끝나는지 확인
+                                    if json_start != -1 and json_end != -1:
+                                        data_str = iframe_text[json_start : json_end+1]
+                                        try:
+                                            data = json.loads(data_str)
+                                            data["bitrates"] = sorted(data.get("bitrates",[]), key=lambda k: k.get("bitrate", 0), reverse=True)
+                                            if data.get("bitrates"):
+                                                trailer_src = data["bitrates"][0].get("src")
+                                                if trailer_src:
+                                                    trailer_url = "https:" + trailer_src if not trailer_src.startswith("http") else trailer_src
+                                                    trailer_title = data.get("title", f"{entity.title} Trailer" if entity.title else "Trailer")
+                                                    entity.extras.append(EntityExtra("trailer", SiteUtil.trans(trailer_title, do_trans=do_trans), "mp4", trailer_url))
+                                                    logger.debug(f"Trailer found from AJAX iframe: {trailer_url}")
+                                        except json.JSONDecodeError as je:
+                                            logger.warning(f"Failed to decode JSON from iframe: {data_str} - Error: {je}")
+                                else:
+                                    logger.warning("Could not find 'const args = {' in iframe content.")
+                            else:
+                                logger.warning("Could not find iframe src in AJAX response.")
+                        except Exception as ajax_e:
+                            logger.exception(f"Error during trailer AJAX request: {ajax_e}")
+
+            except Exception as extra_e:
+                logger.exception(f"미리보기 처리 중 예외: {extra_e}")
 
         return entity
 
