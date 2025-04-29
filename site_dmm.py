@@ -507,7 +507,14 @@ class SiteDmm:
                     try:
                         ajax_headers = cls._get_request_headers(referer=url); ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
                         ajax_response_text = SiteUtil.get_text(ajax_full_url, proxy_url=proxy_url, headers=ajax_headers)
-                        try: from lxml import html except ImportError: logger.error("lxml required"); raise
+                        try:
+                            from lxml import html
+                        except ImportError:
+                            # lxml 없으면 오류 로깅 후 RuntimeError 발생
+                            error_message = "lxml library is required for AJAX trailer parsing but not installed. Please install it (e.g., 'pip install lxml')."
+                            logger.error(error_message)
+                            raise RuntimeError(error_message) # 상위 except에서 잡도록 함
+
                         ajax_tree = html.fromstring(ajax_response_text)
                         iframe_srcs = ajax_tree.xpath("//iframe/@src")
                         if iframe_srcs:
@@ -525,17 +532,14 @@ class SiteDmm:
                                         if data.get("bitrates"):
                                             trailer_src = data["bitrates"][0].get("src")
                                             if trailer_src:
-                                                # 트레일러 URL 저장
                                                 trailer_url = "https:" + trailer_src if not trailer_src.startswith("http") else trailer_src
-                                                # DMM 제공 제목 저장
                                                 trailer_title_from_data = data.get("title")
                                                 logger.debug(f"Trailer URL found from AJAX iframe: {trailer_url}")
-                                                if trailer_title_from_data:
-                                                    logger.debug(f"Trailer title found from DMM data: {trailer_title_from_data}")
+                                                if trailer_title_from_data: logger.debug(f"Trailer title found from DMM data: {trailer_title_from_data}")
                                     except json.JSONDecodeError as je: logger.warning(f"Failed to decode JSON from iframe: {data_str} - Error: {je}")
                             else: logger.warning("Could not find 'const args = {' in iframe content.")
                         else: logger.warning("Could not find iframe src in AJAX response.")
-                    except Exception as ajax_e: logger.exception(f"Error during trailer AJAX request: {ajax_e}")
+                    except Exception as ajax_e: logger.exception(f"Error during trailer AJAX request: {ajax_e}") # 여기서 RuntimeError 등 잡힘
                 else:
                     logger.warning("data-video-url attribute not found for trailer AJAX.")
 
@@ -551,28 +555,25 @@ class SiteDmm:
                             try:
                                 video_data = json.loads(video_data_str.replace('\\"', '"'))
                                 if video_data.get("video_url"):
-                                    # 트레일러 URL 저장
                                     trailer_url = video_data["video_url"]
-                                    # onclick에는 제목 정보가 없으므로 trailer_title_from_data는 None 유지
                                     logger.debug(f"Trailer URL found from onclick (no title info): {trailer_url}")
-                            except Exception as json_e: logger.warning(f"Failed to parse JSON from onclick: {json_e}")
+                            except Exception as json_e: logger.warning(f"Failed to parse JSON from onclick (fallback): {json_e}")
 
                 # --- 최종적으로 URL을 찾았으면 EntityExtra 추가 ---
                 if trailer_url:
-                    # 제목 결정: DMM 제공 제목 우선, 없으면 entity.title, 그것도 없으면 "Trailer"
                     if trailer_title_from_data and trailer_title_from_data.strip():
                         trailer_title_to_use = trailer_title_from_data.strip()
                     elif entity.title:
                         trailer_title_to_use = entity.title
                     else:
-                        trailer_title_to_use = "Trailer" # 최후의 기본값
-
+                        trailer_title_to_use = "Trailer"
                     entity.extras.append(EntityExtra("trailer", SiteUtil.trans(trailer_title_to_use, do_trans=do_trans), "mp4", trailer_url))
                     logger.debug(f"Added trailer with title: '{trailer_title_to_use}' and URL: {trailer_url}")
                 else:
                     logger.warning("No trailer URL found using either AJAX or onclick method.")
 
             except Exception as extra_e:
+                # 여기가 최상위 예외 처리 (lxml import 실패 시 RuntimeError도 여기서 잡힘)
                 logger.exception(f"미리보기 처리 중 예외: {extra_e}")
 
         return entity
