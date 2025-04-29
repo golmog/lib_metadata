@@ -131,7 +131,8 @@ class SiteDmm:
             dmm_keyword = keyword
         logger.debug("keyword [%s] -> [%s]", keyword, dmm_keyword)
 
-        url = f"{cls.site_base_url}/digital/videoa/-/list/search/=/?searchstr={dmm_keyword}"
+        url = f"{cls.site_base_url}/mono/-/search/=/searchstr={dmm_keyword}/"
+        # url = f"{cls.site_base_url}/digital/videoa/-/list/search/=/?searchstr={dmm_keyword}" # xpath 변경 많음
         # url = '%s/search/=/?searchstr=%s' % (cls.site_base_url, dmm_keyword)
         # https://www.dmm.co.jp/search/=/searchstr=tsms00060/
 
