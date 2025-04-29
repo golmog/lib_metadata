@@ -15,9 +15,21 @@ class SiteDmm:
     module_char = "C"
     site_char = "D"
 
-    dmm_headers_minimal = {
-        "Referer": site_base_url + "/",
+    # --- DMM 전용 헤더 정의 ---
+    dmm_base_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36", # 최신으로 업데이트 권장
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Sec-Ch-Ua": '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin", # 요청에 따라 'none', 'cross-site' 등으로 변경될 수 있음
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        # "Referer": site_base_url + "/", # Referer는 요청 시 동적으로 설정
+        # "Cookie": # 쿠키는 SiteUtil.session에 의해 관리될 것으로 예상
     }
 
     PTN_SEARCH_CID = re.compile(r"\/cid=(?P<code>.*?)\/")
@@ -30,115 +42,99 @@ class SiteDmm:
     last_proxy_used = None
 
     @classmethod
+    def _get_request_headers(cls, referer=None):
+        """요청에 사용할 헤더를 생성합니다."""
+        headers = cls.dmm_base_headers.copy()
+        if referer:
+            headers['Referer'] = referer
+        # 필요에 따라 다른 헤더 동적 추가 가능
+        # 예: AJAX 요청 시 headers['X-Requested-With'] = 'XMLHttpRequest'
+        return headers
+
+    @classmethod
     def _ensure_age_verified(cls, proxy_url=None):
         """SiteUtil.session에 DMM 연령 확인 쿠키가 있는지 확인하고, 없으면 설정합니다."""
         if not cls.age_verified or cls.last_proxy_used != proxy_url:
             logger.debug("Checking/Performing DMM age verification...")
             cls.last_proxy_used = proxy_url
 
-            session_cookies = SiteUtil.session.cookies
+            session_cookies = SiteUtil.session.cookies # SiteUtil 세션의 쿠키 확인
             if 'age_check_done' in session_cookies and session_cookies.get('age_check_done') == '1':
                 logger.debug("Age verification cookie already present in SiteUtil.session.")
                 cls.age_verified = True
                 return True
 
             logger.debug("Attempting DMM age verification process...")
-
-            # --- 연령 확인 시뮬레이션 (SiteUtil 사용) ---
-            # 원래 접근하려던 URL (예: 검색 또는 상세 페이지)
-            # 이 예시에서는 검색 페이지 URL을 사용. 실제 상황에 맞게 조정 가능
-            # target_url_for_rurl = f"{cls.site_base_url}/mono/-/search/=/?searchstr=dummykeyword/" # 예시
-            # target_url_for_rurl = f"{cls.site_base_url}/digital/videoa/-/list/" # 이전 코드의 예시
-            # 더 일반적인 방법: 현재 요청하려는 URL을 기반으로 rurl 생성
-            # 여기서는 임시로 고정된 값을 사용하거나, 더 나은 방법은 _ensure_age_verified를 호출하는 쪽에서
-            # 원래 의도한 URL을 인자로 넘겨주는 것. 일단 기본 페이지로 시도.
-            initial_target_url = f"{cls.site_base_url}/digital/videoa/-/list/" # 성인 컨텐츠 섹션의 기본 페이지
+            initial_target_url = f"{cls.site_base_url}/digital/videoa/-/list/"
 
             try:
-                # 1. 초기 접속 시도 (리디렉션될 수 있음)
+                # 1. 초기 접속 시도
                 logger.debug(f"Accessing initial page to trigger age check if needed: {initial_target_url}")
-                headers = SiteUtil.default_headers.copy()
-                headers.update(cls.dmm_headers_minimal)
-
+                # DMM 전용 헤더 사용, Referer는 이 경우 필요 없을 수 있음
+                initial_headers = cls._get_request_headers()
                 initial_response = SiteUtil.get_response(
                     initial_target_url,
                     proxy_url=proxy_url,
-                    headers=headers,
-                    allow_redirects=False # 리디렉션 여부 직접 확인 위해 False로 설정
+                    headers=initial_headers, # 명시적 헤더 전달
+                    allow_redirects=False
                 )
-                # initial_response.raise_for_status() # 302는 에러가 아님
+                logger.debug(f"Initial response status code: {initial_response.status_code}")
+                logger.debug(f"Initial response headers: {initial_response.headers}")
+                logger.debug(f"Cookies *before* age check logic in SiteUtil.session: {SiteUtil.session.cookies.items()}")
 
                 current_url = initial_target_url
+                # 리디렉션 처리 (301, 302 등)
                 if initial_response.status_code in (301, 302, 307, 308) and 'Location' in initial_response.headers:
                     redirect_url = initial_response.headers['Location']
-                    # 상대 경로인 경우 절대 경로로 변환
-                    redirect_url = py_urllib.parse.urljoin(initial_target_url, redirect_url)
+                    redirect_url = py_urllib_parse.urljoin(initial_target_url, redirect_url)
                     logger.debug(f"Initial access redirected to: {redirect_url}")
-                    # 리디렉션된 URL이 연령 확인 페이지인지 확인
                     if "age_check" in redirect_url:
-                        current_url = redirect_url # 연령 확인 페이지 URL 업데이트
+                        current_url = redirect_url
                     else:
-                        # 연령 확인 페이지가 아니라 다른 곳으로 리디렉션 되면,
-                        # 이미 인증되었거나 다른 상황일 수 있음. 쿠키 확인으로 넘어감.
-                        logger.debug("Redirected, but not to age check page. Assuming verified or other state.")
-                        pass # 아래 쿠키 확인 로직으로 넘어감
+                        logger.debug("Redirected, but not to age check page.")
+                        pass
 
+                # 200 OK 처리
                 elif initial_response.status_code == 200:
-                    # 200 OK -> 이미 인증되었을 가능성
-                    logger.debug("Initial access returned 200 OK. Assuming already verified.")
-                    pass # 아래 쿠키 확인 로직으로 넘어감
+                    logger.debug("Initial access returned 200 OK.")
+                    logger.debug(f"Cookies *after* 200 OK in SiteUtil.session: {SiteUtil.session.cookies.items()}")
+                    pass
 
-                # 2. 연령 확인 페이지로 판단되면 확인 요청 전송
+                # 연령 확인 페이지에서 확인 요청 보내기
                 if "age_check" in current_url:
                     logger.debug(f"Currently at age check page: {current_url}. Sending confirmation GET request.")
+                    parsed_age_check_url = py_urllib_parse.urlparse(current_url)
+                    query_params = py_urllib_parse.parse_qs(parsed_age_check_url.query)
+                    rurl_value = query_params.get('rurl', [initial_target_url])[0]
 
-                    # --- 확인된 연령 확인 URL 및 메소드 사용 ---
-                    # rurl 값은 age_check 페이지 URL에서 추출하거나, 초기 접근 URL 사용 가능
-                    # age_check 페이지 URL에서 rurl 파라미터 값 추출 시도
-                    parsed_age_check_url = py_urllib.parse.urlparse(current_url)
-                    query_params = py_urllib.parse.parse_qs(parsed_age_check_url.query)
-                    rurl_value = query_params.get('rurl', [initial_target_url])[0] # 없으면 초기 URL 사용
-
-                    # 확인 요청 URL 구성
-                    # /age_check/=/declared=yes/?rurl=(encoded_rurl_value)
-                    # 주의: URL 경로에 '=' 문자가 포함되므로 문자열 포맷팅 주의
-                    confirm_path = f"/age_check/=/declared=yes/?rurl={py_urllib.parse.quote(rurl_value)}"
-                    age_check_confirm_url = py_urllib.parse.urljoin(cls.site_base_url, confirm_path)
-
+                    confirm_path = f"/age_check/=/declared=yes/?rurl={py_urllib_parse.quote(rurl_value)}"
+                    age_check_confirm_url = py_urllib_parse.urljoin(cls.site_base_url, confirm_path)
                     logger.debug(f"Constructed age confirmation URL: {age_check_confirm_url}")
 
-                    request_method = 'GET'
-                    confirm_headers = headers.copy()
-                    confirm_headers['Referer'] = current_url # 연령 확인 페이지가 Referer
+                    # 확인 요청 헤더 (Referer 포함)
+                    confirm_headers = cls._get_request_headers(referer=current_url)
 
                     confirm_response = SiteUtil.get_response(
                         age_check_confirm_url,
-                        method=request_method,
+                        method='GET',
                         proxy_url=proxy_url,
-                        headers=confirm_headers,
-                        allow_redirects=False # 302 응답 직접 확인
+                        headers=confirm_headers, # 명시적 헤더 전달
+                        allow_redirects=False
                     )
-                    # confirm_response.raise_for_status() # 302는 에러가 아님
-
-                    # 302 응답 및 Location 헤더, Set-Cookie 헤더 확인
+                    # 302 응답 및 쿠키 확인
                     if confirm_response.status_code == 302 and 'Location' in confirm_response.headers:
                         logger.debug(f"Age confirmation successful. Redirecting to: {confirm_response.headers['Location']}")
-                        # SiteUtil.session에 쿠키가 자동으로 설정되었는지 확인
-                        if 'age_check_done' in SiteUtil.session.cookies and SiteUtil.session.cookies.get('age_check_done') == '1':
-                            logger.debug("age_check_done=1 cookie confirmed in SiteUtil.session.")
-                            cls.age_verified = True
-                            return True
-                        else:
-                            logger.warning("Age confirmation redirected, but age_check_done cookie not found/set correctly in SiteUtil.session.")
-                            cls.age_verified = False
-                            return False
+                        logger.debug(f"Age confirmation redirect response headers: {confirm_response.headers}")
+                        logger.debug(f"Cookies *after* successful confirmation GET in SiteUtil.session: {SiteUtil.session.cookies.items()}")
+                        # 쿠키 최종 확인은 아래에서 공통으로 처리
                     else:
                         logger.warning(f"Age confirmation request did not return expected 302 redirect. Status: {confirm_response.status_code}")
-                        cls.age_verified = False
-                        return False
+                        # 실패 시 쿠키 확인으로 넘어가면 어차피 실패할 것임
 
-                # 3. 연령 확인 과정이 필요 없었거나, 이미 통과된 경우 최종 쿠키 확인
-                if 'age_check_done' not in SiteUtil.session.cookies or SiteUtil.session.cookies.get('age_check_done') != '1':
+                # 최종 쿠키 확인
+                final_cookies = SiteUtil.session.cookies
+                logger.debug(f"Cookies *before* final check in SiteUtil.session: {final_cookies.items()}")
+                if 'age_check_done' not in final_cookies or final_cookies.get('age_check_done') != '1':
                     logger.warning("Age check cookie 'age_check_done' not found or invalid in SiteUtil.session.")
                     cls.age_verified = False
                     return False
@@ -152,13 +148,11 @@ class SiteDmm:
                 cls.age_verified = False
                 return False
         else:
-            # 이미 확인됨
             return True
 
 
     @classmethod
     def __search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
-        # 연령 확인 선행
         if not cls._ensure_age_verified(proxy_url=proxy_url):
             logger.error("DMM age verification failed. Cannot proceed with search.")
             return []
@@ -180,16 +174,15 @@ class SiteDmm:
         # url = '%s/search/=/?searchstr=%s' % (cls.site_base_url, dmm_keyword)
         # https://www.dmm.co.jp/search/=/searchstr=tsms00060/
 
-        # SiteUtil.get_tree 호출 (자동으로 SiteUtil.session의 쿠키 사용)
-        # 헤더 병합 필요 시 주의
-        headers = SiteUtil.default_headers.copy()
-        headers.update(cls.dmm_headers_minimal)
+        logger.debug(f"Using search URL: {url}")
+
+        # 검색 요청 헤더 (Referer는 보통 필요 없음, 필요시 이전 페이지 URL 등 설정)
+        search_headers = cls._get_request_headers()
         try:
-            tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=headers)
+            # 명시적 헤더 전달
+            tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=search_headers)
         except Exception as e:
             logger.exception(f"Failed to get tree for search URL: {url}")
-            # 연령 확인 문제 재발 가능성? 다시 시도하도록 age_verified 초기화? (선택적)
-            # cls.age_verified = False
             return []
 
         if tree is None:
@@ -339,19 +332,19 @@ class SiteDmm:
         # 연령 확인 선행
         if not cls._ensure_age_verified(proxy_url=proxy_url):
             logger.error("DMM age verification failed. Cannot proceed with info.")
-            raise Exception("DMM age verification failed. Cannot proceed with info.")
+            raise Exception("DMM age verification failed.")
 
-        url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={code[2:]}/"
+        url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={code[2:]}/" # 상세 페이지 URL 확인 필요! mono 쪽일 수도 있음
+        logger.debug(f"Using info URL: {url}")
 
-        # SiteUtil.get_tree 호출 (자동으로 SiteUtil.session의 쿠키 사용)
-        headers = SiteUtil.default_headers.copy()
-        headers.update(cls.dmm_headers_minimal)
+        # 상세 정보 요청 헤더 (Referer는 검색 결과 페이지 URL 등 설정 가능)
+        info_headers = cls._get_request_headers() # 필요시 referer 추가
         try:
-            tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=headers)
+            # 명시적 헤더 전달
+            tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=info_headers)
         except Exception as e:
             logger.exception(f"Failed to get tree for info URL: {url}")
-            # cls.age_verified = False # 선택적 초기화
-            raise Exception(f"Failed to get tree for info URL: {url}") # 정보 조회 실패 시 예외 발생
+            raise Exception(f"Failed to get tree for info URL: {url}")
 
         if tree is None:
             logger.warning(f"Failed to get tree for URL: {url}")
