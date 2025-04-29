@@ -54,100 +54,80 @@ class SiteDmm:
     @classmethod
     def _ensure_age_verified(cls, proxy_url=None):
         """SiteUtil.session에 DMM 연령 확인 쿠키가 있는지 확인하고, 없으면 설정합니다."""
+        # 프록시 변경 시 또는 아직 미확인 시 확인 절차 진행
         if not cls.age_verified or cls.last_proxy_used != proxy_url:
             logger.debug("Checking/Performing DMM age verification...")
             cls.last_proxy_used = proxy_url
 
-            session_cookies = SiteUtil.session.cookies # SiteUtil 세션의 쿠키 확인
+            session_cookies = SiteUtil.session.cookies
+            # 이미 유효한 쿠키가 있으면 바로 통과
             if 'age_check_done' in session_cookies and session_cookies.get('age_check_done') == '1':
                 logger.debug("Age verification cookie already present in SiteUtil.session.")
                 cls.age_verified = True
                 return True
 
-            logger.debug("Attempting DMM age verification process...")
-            initial_target_url = f"{cls.site_base_url}/digital/videoa/-/list/"
+            logger.debug("Attempting DMM age verification process by directly sending confirmation GET.")
 
+            # --- 바로 연령 확인 GET 요청 시도 ---
             try:
-                # 1. 초기 접속 시도
-                logger.debug(f"Accessing initial page to trigger age check if needed: {initial_target_url}")
-                # DMM 전용 헤더 사용, Referer는 이 경우 필요 없을 수 있음
-                initial_headers = cls._get_request_headers()
-                initial_response = SiteUtil.get_response(
-                    initial_target_url,
+                # 원래 가려던 URL (rurl 값). 어디로든 상관없을 수 있으나, 기본 성인 페이지로 설정
+                target_rurl = f"{cls.site_base_url}/digital/videoa/-/list/"
+
+                # 확인 요청 URL 구성
+                confirm_path = f"/age_check/=/declared=yes/?rurl={py_urllib_parse.quote(target_rurl)}"
+                age_check_confirm_url = py_urllib_parse.urljoin(cls.site_base_url, confirm_path)
+                logger.debug(f"Constructed age confirmation URL: {age_check_confirm_url}")
+
+                # 확인 요청 헤더 (Referer는 이 경우 없거나 기본 URL)
+                # Referer가 필수인지 확인 필요. 이전 요청 분석 시 Referer가 age_check 페이지였음.
+                # age_check 페이지를 거치지 않으므로 Referer를 설정하지 않거나, cls.site_base_url + "/" 로 설정 시도.
+                confirm_headers = cls._get_request_headers(referer=cls.site_base_url + "/") # 기본 Referer 시도
+
+                confirm_response = SiteUtil.get_response(
+                    age_check_confirm_url,
+                    method='GET',
                     proxy_url=proxy_url,
-                    headers=initial_headers, # 명시적 헤더 전달
-                    allow_redirects=False
+                    headers=confirm_headers, # 명시적 헤더 전달
+                    allow_redirects=False # 302 응답 직접 확인
                 )
-                logger.debug(f"Initial response status code: {initial_response.status_code}")
-                logger.debug(f"Initial response headers: {initial_response.headers}")
-                logger.debug(f"Cookies *before* age check logic in SiteUtil.session: {SiteUtil.session.cookies.items()}")
+                logger.debug(f"Confirmation GET response status code: {confirm_response.status_code}")
+                logger.debug(f"Confirmation GET response headers: {confirm_response.headers}")
+                logger.debug(f"Cookies *after* confirmation GET in SiteUtil.session: {SiteUtil.session.cookies.items()}")
 
-                current_url = initial_target_url
-                # 리디렉션 처리 (301, 302 등)
-                if initial_response.status_code in (301, 302, 307, 308) and 'Location' in initial_response.headers:
-                    redirect_url = initial_response.headers['Location']
-                    redirect_url = py_urllib_parse.urljoin(initial_target_url, redirect_url)
-                    logger.debug(f"Initial access redirected to: {redirect_url}")
-                    if "age_check" in redirect_url:
-                        current_url = redirect_url
+                # 302 응답 및 쿠키 확인
+                if confirm_response.status_code == 302 and 'Location' in confirm_response.headers:
+                    # Set-Cookie 헤더가 있는지 응답 헤더에서 직접 확인 (SiteUtil.session 업데이트 전)
+                    set_cookie_header = confirm_response.headers.get('Set-Cookie', '')
+                    if 'age_check_done=1' in set_cookie_header:
+                        logger.debug("Age confirmation successful. 'age_check_done=1' found in Set-Cookie header.")
+                        # SiteUtil.session 쿠키 업데이트 기다리거나, 바로 확인
+                        # 잠시 대기 후 확인 (선택적)
+                        # import time
+                        # time.sleep(0.1)
+                        final_cookies = SiteUtil.session.cookies
+                        if 'age_check_done' in final_cookies and final_cookies.get('age_check_done') == '1':
+                            logger.debug("age_check_done=1 cookie confirmed in SiteUtil.session.")
+                            cls.age_verified = True
+                            return True
+                        else:
+                            logger.warning("Set-Cookie header received, but age_check_done cookie not updated correctly in SiteUtil.session.")
+                            cls.age_verified = False
+                            return False
                     else:
-                        logger.debug("Redirected, but not to age check page.")
-                        pass
-
-                # 200 OK 처리
-                elif initial_response.status_code == 200:
-                    logger.debug("Initial access returned 200 OK.")
-                    logger.debug(f"Cookies *after* 200 OK in SiteUtil.session: {SiteUtil.session.cookies.items()}")
-                    pass
-
-                # 연령 확인 페이지에서 확인 요청 보내기
-                if "age_check" in current_url:
-                    logger.debug(f"Currently at age check page: {current_url}. Sending confirmation GET request.")
-                    parsed_age_check_url = py_urllib_parse.urlparse(current_url)
-                    query_params = py_urllib_parse.parse_qs(parsed_age_check_url.query)
-                    rurl_value = query_params.get('rurl', [initial_target_url])[0]
-
-                    confirm_path = f"/age_check/=/declared=yes/?rurl={py_urllib_parse.quote(rurl_value)}"
-                    age_check_confirm_url = py_urllib_parse.urljoin(cls.site_base_url, confirm_path)
-                    logger.debug(f"Constructed age confirmation URL: {age_check_confirm_url}")
-
-                    # 확인 요청 헤더 (Referer 포함)
-                    confirm_headers = cls._get_request_headers(referer=current_url)
-
-                    confirm_response = SiteUtil.get_response(
-                        age_check_confirm_url,
-                        method='GET',
-                        proxy_url=proxy_url,
-                        headers=confirm_headers, # 명시적 헤더 전달
-                        allow_redirects=False
-                    )
-                    # 302 응답 및 쿠키 확인
-                    if confirm_response.status_code == 302 and 'Location' in confirm_response.headers:
-                        logger.debug(f"Age confirmation successful. Redirecting to: {confirm_response.headers['Location']}")
-                        logger.debug(f"Age confirmation redirect response headers: {confirm_response.headers}")
-                        logger.debug(f"Cookies *after* successful confirmation GET in SiteUtil.session: {SiteUtil.session.cookies.items()}")
-                        # 쿠키 최종 확인은 아래에서 공통으로 처리
-                    else:
-                        logger.warning(f"Age confirmation request did not return expected 302 redirect. Status: {confirm_response.status_code}")
-                        # 실패 시 쿠키 확인으로 넘어가면 어차피 실패할 것임
-
-                # 최종 쿠키 확인
-                final_cookies = SiteUtil.session.cookies
-                logger.debug(f"Cookies *before* final check in SiteUtil.session: {final_cookies.items()}")
-                if 'age_check_done' not in final_cookies or final_cookies.get('age_check_done') != '1':
-                    logger.warning("Age check cookie 'age_check_done' not found or invalid in SiteUtil.session.")
+                        logger.warning("Age confirmation redirected, but 'age_check_done=1' not found in Set-Cookie header.")
+                        cls.age_verified = False
+                        return False
+                else:
+                    logger.warning(f"Age confirmation GET request did not return expected 302 redirect. Status: {confirm_response.status_code}")
                     cls.age_verified = False
                     return False
-                else:
-                    logger.debug("Age check cookie 'age_check_done' confirmed in SiteUtil.session.")
-                    cls.age_verified = True
-                    return True
 
             except Exception as e:
                 logger.exception(f"Failed during DMM age verification process: {e}")
                 cls.age_verified = False
                 return False
         else:
+            # 이미 확인됨
             return True
 
 
