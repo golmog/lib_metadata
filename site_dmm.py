@@ -273,7 +273,8 @@ class SiteDmm:
             # manual 인자 전달 확인
             return cls.__search(new_title, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode, manual=manual)
 
-        return sorted(ret, key=lambda k: k["score"], reverse=True)
+        # --- 점수 순 정렬 (객체 속성 접근 방식으로 수정) ---
+        return sorted(ret, key=lambda k: k.score, reverse=True)
 
     @classmethod
     def search(cls, keyword, **kwargs):
