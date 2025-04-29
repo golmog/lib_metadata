@@ -15,11 +15,9 @@ class SiteDmm:
     module_char = "C"
     site_char = "D"
 
-    dmm_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+    dmm_headers_minimal = {
+        "Referer": site_base_url + "/",
         "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Cookie": "age_check_done=1",
     }
 
     PTN_SEARCH_CID = re.compile(r"\/cid=(?P<code>.*?)\/")
@@ -27,8 +25,100 @@ class SiteDmm:
     PTN_ID = re.compile(r"\d{2}id", re.I)
     PTN_RATING = re.compile(r"(?P<rating>[\d|_]+)\.gif")
 
+    # --- 연령 확인 상태 관리 변수 ---
+    age_verified = False
+    last_proxy_used = None
+
+    @classmethod
+    def _ensure_age_verified(cls, proxy_url=None):
+        """SiteUtil.session에 DMM 연령 확인 쿠키가 있는지 확인하고, 없으면 설정합니다."""
+        # 프록시가 변경되었거나 아직 확인되지 않았으면 재확인 시도
+        if not cls.age_verified or cls.last_proxy_used != proxy_url:
+            logger.debug("Checking/Performing DMM age verification...")
+            cls.last_proxy_used = proxy_url # 현재 사용 프록시 기록
+
+            # SiteUtil 세션에 이미 쿠키가 있는지 먼저 확인
+            session_cookies = SiteUtil.session.cookies
+            if 'age_check_done' in session_cookies and session_cookies.get('age_check_done') == '1':
+                # 간단하게 age_check_done=1 만 확인 (더 엄격하게 검사 가능)
+                # 혹은 만료 시간 체크 등 추가
+                logger.debug("Age verification cookie already present in SiteUtil.session.")
+                cls.age_verified = True
+                return True
+
+            logger.debug("Attempting DMM age verification process...")
+
+            # --- 연령 확인 시뮬레이션 (SiteUtil 사용) ---
+            # 실제 DMM 사이트의 네트워크 요청 분석을 통해 정확한 URL과 파라미터 확인 필요!
+            age_check_page_url = f"{cls.site_base_url}/digital/videoa/-/list/" # 성인 컨텐츠 페이지 시도
+            age_check_confirm_url = f"{cls.site_base_url}/age_check/ajax_set_age/" # 이 URL과 방식은 추측! 실제 확인 필요
+
+            try:
+                # 1. 초기 접속 시도 (리디렉션될 수 있음, SiteUtil.session 사용)
+                logger.debug(f"Accessing initial page: {age_check_page_url}")
+                # get_response 사용 시 헤더 병합 주의 (SiteUtil 기본 헤더 + Dmm 필요 헤더)
+                headers = SiteUtil.default_headers.copy()
+                headers.update(cls.dmm_headers_minimal)
+
+                # SiteUtil.get_response는 session을 자동으로 사용함
+                initial_response = SiteUtil.get_response(
+                    age_check_page_url,
+                    proxy_url=proxy_url,
+                    headers=headers,
+                    allow_redirects=True # 리디렉션 따라가기
+                )
+                initial_response.raise_for_status()
+                current_url = initial_response.url # 리디렉션 후 최종 URL
+
+                # 2. 연령 확인 페이지로 리디렉션 되었는지 확인 및 확인 요청 전송
+                if "age_check" in current_url:
+                    logger.debug(f"Redirected to age check: {current_url}. Attempting confirmation POST.")
+                    # POST 데이터 구성 (매우 중요: 실제 DMM 요청 분석 필요!)
+                    post_data = {
+                        'rurl': age_check_page_url, # 원래 가려던 주소 (필요 여부 확인)
+                        'age_check_flag': '1',      # '예' 버튼 값 (추측)
+                        # 기타 토큰 등이 필요할 수 있음
+                    }
+                    # Referer 헤더 추가 중요
+                    confirm_headers = headers.copy()
+                    confirm_headers['Referer'] = current_url
+
+                    confirm_response = SiteUtil.get_response(
+                        age_check_confirm_url,
+                        method='POST',
+                        post_data=post_data,
+                        proxy_url=proxy_url,
+                        headers=confirm_headers
+                    )
+                    confirm_response.raise_for_status()
+                    logger.debug(f"Age confirmation POST sent. Response URL: {confirm_response.url}")
+                    # POST 후 SiteUtil.session.cookies에 age_check_done 등이 설정되었는지 확인
+
+                # 3. 확인 후 쿠키 설정 확인 (SiteUtil.session 사용)
+                if 'age_check_done' not in SiteUtil.session.cookies or SiteUtil.session.cookies.get('age_check_done') != '1':
+                    logger.warning("Age check cookie 'age_check_done' not found or invalid in SiteUtil.session after process. Verification might have failed.")
+                    cls.age_verified = False
+                    return False
+                else:
+                    logger.debug("Age check cookie 'age_check_done' found in SiteUtil.session.")
+                    cls.age_verified = True
+                    return True
+
+            except Exception as e: # requests.exceptions.RequestException 뿐 아니라 다른 예외도 잡기
+                logger.exception(f"Failed during DMM age verification process: {e}")
+                cls.age_verified = False
+                return False
+        else:
+            # 이미 확인됨
+            return True
+
     @classmethod
     def __search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
+        # 연령 확인 선행
+        if not cls._ensure_age_verified(proxy_url=proxy_url):
+            logger.error("DMM age verification failed. Cannot proceed with search.")
+            return []
+
         keyword = keyword.strip().lower()
         # 2020-06-24
         if keyword[-3:-1] == "cd":
@@ -44,7 +134,23 @@ class SiteDmm:
         url = f"{cls.site_base_url}/digital/videoa/-/list/search/=/?searchstr={dmm_keyword}"
         # url = '%s/search/=/?searchstr=%s' % (cls.site_base_url, dmm_keyword)
         # https://www.dmm.co.jp/search/=/searchstr=tsms00060/
-        tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers)
+
+        # SiteUtil.get_tree 호출 (자동으로 SiteUtil.session의 쿠키 사용)
+        # 헤더 병합 필요 시 주의
+        headers = SiteUtil.default_headers.copy()
+        headers.update(cls.dmm_headers_minimal)
+        try:
+            tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=headers)
+        except Exception as e:
+            logger.exception(f"Failed to get tree for search URL: {url}")
+            # 연령 확인 문제 재발 가능성? 다시 시도하도록 age_verified 초기화? (선택적)
+            # cls.age_verified = False
+            return []
+
+        if tree is None:
+            logger.warning(f"Failed to get tree for URL: {url}")
+            return []
+
         lists = tree.xpath('//*[@id="list"]/li')
         logger.debug("dmm search len lists2 :%s", len(lists))
 
@@ -184,8 +290,27 @@ class SiteDmm:
         ps_to_poster=False,
         crop_mode=None,
     ):
+
+        # 연령 확인 선행
+        if not cls._ensure_age_verified(proxy_url=proxy_url):
+            logger.error("DMM age verification failed. Cannot proceed with info.")
+            raise Exception("DMM age verification failed. Cannot proceed with info.")
+
         url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={code[2:]}/"
-        tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.dmm_headers)
+
+        # SiteUtil.get_tree 호출 (자동으로 SiteUtil.session의 쿠키 사용)
+        headers = SiteUtil.default_headers.copy()
+        headers.update(cls.dmm_headers_minimal)
+        try:
+            tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=headers)
+        except Exception as e:
+            logger.exception(f"Failed to get tree for info URL: {url}")
+            # cls.age_verified = False # 선택적 초기화
+            raise Exception(f"Failed to get tree for info URL: {url}") # 정보 조회 실패 시 예외 발생
+
+        if tree is None:
+            logger.warning(f"Failed to get tree for URL: {url}")
+            raise Exception(f"Failed to get tree for URL: {url}")
 
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]

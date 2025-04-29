@@ -70,7 +70,7 @@ class SiteMgstage:
                 tag = node.xpath(".//img")[0]
                 item.image_url = tag.attrib["src"]
 
-                tag = node.xpath('.//p[@class="title lineclamp"]')[0]
+                tag = node.xpath('.//a[@class="title lineclamp"]')[0]
                 title = tag.text_content()
                 for ptn in cls.PTN_TEXT_SUB:
                     title = ptn.sub("", title)
