@@ -203,33 +203,29 @@ class SiteDmm:
                 if already_exist:
                     continue
 
-                # --- 이미지, 제목 XPath ---
+                # 이미지, 제목 추출
                 img_tag_xpath = './/p[@class="tmb"]/a/span[@class="img"]/img'
                 img_tags = node.xpath(img_tag_xpath)
                 if img_tags:
                     img_tag = img_tags[0]
                     item.title = item.title_ko = img_tag.attrib.get("alt", "").strip()
-                    item.image_url = img_tag.attrib.get("src")
-                    if item.image_url and not item.image_url.startswith("http"):
-                        item.image_url = "https:" + item.image_url
+                    # --- 원본 URL 저장 ---
+                    original_ps_url = img_tag.attrib.get("src")
+                    if original_ps_url and not original_ps_url.startswith("http"):
+                        original_ps_url = "https:" + original_ps_url
+                    item.original_image_url = original_ps_url # 원본 URL 저장
+
+                    # manual 모드에 따라 image_url 설정
+                    if manual:
+                        _image_mode = "1" if image_mode != "0" else image_mode
+                        # process_image_mode에는 원본 URL 전달
+                        item.image_url = SiteUtil.process_image_mode(_image_mode, item.original_image_url, proxy_url=proxy_url)
+                    else:
+                        item.image_url = item.original_image_url # manual 아니면 원본 URL 사용
                 else:
-                    # 기본값 설정
                     item.title = item.title_ko = "제목 정보 없음"
                     item.image_url = None
-
-                # 이미지 처리
-                if manual and item.image_url: # 이미지가 있을 때만 처리
-                    _image_mode = "1" if image_mode != "0" else image_mode
-                    item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
-
-                # 제목 번역
-                if do_trans:
-                    if manual:
-                        item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
-                    elif item.title:
-                        item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
-                else:
-                    item.title_ko = item.title
+                    item.original_image_url = None # 원본도 없음
 
                 # UI 코드 추출 및 점수 계산
                 match_real_no = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
@@ -260,8 +256,17 @@ class SiteDmm:
                     else: item.ui_code = item.ui_code.replace("00", "-").upper()
                     if item.ui_code.endswith("-"): item.ui_code = item.ui_code[:-1] + "00"
 
-                logger.debug(f"Item found - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title}, ps_url: {item.image_url}")
-                ret.append(item) # 딕셔너리 대신 객체 추가
+                if not manual: # manual=False 일 때만 번역 수행하도록 변경 (예시)
+                    if do_trans and item.title:
+                        item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
+                    else:
+                        item.title_ko = item.title
+                else:
+                    # manual=True 시 번역 비활성화 메시지 표시 (선택적)
+                    item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
+
+                logger.debug(f"Item found - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title}, Original PS URL: {item.original_image_url}")
+                ret.append(item)
 
             except Exception as e:
                 logger.exception(f"Error processing individual search result item: {e}")
@@ -294,32 +299,6 @@ class SiteDmm:
             ret["ret"] = "success" if data_list else "no_match"
             ret["data"] = data_list # 딕셔너리 리스트 반환
         return ret
-
-    @classmethod
-    def __img_urls(cls, tree):
-        """collect raw image urls from html page"""
-
-        # poster small
-        # 세로 이미지 / 저화질 썸네일
-        # 없는 경우가 있나?
-        ps = tree.xpath('//div[@id="sample-video"]//img/@src')
-        ps = ps[0] if ps else ""
-        if not ps:
-            logger.warning("이미지 URL을 얻을 수 없음: poster small")
-
-        # poster large
-        # 보통 가로 이미지
-        # 세로도 있음 zooo-067
-        # 없는 경우도 있음 tsds-42464
-        pl = tree.xpath('//div[@id="sample-video"]/a/@href')
-        pl = pl[0] if pl else ""
-
-        # fanart
-        # 없는 경우도 있음 h_1237thtp00052
-        # 첫번째 혹은 마지막에 고화질 포스터가 있을 수 있음
-        arts = tree.xpath('//a[@name="sample-image"]/@href')
-
-        return {"ps": ps, "pl": pl, "arts": arts}
 
     @classmethod
     def __info(
@@ -360,15 +339,12 @@ class SiteDmm:
         img_urls['pl'] = ("https:" + pl_tags[0]) if pl_tags and not pl_tags[0].startswith("http") else (pl_tags[0] if pl_tags else "")
         if not img_urls['pl']: logger.warning("고화질 메인 이미지(pl) URL을 얻을 수 없음.")
 
-        # ps 추출 (search 결과에서 전달받음)
-        img_urls['ps'] = ps_url if ps_url else "" # 전달받은 ps_url 사용
+        # ps 설정 (전달받은 원본 ps URL 사용)
+        img_urls['ps'] = ps_url if ps_url else ""
         if not img_urls['ps']:
             logger.warning("저화질 썸네일 이미지(ps) URL을 전달받지 못했거나 유효하지 않음.")
-            # ps가 없으면 pl을 fallback으로 사용 (오류 방지)
-            if img_urls.get('pl'):
-                img_urls['ps'] = img_urls['pl']
-            else:
-                logger.error("Both pl and ps URLs are missing.")
+            if img_urls.get('pl'): img_urls['ps'] = img_urls['pl']
+            else: logger.error("Both pl and ps URLs are missing.")
 
         # 팬아트 (첫 번째 샘플 제외)
         arts_xpath = '//li[contains(@class, "fn-sampleImage__zoom") and not(@data-slick-index="0")]//img'
@@ -755,14 +731,24 @@ class SiteDmm:
 
     @classmethod
     def info(cls, code, **kwargs):
+        # --- 중요: kwargs에서 'original_image_url' 값을 꺼내 ps_url로 전달해야 함 ---
+        # 에이전트 로직 예시:
+        # search_result_dict = agent.call_search(...) # search 결과 딕셔너리
+        # selected_code = search_result_dict['code']
+        # original_ps = search_result_dict.get('original_image_url') # 원본 URL 가져오기
+        # info_result = SiteDmm.info(selected_code, ps_url=original_ps, ...) # ps_url 인자로 전달!
+
+        # 실제 info 메소드 구현
         ret = {}
+        # kwargs에서 ps_url 추출 (에이전트가 전달했다는 가정)
+        original_ps_url = kwargs.pop('ps_url', None)
         try:
-            entity = cls.__info(code, **kwargs)
+            # __info 호출 시 추출한 원본 ps_url 전달
+            entity = cls.__info(code, ps_url=original_ps_url, **kwargs)
+            ret["ret"] = "success"
+            ret["data"] = entity.as_dict()
         except Exception as exception:
             logger.exception("메타 정보 처리 중 예외:")
             ret["ret"] = "exception"
             ret["data"] = str(exception)
-        else:
-            ret["ret"] = "success"
-            ret["data"] = entity.as_dict()
         return ret

@@ -14,6 +14,7 @@ class EntityAVSearch(object):
         self.score = 0
         self.desc = ''
         self.year = 1900
+        self.original_image_url = None # 원본 이미지 URL 속성 추가
 
 
     def __repr__(self):
@@ -40,4 +41,5 @@ class EntityAVSearch(object):
             'score' : self.score,
             'desc' : self.desc,
             'year' : self.year,
+            'original_image_url': self.original_image_url, # 원본 URL 추가
         }
