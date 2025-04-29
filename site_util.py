@@ -395,57 +395,86 @@ class SiteUtil:
     @classmethod
     def is_hq_poster(cls, im_sm, im_lg, proxy_url=None):
         try:
-            from imagehash import dhash as hfun  # threshold = [11, 18]
+            # --- imopen 호출 전에 URL 유효성 검사 ---
+            if not im_sm or not isinstance(im_sm, str) or not im_lg or not isinstance(im_lg, str):
+                logger.debug("is_hq_poster: Invalid or empty URL provided.")
+                return False # 유효하지 않은 URL 입력 시 False 반환
 
-            im_sm = cls.imopen(im_sm, proxy_url=proxy_url)
-            im_lg = cls.imopen(im_lg, proxy_url=proxy_url)
-            ws, hs = im_sm.size
-            wl, hl = im_lg.size
-            if ws > wl or hs > hl:
-                # large image is not large enough
-                return False
-            if abs(ws / hs - wl / hl) > 0.1:
-                # aspect ratio is quite different
-                return False
-            hdis = hfun(im_sm) - hfun(im_lg)
-            if hdis >= 14:
-                return False
-            if hdis <= 6:
-                return True
-            from imagehash import phash as hfun
+            im_sm_obj = cls.imopen(im_sm, proxy_url=proxy_url)
+            im_lg_obj = cls.imopen(im_lg, proxy_url=proxy_url)
 
-            hdis += hfun(im_sm) - hfun(im_lg)
-            return hdis < 20  # threshold = [15, 25]
-        except ImportError:
-            return False
-        except Exception:
-            logger.exception("고화질 포스터 확인 중 예외:")
+            # --- imopen 결과 확인 ---
+            if im_sm_obj is None or im_lg_obj is None:
+                logger.debug("is_hq_poster: Failed to open one or both images.")
+                return False
+
+            try:
+                from imagehash import dhash as hfun
+                ws, hs = im_sm_obj.size
+                wl, hl = im_lg_obj.size
+                if ws > wl or hs > hl: return False
+                if abs(ws / hs - wl / hl) > 0.1: return False
+
+                hdis = hfun(im_sm_obj) - hfun(im_lg_obj)
+                if hdis >= 14: return False
+                if hdis <= 6: return True
+
+                from imagehash import phash
+                hdis += phash(im_sm_obj) - phash(im_lg_obj)
+                return hdis < 20
+            except ImportError:
+                logger.warning("ImageHash library not found, cannot perform is_hq_poster check.")
+                return False
+            except Exception as hash_e:
+                logger.exception(f"Error during image hash comparison in is_hq_poster: {hash_e}")
+                return False
+        except Exception as e:
+            logger.exception(f"고화질 포스터 확인 중 예외: {e}")
             return False
 
     @classmethod
     def has_hq_poster(cls, im_sm, im_lg, proxy_url=None):
         try:
-            from imagehash import \
-                average_hash as \
-                hfun  # crop한 이미지의 align이 확실하지 않아서 average_hash가 더 적합함
+            # --- imopen 호출 전에 URL 유효성 검사 ---
+            if not im_sm or not isinstance(im_sm, str) or not im_lg or not isinstance(im_lg, str):
+                logger.debug("has_hq_poster: Invalid or empty URL provided.")
+                return None # 유효하지 않은 URL 입력 시 None 반환
 
-            im_sm = cls.imopen(im_sm, proxy_url=proxy_url)
-            im_lg = cls.imopen(im_lg, proxy_url=proxy_url)
-            ws, hs = im_sm.size
-            wl, hl = im_lg.size
-            if ws > wl or hs > hl:
-                # large image is not large enough
+            im_sm_obj = cls.imopen(im_sm, proxy_url=proxy_url)
+            im_lg_obj = cls.imopen(im_lg, proxy_url=proxy_url)
+
+            # --- imopen 결과 확인 ---
+            if im_sm_obj is None or im_lg_obj is None:
+                logger.debug("has_hq_poster: Failed to open one or both images.")
                 return None
+            try:
+                from imagehash import average_hash as hfun
+                ws, hs = im_sm_obj.size
+                wl, hl = im_lg_obj.size
+                if ws > wl or hs > hl: return None
 
-            for pos in ["r", "l", "c"]:
-                val = hfun(im_sm) - hfun(cls.imcrop(im_lg, position=pos))
-                if val <= 10:
-                    return pos
-        except ImportError:
-            pass
-        except Exception:
-            logger.exception("고화질 포스터 확인 중 예외:")
-        return None
+                for pos in ["r", "l", "c"]:
+                    try:
+                        cropped_im = cls.imcrop(im_lg_obj, position=pos)
+                        if cropped_im is None: continue
+                        val = hfun(im_sm_obj) - hfun(cropped_im)
+                        if val <= 10:
+                            logger.debug(f"has_hq_poster: Found similar region at position '{pos}'.")
+                            return pos
+                    except Exception as crop_comp_e:
+                        logger.warning(f"Error comparing cropped image at pos '{pos}': {crop_comp_e}")
+                        continue
+                logger.debug("has_hq_poster: No similar region found.")
+                return None
+            except ImportError:
+                logger.warning("ImageHash library not found, cannot perform has_hq_poster check.")
+                return None
+            except Exception as hash_e:
+                logger.exception(f"Error during image hash comparison in has_hq_poster: {hash_e}")
+                return None
+        except Exception as e:
+            logger.exception(f"고화질 포스터 확인 중 예외: {e}")
+            return None
 
     @classmethod
     def change_html(cls, text):

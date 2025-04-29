@@ -367,12 +367,19 @@ class SiteDmm:
                     if match_rating:
                         rating_value_str = match_rating.group("rating").replace("_", ".")
                         try:
-                            rating_value = float(rating_value_str)
+                            # --- 평점 값 10으로 나누기 ---
+                            rating_value = float(rating_value_str) / 10.0
                             rating_img_url = "https:" + rating_img_tags[0] if not rating_img_tags[0].startswith("http") else rating_img_tags[0]
-                            entity.ratings = [EntityRatings(rating_value, max=5, name="dmm", image_url=rating_img_url)]
-                            logger.debug(f"Rating found from table: {rating_value}")
-                        except ValueError: logger.warning(f"Could not convert rating value to float: {rating_value_str}")
-                    else: logger.warning(f"Could not parse rating from image src: {rating_img_tags[0]}")
+                            # 평점 범위 확인 (선택적)
+                            if 0 <= rating_value <= 5:
+                                entity.ratings = [EntityRatings(rating_value, max=5, name="dmm", image_url=rating_img_url)]
+                                logger.debug(f"Rating found from table (raw: {rating_value_str}, adjusted: {rating_value})")
+                            else:
+                                logger.warning(f"Parsed rating value {rating_value} is out of range (0-5).")
+                        except ValueError:
+                            logger.warning(f"Could not convert rating value to float: {rating_value_str}")
+                    else:
+                        logger.warning(f"Could not parse rating from image src: {rating_img_tags[0]}")
                 continue # 다음 행으로
 
             # 일반 정보 행 처리
