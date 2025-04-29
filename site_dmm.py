@@ -359,11 +359,20 @@ class SiteDmm:
         if not img_urls['pl']:
             logger.warning("고화질 메인 이미지(pl) URL을 얻을 수 없음.")
 
-        # 저화질 첫 번째 샘플 이미지 (ps 역할)
-        ps_xpath = '//li[contains(@class, "fn-sampleImage__zoom") and @data-slick-index="0"]//img/@src'
-        ps_tags = tree.xpath(ps_xpath)
-        img_urls['ps'] = ("https:" + ps_tags[0]) if ps_tags and not ps_tags[0].startswith("http") else (ps_tags[0] if ps_tags else "")
-        if not img_urls['ps']:
+        # 저화질 첫 번째 샘플 이미지 (ps 역할) - XPath 수정 및 예외 처리 강화
+        # ps_xpath_alt1 = '//ul[@id="sample-image-block"]/div/div/li[@data-slick-index="0"]//img/@src'
+        ps_xpath_alt2 = '//ul[@id="sample-image-block"]/div/div/li[1]//img/@src' # 첫 번째 li 직접 지정 시도
+        ps_tags = tree.xpath(ps_xpath_alt2)
+        if ps_tags:
+            img_urls['ps'] = ("https:" + ps_tags[0]) if ps_tags[0] and not ps_tags[0].startswith("http") else ps_tags[0]
+        else:
+            # 첫 번째 XPath도 시도해 볼 수 있음 (선택적)
+            # ps_xpath_orig = '//li[contains(@class, "fn-sampleImage__zoom") and @data-slick-index="0"]//img/@src'
+            # ps_tags_orig = tree.xpath(ps_xpath_orig)
+            # if ps_tags_orig:
+            #     img_urls['ps'] = ("https:" + ps_tags_orig[0]) if ps_tags_orig[0] and not ps_tags_orig[0].startswith("http") else ps_tags_orig[0]
+            # else:
+            img_urls['ps'] = "" # 최종적으로 못 찾으면 빈 문자열 할당
             logger.warning("저화질 썸네일 이미지(ps) URL을 얻을 수 없음.")
 
         # 팬아트 (첫 번째 샘플 제외)
@@ -377,6 +386,20 @@ class SiteDmm:
                 img_urls['arts'].append(src)
         logger.debug(f"Found {len(img_urls['arts'])} arts images.")
 
+        # --- SiteUtil.resolve_jav_imgs 호출 전 ps 유효성 검사 ---
+        if not img_urls.get('ps'):
+            logger.warning("ps URL is empty or None before calling resolve_jav_imgs. Using pl as fallback for ps if available.")
+            # ps가 없으면 이미지 비교 로직이 제대로 동작하지 않을 수 있음.
+            # pl 이라도 ps 값으로 넣어주거나, resolve_jav_imgs 호출 로직을 조정해야 할 수 있음.
+            # 가장 간단한 방법은 ps가 없으면 pl을 ps로도 사용하도록 하는 것:
+            if img_urls.get('pl'):
+                img_urls['ps'] = img_urls['pl']
+            else:
+                # pl, ps 둘 다 없으면 이미지 처리 어려움
+                logger.error("Both pl and ps URLs are missing. Image processing might fail.")
+                # 이후 로직에서 오류 발생 가능성 높음
+
+        # SiteUtil.resolve_jav_imgs 호출 (ps_to_poster=False 유지)
         SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
 
         # resolve_jav_imgs 결과 사용
