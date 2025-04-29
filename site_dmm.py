@@ -494,58 +494,86 @@ class SiteDmm:
         entity.extras = []
         if use_extras:
             try:
-                onclick_xpath = '//a[@id="sample-video1"]/@onclick'
-                onclick_tags = tree.xpath(onclick_xpath)
-                if onclick_tags: # 방법 1: onclick 파싱
-                    onclick_text = onclick_tags[0]
-                    match_json = re.search(r"gaEventVideoStart\('(\{.*?\})','(\{.*?\})'\)", onclick_text)
-                    if match_json:
-                        video_data_str = match_json.group(1)
-                        try:
-                            video_data = json.loads(video_data_str.replace('\\"', '"'))
-                            if video_data.get("video_url"):
-                                trailer_url = video_data["video_url"]
-                                trailer_title = f"{entity.title} Trailer" if entity.title else "Trailer"
-                                entity.extras.append(EntityExtra("trailer", SiteUtil.trans(trailer_title, do_trans=do_trans), "mp4", trailer_url))
-                                logger.debug(f"Trailer found from onclick: {trailer_url}")
-                        except Exception as json_e: logger.warning(f"Failed to parse JSON from onclick: {json_e}")
+                trailer_url = None
+                trailer_title_from_data = None # DMM 제공 제목 저장 변수
 
-                if not entity.extras: # 방법 2: AJAX 요청
-                    ajax_url_xpath = '//a[@id="sample-video1"]/@data-video-url'
-                    ajax_url_tags = tree.xpath(ajax_url_xpath)
-                    if ajax_url_tags:
-                        ajax_relative_url = ajax_url_tags[0]
-                        ajax_full_url = py_urllib_parse.urljoin(url, ajax_relative_url)
-                        logger.debug(f"Attempting trailer AJAX request: {ajax_full_url}")
-                        try:
-                            ajax_headers = cls._get_request_headers(referer=url); ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
-                            ajax_response_text = SiteUtil.get_text(ajax_full_url, proxy_url=proxy_url, headers=ajax_headers)
-                            ajax_tree = html.fromstring(ajax_response_text) # lxml import 필요할 수 있음
-                            iframe_srcs = ajax_tree.xpath("//iframe/@src")
-                            if iframe_srcs:
-                                iframe_url = iframe_srcs[0]
-                                iframe_headers = cls._get_request_headers(referer=ajax_full_url)
-                                iframe_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=iframe_headers)
-                                pos = iframe_text.find("const args = {")
-                                if pos != -1:
-                                    json_start = iframe_text.find("{", pos); json_end = iframe_text.find("};", json_start)
-                                    if json_start != -1 and json_end != -1:
-                                        data_str = iframe_text[json_start : json_end+1]
-                                        try:
-                                            data = json.loads(data_str)
-                                            data["bitrates"] = sorted(data.get("bitrates",[]), key=lambda k: k.get("bitrate", 0), reverse=True)
-                                            if data.get("bitrates"):
-                                                trailer_src = data["bitrates"][0].get("src")
-                                                if trailer_src:
-                                                    trailer_url = "https:" + trailer_src if not trailer_src.startswith("http") else trailer_src
-                                                    trailer_title = data.get("title", f"{entity.title} Trailer" if entity.title else "Trailer")
-                                                    entity.extras.append(EntityExtra("trailer", SiteUtil.trans(trailer_title, do_trans=do_trans), "mp4", trailer_url))
-                                                    logger.debug(f"Trailer found from AJAX iframe: {trailer_url}")
-                                        except Exception as json_e2: logger.warning(f"Failed to parse JSON from iframe: {json_e2}")
-                                else: logger.warning("Could not find 'const args = {' in iframe content.")
-                            else: logger.warning("Could not find iframe src in AJAX response.")
-                        except Exception as ajax_e: logger.exception(f"Error during trailer AJAX request: {ajax_e}")
-            except Exception as extra_e: logger.exception(f"미리보기 처리 중 예외: {extra_e}")
+                # --- 우선 AJAX 요청 및 iframe 파싱 시도 ---
+                ajax_url_xpath = '//a[@id="sample-video1"]/@data-video-url'
+                ajax_url_tags = tree.xpath(ajax_url_xpath)
+                if ajax_url_tags:
+                    ajax_relative_url = ajax_url_tags[0]
+                    ajax_full_url = py_urllib_parse.urljoin(url, ajax_relative_url)
+                    logger.debug(f"Attempting trailer AJAX request: {ajax_full_url}")
+                    try:
+                        ajax_headers = cls._get_request_headers(referer=url); ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
+                        ajax_response_text = SiteUtil.get_text(ajax_full_url, proxy_url=proxy_url, headers=ajax_headers)
+                        try: from lxml import html except ImportError: logger.error("lxml required"); raise
+                        ajax_tree = html.fromstring(ajax_response_text)
+                        iframe_srcs = ajax_tree.xpath("//iframe/@src")
+                        if iframe_srcs:
+                            iframe_url = py_urllib_parse.urljoin(ajax_full_url, iframe_srcs[0])
+                            iframe_headers = cls._get_request_headers(referer=ajax_full_url)
+                            iframe_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=iframe_headers)
+                            pos = iframe_text.find("const args = {")
+                            if pos != -1:
+                                json_start = iframe_text.find("{", pos); json_end = iframe_text.find("};", json_start)
+                                if json_start != -1 and json_end != -1:
+                                    data_str = iframe_text[json_start : json_end+1]
+                                    try:
+                                        data = json.loads(data_str)
+                                        data["bitrates"] = sorted(data.get("bitrates",[]), key=lambda k: k.get("bitrate", 0), reverse=True)
+                                        if data.get("bitrates"):
+                                            trailer_src = data["bitrates"][0].get("src")
+                                            if trailer_src:
+                                                # 트레일러 URL 저장
+                                                trailer_url = "https:" + trailer_src if not trailer_src.startswith("http") else trailer_src
+                                                # DMM 제공 제목 저장
+                                                trailer_title_from_data = data.get("title")
+                                                logger.debug(f"Trailer URL found from AJAX iframe: {trailer_url}")
+                                                if trailer_title_from_data:
+                                                    logger.debug(f"Trailer title found from DMM data: {trailer_title_from_data}")
+                                    except json.JSONDecodeError as je: logger.warning(f"Failed to decode JSON from iframe: {data_str} - Error: {je}")
+                            else: logger.warning("Could not find 'const args = {' in iframe content.")
+                        else: logger.warning("Could not find iframe src in AJAX response.")
+                    except Exception as ajax_e: logger.exception(f"Error during trailer AJAX request: {ajax_e}")
+                else:
+                    logger.warning("data-video-url attribute not found for trailer AJAX.")
+
+                # --- 만약 AJAX로 URL 못찾았으면 onclick 파싱 시도 ---
+                if not trailer_url:
+                    onclick_xpath = '//a[@id="sample-video1"]/@onclick'
+                    onclick_tags = tree.xpath(onclick_xpath)
+                    if onclick_tags:
+                        onclick_text = onclick_tags[0]
+                        match_json = re.search(r"gaEventVideoStart\('(\{.*?\})','(\{.*?\})'\)", onclick_text)
+                        if match_json:
+                            video_data_str = match_json.group(1)
+                            try:
+                                video_data = json.loads(video_data_str.replace('\\"', '"'))
+                                if video_data.get("video_url"):
+                                    # 트레일러 URL 저장
+                                    trailer_url = video_data["video_url"]
+                                    # onclick에는 제목 정보가 없으므로 trailer_title_from_data는 None 유지
+                                    logger.debug(f"Trailer URL found from onclick (no title info): {trailer_url}")
+                            except Exception as json_e: logger.warning(f"Failed to parse JSON from onclick: {json_e}")
+
+                # --- 최종적으로 URL을 찾았으면 EntityExtra 추가 ---
+                if trailer_url:
+                    # 제목 결정: DMM 제공 제목 우선, 없으면 entity.title, 그것도 없으면 "Trailer"
+                    if trailer_title_from_data and trailer_title_from_data.strip():
+                        trailer_title_to_use = trailer_title_from_data.strip()
+                    elif entity.title:
+                        trailer_title_to_use = entity.title
+                    else:
+                        trailer_title_to_use = "Trailer" # 최후의 기본값
+
+                    entity.extras.append(EntityExtra("trailer", SiteUtil.trans(trailer_title_to_use, do_trans=do_trans), "mp4", trailer_url))
+                    logger.debug(f"Added trailer with title: '{trailer_title_to_use}' and URL: {trailer_url}")
+                else:
+                    logger.warning("No trailer URL found using either AJAX or onclick method.")
+
+            except Exception as extra_e:
+                logger.exception(f"미리보기 처리 중 예외: {extra_e}")
 
         return entity
 
