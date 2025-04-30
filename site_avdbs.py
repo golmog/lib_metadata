@@ -167,9 +167,9 @@ class SiteAvdbs:
     @staticmethod
     def get_actor_info(entity_actor, **kwargs):
         """
-        배우 정보를 로컬 DB(한자 이름 우선)에서 조회하고, 없으면 웹 스크래핑을 시도합니다.
+        배우 정보를 로컬 DB(일본어 이름 우선)에서 조회하고, 없으면 웹 스크래핑을 시도합니다.
         """
-        originalname = entity_actor.get("originalname")
+        originalname = entity_actor.get("originalname") # originalname은 일본어 이름으로 가정
         if not originalname:
             logger.warning("배우 정보 조회 불가: originalname이 없습니다.")
             return entity_actor
@@ -177,34 +177,34 @@ class SiteAvdbs:
         info = None # 최종 정보
         db_found_valid = False # DB에서 유효한 정보를 찾았는지
 
-        # --- 단계 1: 로컬 DB 조회 (한자 이름 우선) ---
-        logger.debug(f"DB 조회 시도: originalname(cn)='{originalname}'")
+        # --- 단계 1: 로컬 DB 조회 (일본어 이름 우선) ---
+        logger.debug(f"DB 조회 시도: originalname(일본어)='{originalname}'")
         if os.path.exists(DB_PATH):
             conn = None
             try:
                 conn = sqlite3.connect(DB_PATH)
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
-                row = None # 결과 행 초기화
+                row = None
 
-                # --- 1차 쿼리: 한자 이름(inner_name_cn) 정확히 일치 검색 ---
+                # --- 1차 쿼리: 일본어 이름(inner_name_cn) 정확히 일치 검색 ---
                 logger.debug("DB 1차 쿼리 실행 (WHERE inner_name_cn = ?)")
                 query1 = "SELECT inner_name_kr, inner_name_en, profile_img_view FROM actors WHERE inner_name_cn = ? LIMIT 1"
                 cursor.execute(query1, (originalname,))
                 row = cursor.fetchone()
 
                 if row:
-                    logger.debug("DB 1차 쿼리: 한자 이름 일치 항목 찾음.")
+                    logger.debug("DB 1차 쿼리: 일본어 이름 일치 항목 찾음.")
                 else:
-                    logger.debug("DB 1차 쿼리: 한자 이름 일치 항목 없음. 2차 쿼리(fallback) 시도.")
-                    # --- 2차 쿼리 (Fallback): 다른 이름 필드 검색 ---
+                    logger.debug("DB 1차 쿼리: 일본어 이름 일치 항목 없음. 2차 쿼리(fallback) 시도.")
+                    # --- 2차 쿼리 (Fallback): 다른 이름 필드 검색 (한국어, 영어/원어, 다른 이름) ---
                     query2 = """
                     SELECT inner_name_kr, inner_name_en, profile_img_view
                     FROM actors
                     WHERE inner_name_kr = ? OR inner_name_en = ? OR inner_name_en LIKE ? OR actor_onm LIKE ?
                     LIMIT 1
                     """
-                    like_param_en = f"%({originalname})%" # 혹시 originalname이 괄호안 일본어일 경우 대비
+                    like_param_en = f"%({originalname})%"
                     like_param_onm = f"%{originalname}%"
                     cursor.execute(query2, (originalname, originalname, like_param_en, like_param_onm))
                     row = cursor.fetchone()
@@ -216,9 +216,9 @@ class SiteAvdbs:
                 # --- 찾은 결과(row) 처리 ---
                 if row:
                     db_info = {
-                        "name": row["inner_name_kr"],
-                        "name2": row["inner_name_en"],
-                        "thumb": row["profile_img_view"]
+                        "name": row["inner_name_kr"],    # 한국어 이름
+                        "name2": row["inner_name_en"],   # 영어 이름 (또는 영어(일본어) 형식)
+                        "thumb": row["profile_img_view"] # 이미지 URL
                     }
                     # name2 필드 정리
                     if db_info["name2"]:
@@ -230,10 +230,9 @@ class SiteAvdbs:
                         logger.info(f"DB에서 '{originalname}' 유효 정보 찾음 (이름, 썸네일 존재).")
                         info = db_info
                         info["site"] = "avdbs_db"
-                        db_found_valid = True # 유효 정보 찾음 플래그 설정
+                        db_found_valid = True
                     else:
                         logger.debug(f"DB에서 '{originalname}' 행은 찾았으나, 필수 정보(한국어 이름, 썸네일) 부족.")
-                # else: # row가 없는 경우는 이미 위에서 로깅됨
 
             except sqlite3.Error as e:
                 logger.error(f"DB 조회 중 오류 발생 (originalname='{originalname}'): {e}")
@@ -250,7 +249,6 @@ class SiteAvdbs:
             retry = kwargs.pop("retry", True)
             web_info = None
             try:
-                # 웹 스크래핑 내부 메소드 호출 (__get_actor_info_from_web은 이전 답변 내용 그대로 사용)
                 web_info = SiteAvdbs.__get_actor_info_from_web(originalname, **kwargs)
             except Exception as e_web:
                 if retry:
@@ -261,14 +259,16 @@ class SiteAvdbs:
                     logger.exception(f"WEB: Failed to get actor info for '{originalname}' from web after retry. Error: {e_web}")
             else:
                 if web_info is not None:
-                    logger.info(f"WEB: 웹 스크래핑으로 '{originalname}' 정보 찾음.")
-                    info = web_info # 웹 정보를 최종 정보로 사용
+                    if web_info.get("name") and web_info.get("thumb"):
+                        logger.info(f"WEB: 웹 스크래핑으로 '{originalname}' 유효 정보 찾음.")
+                        info = web_info
+                    else:
+                        logger.info(f"WEB: 웹 스크래핑 결과 찾았으나 필수 정보(이름, 썸네일) 부족.")
                 else:
                     logger.info(f"WEB: 웹 스크래핑으로도 '{originalname}' 정보 찾지 못함.")
 
         # --- 최종 결과 처리 ---
         if info is not None:
-            # 비어있는 값 None 처리
             info["name"] = info.get("name") if info.get("name") else None
             info["name2"] = info.get("name2") if info.get("name2") else None
             info["thumb"] = info.get("thumb") if info.get("thumb") else None
