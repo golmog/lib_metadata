@@ -204,15 +204,16 @@ class SiteAvdbs:
         if os.path.exists(DB_PATH):
             conn = None
             try:
+                # --- DB 연결 (함수 호출 시) ---
                 db_uri = f"file:{os.path.abspath(DB_PATH)}?mode=ro"
-                logger.debug(f"Connecting to DB using URI: {db_uri}")
-                conn = sqlite3.connect(db_uri, uri=True, timeout=10)
+                logger.debug(f"Connecting to DB (RO, WAL check): {db_uri}")
+                conn = sqlite3.connect(db_uri, uri=True, timeout=5)
 
                 try:
                     journal_mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
                     logger.debug(f"DB current journal_mode: {journal_mode}")
                     if journal_mode.lower() != 'wal':
-                        logger.warning("DB is not in WAL mode. Concurrent access might be less efficient.")
+                        logger.warning("DB is not in WAL mode.")
                 except sqlite3.Error as e_wal_check:
                     logger.warning(f"Failed to check journal mode: {e_wal_check}")
 
@@ -220,15 +221,15 @@ class SiteAvdbs:
                 cursor = conn.cursor()
                 row = None
 
+                # --- 1차 쿼리 ---
                 logger.debug("DB 1차 쿼리 실행 (WHERE inner_name_cn = ?)")
                 query1 = "SELECT inner_name_kr, inner_name_en, profile_img_view FROM actors WHERE inner_name_cn = ? LIMIT 1"
                 cursor.execute(query1, (originalname,))
                 row = cursor.fetchone()
 
-                if row:
-                    logger.debug("DB 1차 쿼리: 일본어 이름 일치 항목 찾음.")
-                else:
-                    logger.debug("DB 1차 쿼리: 일본어 이름 일치 항목 없음. 2차 쿼리(fallback) 시도.")
+                if not row:
+                    logger.debug("DB 1차 쿼리 결과 없음. 2차 쿼리(fallback) 시도.")
+                    # --- 2차 쿼리 ---
                     query2 = """
                     SELECT inner_name_kr, inner_name_en, profile_img_view
                     FROM actors WHERE inner_name_kr = ? OR inner_name_en = ? OR inner_name_en LIKE ? OR actor_onm LIKE ? LIMIT 1
@@ -237,56 +238,53 @@ class SiteAvdbs:
                     like_param_onm = f"%{originalname}%"
                     cursor.execute(query2, (originalname, originalname, like_param_en, like_param_onm))
                     row = cursor.fetchone()
-                    if row: logger.debug("DB 2차 쿼리(fallback): 다른 이름 필드에서 일치 항목 찾음.")
-                    else: logger.debug("DB 2차 쿼리(fallback): 다른 이름 필드에서도 찾을 수 없음.")
+                    if row: logger.debug("DB 2차 쿼리(fallback): 결과 찾음.")
+                    else: logger.debug("DB 2차 쿼리(fallback): 결과 없음.")
 
+                # --- 결과 처리 ---
                 if row:
                     korean_name = row["inner_name_kr"]
                     eng_orig_name = row["inner_name_en"]
                     thumb_url = row["profile_img_view"]
 
+                    # Discord URL 처리
                     if DISCORD_UTIL_AVAILABLE and thumb_url and DiscordUtil.isurlattachment(thumb_url):
                         if DiscordUtil.isurlexpired(thumb_url):
-                            logger.warning(f"DB: 만료된 Discord 썸네일 URL 발견 ('{originalname}'): {thumb_url}. 갱신 시도...")
+                            logger.warning(f"DB: 만료된 Discord URL 발견 ('{originalname}'). 갱신 시도...")
                             try:
                                 renew_map = DiscordUtil.proxy_image_url([thumb_url])
                                 if thumb_url in renew_map and renew_map[thumb_url]:
                                     renewed_url = renew_map[thumb_url]
                                     if renewed_url != thumb_url:
-                                        logger.info(f"DB: Discord 썸네일 URL 갱신 성공 ('{originalname}'): -> {renewed_url}")
+                                        logger.info(f"DB: Discord URL 갱신 성공 ('{originalname}'): -> {renewed_url}")
                                         thumb_url = renewed_url
-                                    else:
-                                        logger.info(f"DB: Discord 썸네일 URL 갱신 시도했으나 변경 없음 ('{originalname}').")
-                                else:
-                                    logger.error(f"DB: Discord 썸네일 URL 갱신 실패 ('{originalname}'). 응답: {renew_map}")
                             except Exception as e_renew:
-                                logger.error(f"DB: Discord 썸네일 URL 갱신 중 예외 발생 ('{originalname}'): {e_renew}")
-                        else:
-                            logger.debug(f"DB: Discord 썸네일 URL 유효함 ('{originalname}').")
+                                logger.error(f"DB: Discord URL 갱신 중 예외 ('{originalname}'): {e_renew}")
 
-                    db_info = {
-                        "name": korean_name, "name2": eng_orig_name, "thumb": thumb_url
-                    }
+                    db_info = { "name": korean_name, "name2": eng_orig_name, "thumb": thumb_url }
                     if db_info["name2"]:
                         match = re.match(r"^(.*?)\s*\(.*\)$", db_info["name2"])
                         if match: db_info["name2"] = match.group(1).strip()
 
                     if db_info.get("name") and db_info.get("thumb"):
-                        logger.info(f"DB에서 '{originalname}' 유효 정보 찾음 (이름, 썸네일 존재).")
+                        logger.info(f"DB에서 '{originalname}' 유효 정보 찾음.")
                         info = db_info
                         info["site"] = "avdbs_db"
                         db_found_valid = True
                     else:
-                        logger.debug(f"DB에서 '{originalname}' 행은 찾았으나, 필수 정보(한국어 이름, 썸네일) 부족.")
+                        logger.debug(f"DB 결과 필수 정보 부족 ('{originalname}').")
 
             except sqlite3.OperationalError as e_op:
                 logger.error(f"DB OperationalError (읽기 전용/잠금 등): {e_op}")
             except sqlite3.Error as e:
-                logger.error(f"DB 조회 중 오류 발생 (originalname='{originalname}'): {e}")
+                logger.error(f"DB 조회 중 오류 (originalname='{originalname}'): {e}")
             except Exception as e_db:
                 logger.exception(f"DB 처리 중 예상치 못한 오류 (originalname='{originalname}'): {e_db}")
             finally:
-                if conn: conn.close()
+                # --- DB 연결 해제 (함수 종료 전) ---
+                if conn:
+                    conn.close()
+                    logger.debug("DB connection closed.")
         else:
             logger.warning(f"Avdbs 데이터베이스 파일 없음: {DB_PATH}. 웹 스크래핑 시도.")
 
