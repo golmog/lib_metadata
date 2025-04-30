@@ -94,7 +94,7 @@ class SiteAvdbs:
             except requests.exceptions.RequestException as e_req: logger.error(f"WEB: Request failed for log API: {e_req}"); return None
             except Exception as e_other: logger.exception(f"WEB: Unexpected error processing log API: {e_other}"); return None
 
-            # 단계 3: 실제 배우 검색 페이지 요청
+            # 단계 3: 배우 검색 페이지 요청
             search_page_url = SiteAvdbs.base_url + "/w2017/page/search/search_actor.php"
             search_page_params = {"kwd": originalname, "seq": seq}; tree = None
             try:
@@ -231,7 +231,7 @@ class SiteAvdbs:
                         if match: db_info["name2"] = match.group(1).strip()
 
                     if db_info.get("name") and db_info.get("thumb"):
-                        logger.info(f"DB에서 '{originalname}' 유효 정보 찾음 (실제 배우: {korean_name}).")
+                        logger.info(f"DB에서 '{originalname}' 검색됨 ({korean_name}).")
                         info = db_info; info["site"] = "avdbs_db"; db_found_valid = True
                     else: logger.debug(f"DB 결과 필수 정보 부족 ('{originalname}' -> found: {korean_name}).")
 
