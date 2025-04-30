@@ -167,36 +167,53 @@ class SiteAvdbs:
     @staticmethod
     def get_actor_info(entity_actor, **kwargs):
         """
-        배우 정보를 로컬 DB에서 먼저 조회하고, 없으면 Avdbs.com 웹 스크래핑을 시도합니다.
-        웹 스크래핑 시도 시 재시도 로직을 포함합니다.
+        배우 정보를 로컬 DB(한자 이름 우선)에서 조회하고, 없으면 웹 스크래핑을 시도합니다.
         """
         originalname = entity_actor.get("originalname")
         if not originalname:
             logger.warning("배우 정보 조회 불가: originalname이 없습니다.")
             return entity_actor
 
-        info = None # 최종적으로 찾은 정보를 담을 변수
+        info = None # 최종 정보
+        db_found_valid = False # DB에서 유효한 정보를 찾았는지
 
-        # --- 단계 1: 로컬 DB 조회 ---
-        logger.debug(f"DB 조회 시도: originalname='{originalname}'")
-        db_found = False # DB에서 유효한 정보를 찾았는지 여부
+        # --- 단계 1: 로컬 DB 조회 (한자 이름 우선) ---
+        logger.debug(f"DB 조회 시도: originalname(cn)='{originalname}'")
         if os.path.exists(DB_PATH):
             conn = None
             try:
                 conn = sqlite3.connect(DB_PATH)
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
-                query = """
-                SELECT inner_name_kr, inner_name_en, profile_img_view
-                FROM actors
-                WHERE inner_name_kr = ? OR inner_name_en = ? OR inner_name_en LIKE ? OR actor_onm LIKE ?
-                LIMIT 1
-                """
-                like_param_en = f"%({originalname})%"
-                like_param_onm = f"%{originalname}%"
-                cursor.execute(query, (originalname, originalname, like_param_en, like_param_onm))
+                row = None # 결과 행 초기화
+
+                # --- 1차 쿼리: 한자 이름(inner_name_cn) 정확히 일치 검색 ---
+                logger.debug("DB 1차 쿼리 실행 (WHERE inner_name_cn = ?)")
+                query1 = "SELECT inner_name_kr, inner_name_en, profile_img_view FROM actors WHERE inner_name_cn = ? LIMIT 1"
+                cursor.execute(query1, (originalname,))
                 row = cursor.fetchone()
 
+                if row:
+                    logger.debug("DB 1차 쿼리: 한자 이름 일치 항목 찾음.")
+                else:
+                    logger.debug("DB 1차 쿼리: 한자 이름 일치 항목 없음. 2차 쿼리(fallback) 시도.")
+                    # --- 2차 쿼리 (Fallback): 다른 이름 필드 검색 ---
+                    query2 = """
+                    SELECT inner_name_kr, inner_name_en, profile_img_view
+                    FROM actors
+                    WHERE inner_name_kr = ? OR inner_name_en = ? OR inner_name_en LIKE ? OR actor_onm LIKE ?
+                    LIMIT 1
+                    """
+                    like_param_en = f"%({originalname})%" # 혹시 originalname이 괄호안 일본어일 경우 대비
+                    like_param_onm = f"%{originalname}%"
+                    cursor.execute(query2, (originalname, originalname, like_param_en, like_param_onm))
+                    row = cursor.fetchone()
+                    if row:
+                        logger.debug("DB 2차 쿼리(fallback): 다른 이름 필드에서 일치 항목 찾음.")
+                    else:
+                        logger.debug("DB 2차 쿼리(fallback): 다른 이름 필드에서도 찾을 수 없음.")
+
+                # --- 찾은 결과(row) 처리 ---
                 if row:
                     db_info = {
                         "name": row["inner_name_kr"],
@@ -208,17 +225,15 @@ class SiteAvdbs:
                         match = re.match(r"^(.*?)\s*\(.*\)$", db_info["name2"])
                         if match: db_info["name2"] = match.group(1).strip()
 
-                    # 필수 정보 (이름 또는 썸네일) 확인
-                    # 한국어 이름이 있고, 썸네일 URL도 있어야 유효한 정보로 간주
+                    # 필수 정보 (한국어 이름, 썸네일) 유효성 검사
                     if db_info.get("name") and db_info.get("thumb"):
-                        logger.info(f"DB에서 '{originalname}' 정보 찾음 (이름, 썸네일 유효).")
-                        info = db_info # 찾은 정보를 info에 할당
-                        info["site"] = "avdbs_db" # 출처 명시
-                        db_found = True
+                        logger.info(f"DB에서 '{originalname}' 유효 정보 찾음 (이름, 썸네일 존재).")
+                        info = db_info
+                        info["site"] = "avdbs_db"
+                        db_found_valid = True # 유효 정보 찾음 플래그 설정
                     else:
-                        logger.debug(f"DB에서 '{originalname}' 행은 찾았으나, 필수 정보(이름, 썸네일) 부족.")
-                else:
-                    logger.debug(f"DB에서 '{originalname}' 정보 찾을 수 없음.")
+                        logger.debug(f"DB에서 '{originalname}' 행은 찾았으나, 필수 정보(한국어 이름, 썸네일) 부족.")
+                # else: # row가 없는 경우는 이미 위에서 로깅됨
 
             except sqlite3.Error as e:
                 logger.error(f"DB 조회 중 오류 발생 (originalname='{originalname}'): {e}")
@@ -229,42 +244,36 @@ class SiteAvdbs:
         else:
             logger.warning(f"Avdbs 데이터베이스 파일 없음: {DB_PATH}. 웹 스크래핑 시도.")
 
-        # --- 단계 2: DB에서 못 찾았으면 웹 스크래핑 시도 (재시도 로직 포함) ---
-        if not db_found:
+        # --- 단계 2: DB에서 유효 정보를 못 찾았으면 웹 스크래핑 시도 ---
+        if not db_found_valid:
             logger.info(f"DB 조회 실패 또는 정보 부족, 웹 스크래핑 시도 (fallback): '{originalname}'")
-            retry = kwargs.pop("retry", True) # get_actor_info 호출 시 retry 옵션 사용
+            retry = kwargs.pop("retry", True)
             web_info = None
             try:
-                # 웹 스크래핑 내부 메소드 호출
+                # 웹 스크래핑 내부 메소드 호출 (__get_actor_info_from_web은 이전 답변 내용 그대로 사용)
                 web_info = SiteAvdbs.__get_actor_info_from_web(originalname, **kwargs)
             except Exception as e_web:
-                # 웹 스크래핑 재시도 로직
                 if retry:
                     logger.warning(f"WEB: Exception occurred for '{originalname}', retrying after 2 seconds... Error: {e_web}")
                     time.sleep(2)
-                    # 재시도 시에는 retry=False 전달, **kwargs도 다시 전달
-                    # 주의: entity_actor는 업데이트되지 않았으므로 그대로 전달
                     return SiteAvdbs.get_actor_info(entity_actor, retry=False, **kwargs)
                 else:
-                    # 최종 웹 실패 시 로깅
                     logger.exception(f"WEB: Failed to get actor info for '{originalname}' from web after retry. Error: {e_web}")
             else:
-                # 웹 스크래핑 성공 시 결과 할당
                 if web_info is not None:
                     logger.info(f"WEB: 웹 스크래핑으로 '{originalname}' 정보 찾음.")
-                    info = web_info # 웹에서 찾은 정보를 info에 할당
+                    info = web_info # 웹 정보를 최종 정보로 사용
                 else:
                     logger.info(f"WEB: 웹 스크래핑으로도 '{originalname}' 정보 찾지 못함.")
 
         # --- 최종 결과 처리 ---
         if info is not None:
-            # 비어있는 값은 None으로 다시 한번 확인
+            # 비어있는 값 None 처리
             info["name"] = info.get("name") if info.get("name") else None
             info["name2"] = info.get("name2") if info.get("name2") else None
             info["thumb"] = info.get("thumb") if info.get("thumb") else None
 
-            # 최종 정보가 있을 경우 entity_actor 업데이트
-            if info.get("name") or info.get("name2") or info.get("thumb"): # 하나라도 유효한 정보가 있으면 업데이트
+            if info.get("name") or info.get("name2") or info.get("thumb"):
                 logger.info(f"'{originalname}' 정보 업데이트 완료 (출처: {info.get('site', '알 수 없음')}).")
                 entity_actor.update(info)
             else:
@@ -272,4 +281,4 @@ class SiteAvdbs:
         else:
             logger.info(f"'{originalname}' 최종 정보 없음.")
 
-        return entity_actor # 업데이트된 (또는 그대로인) entity_actor 반환
+        return entity_actor
