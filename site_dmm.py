@@ -273,39 +273,59 @@ class SiteDmm:
     # --- __info 메소드: 상세 페이지 구조 분석 후 수정 필요 ---
     @classmethod
     def __img_urls(cls, tree):
-        # 상세 페이지 구조 분석 후 수정 필요
-        logger.warning("__img_urls: XPath needs update based on actual detail page HTML.")
+        """상세 페이지 HTML(tree)에서 이미지 URL들을 추출합니다."""
         img_urls = {'ps': "", 'pl': "", 'arts': []}
         try:
-            # 예전 XPath (수정 필요 가능성 높음)
-            pl_xpath = '//div[@id="sample-video"]//img/@src' # 메인 이미지
-            pl_tags = tree.xpath(pl_xpath)
+            # 메인 이미지 (pl) 추출 - XPath 확인 및 수정 필요
+            # 시도 1: sample-video 안의 img
+            pl_xpath1 = '//div[@id="sample-video"]//img/@src'
+            pl_tags = tree.xpath(pl_xpath1)
             if pl_tags:
                 img_urls['pl'] = pl_tags[0]
                 if img_urls['pl'].startswith("//"): img_urls['pl'] = "https:" + img_urls['pl']
-            else: # 다른 경로 시도 (예: fn-sampleImage-imagebox)
-                pl_xpath_alt = '//div[@id="fn-sampleImage-imagebox"]/img/@src'
-                pl_tags_alt = tree.xpath(pl_xpath_alt)
-                if pl_tags_alt:
-                    img_urls['pl'] = pl_tags_alt[0]
+                logger.debug(f"PL found using XPath: {pl_xpath1}")
+            else:
+                # 시도 2: 다른 가능한 XPath (예: fn-sampleImage-imagebox) - 실제 구조 확인 필요
+                pl_xpath2 = '//div[@id="fn-sampleImage-imagebox"]/img/@src'
+                pl_tags = tree.xpath(pl_xpath2)
+                if pl_tags:
+                    img_urls['pl'] = pl_tags[0]
                     if img_urls['pl'].startswith("//"): img_urls['pl'] = "https:" + img_urls['pl']
+                    logger.debug(f"PL found using XPath: {pl_xpath2}")
+                else:
+                    logger.warning("PL image not found using known XPaths.")
 
-            arts_xpath = '//a[@name="sample-image"]/@href' # 샘플 이미지 링크들
-            arts_tags = tree.xpath(arts_xpath)
+            # 샘플 이미지 (arts) 추출 - XPath 확인 및 수정 필요
+            # 시도 1: sample-image-block 안의 a href
+            arts_xpath1 = '//div[@id="sample-image-block"]//a/@href'
+            arts_tags = tree.xpath(arts_xpath1)
+            if not arts_tags:
+                # 시도 2: 다른 가능한 XPath (예: product-samples) - 실제 구조 확인 필요
+                arts_xpath2 = '//ul[contains(@class,"product-samples")]//a/@href'
+                arts_tags = tree.xpath(arts_xpath2)
+                if arts_tags: logger.debug(f"Arts found using XPath: {arts_xpath2}")
+                else: logger.warning("Arts not found using known XPaths.")
+            else:
+                logger.debug(f"Arts found using XPath: {arts_xpath1}")
+
             if arts_tags:
                 all_arts = []
-                for href in arts_tags:
+                # enumerate 사용하여 인덱스(idx)와 링크(href) 동시 접근
+                for idx, href in enumerate(arts_tags):
                     if href and href.strip():
                         full_href = href if href.startswith("http") else py_urllib_parse.urljoin(cls.site_base_url, href)
-                        # 첫번째 샘플 이미지가 pl과 같으면 제외 (선택적)
-                        if idx == 0 and full_href == img_urls.get('pl'): continue
+                        # 첫 번째 샘플(idx==0)이 pl과 같다면 제외 (선택적)
+                        if idx == 0 and full_href == img_urls.get('pl'):
+                            logger.debug("Skipping first art image as it matches PL.")
+                            continue
                         all_arts.append(full_href)
-                img_urls['arts'] = sorted(list(set(all_arts)), key=all_arts.index) # 중복 제거
+                # 중복 제거
+                img_urls['arts'] = sorted(list(set(all_arts)), key=all_arts.index)
 
-            # ps 는 캐시 또는 pl fallback 사용 (아래 info 에서 처리)
+        except Exception as e:
+            logger.exception(f"Error extracting image URLs in __img_urls: {e}")
 
-        except Exception as e: logger.exception(f"Error extracting image URLs: {e}")
-        logger.debug(f"Extracted img_urls: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} arts={len(img_urls.get('arts',[]))}")
+        logger.debug(f"Extracted image URLs: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} arts={len(img_urls.get('arts',[]))}")
         return img_urls
 
     @classmethod
