@@ -174,20 +174,23 @@ class SiteDmm:
                 href = None; item.image_url = None; item.title = "Not Found"; original_ps_url = None
                 match_real_no = None
 
-                # --- 파싱 로직 분기 (모바일 XPath 수정 반영) ---
+                # --- 파싱 로직 분기 ---
                 if list_type == "desktop":
-                    # (이전 데스크톱 파싱 로직)
+                    # 이 XPath들이 데스크톱 구조 HTML과 맞는지 확인!
                     link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]')
                     if not link_tag_img: continue
                     img_link_href = link_tag_img[0].attrib.get("href", "").lower()
-                    img_tag = link_tag_img[0].xpath('./img/@src')
+
+                    img_tag = link_tag_img[0].xpath('./img/@src') # 이미지 src
                     if not img_tag: continue
                     original_ps_url = img_tag[0]
+
                     title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]')
                     if not title_link_tag: continue
                     title_link_href = title_link_tag[0].attrib.get("href", "").lower()
-                    href = title_link_href if title_link_href else img_link_href
-                    title_p_tag = title_link_tag[0].xpath('./p[contains(@class, "hover:text-linkHover")]')
+                    href = title_link_href if title_link_href else img_link_href # 상세 링크 href
+
+                    title_p_tag = title_link_tag[0].xpath('./p[contains(@class, "hover:text-linkHover")]') # 제목 p
                     if title_p_tag: item.title = title_p_tag[0].text_content().strip()
 
                 elif list_type == "mobile":
