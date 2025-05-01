@@ -216,19 +216,48 @@ class SiteDmm:
             if content_type == 'videoa':
                 logger.debug("Extracting videoa URLs...")
                 pl_url = None
-                pl_xpath = '//div[@id="sample-image-block"]//a/@href'
-                pl_href_tags = tree.xpath(pl_xpath)
-                if pl_href_tags:
-                    # 첫 번째 링크를 pl로 사용
-                    first_href = pl_href_tags[0].strip()
-                    if first_href:
-                        pl_url = py_urllib_parse.urljoin(cls.site_base_url, first_href)
+                pl_base_xpath = '//div[@id="sample-image-block"]' # 기준점 XPath
+
+                # 1. 첫 번째 img 태그의 src를 pl로 사용
+                first_img_xpath = f'{pl_base_xpath}//img[1]/@src' # 첫 번째 img 태그의 src
+                first_img_tags = tree.xpath(first_img_xpath)
+                if first_img_tags:
+                    first_img_src = first_img_tags[0].strip()
+                    if first_img_src:
+                        pl_url = py_urllib_parse.urljoin(cls.site_base_url, first_img_src)
                         img_urls['pl'] = pl_url
-                        logger.debug(f"Found videoa pl from div#sample-image-block first link: {pl_url}")
+                        logger.debug(f"Found videoa pl from first img/@src: {pl_url}")
                     else:
-                        logger.warning("First link in div#sample-image-block is empty.")
+                        logger.warning("First img/@src is empty.")
                 else:
-                    logger.warning("Could not find any links (a/@href) inside div#sample-image-block.")
+                    logger.warning("Could not find the first img tag inside div#sample-image-block.")
+                    # 필요시 다른 fallback 로직 추가 가능 (예: sample-video div 확인)
+
+                # 2. 모든 img 태그의 src를 arts로 사용
+                all_imgs_xpath = f'{pl_base_xpath}//img/@src' # 모든 img 태그의 src
+                all_img_tags = tree.xpath(all_imgs_xpath)
+                if all_img_tags:
+                    processed_arts = []
+                    pl_url_to_exclude = img_urls.get('pl') # pl로 확정된 URL
+
+                    for src in all_img_tags:
+                        current_src = src.strip()
+                        if not current_src: continue # 빈 src는 제외
+
+                        full_current_src = py_urllib_parse.urljoin(cls.site_base_url, current_src)
+
+                        # pl과 동일한 이미지는 arts에서 제외
+                        if pl_url_to_exclude and full_current_src == pl_url_to_exclude:
+                            logger.debug(f"Skipping art identical to pl: {current_src}")
+                            continue
+
+                        processed_arts.append(full_current_src)
+
+                    unique_arts = []; [unique_arts.append(x) for x in processed_arts if x not in unique_arts]
+                    img_urls['arts'] = unique_arts
+                    logger.debug(f"Found {len(img_urls['arts'])} potential arts links (from img src) for videoa (excluding pl if identical).")
+                else:
+                    logger.warning("Could not find any img tags inside div#sample-image-block for arts.")
 
                 arts_xpath_main = '//div[@id="sample-image-block"]//a/@href'
                 arts_xpath_alt = '//a[contains(@id, "sample-image")]/@href'
