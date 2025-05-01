@@ -110,16 +110,15 @@ class SiteDmm:
         else: dmm_keyword = keyword
         logger.debug("keyword [%s] -> [%s]", keyword, dmm_keyword)
 
-        # --- 검색 URL: 최신 URL 사용 ---
+        # --- 검색 URL ---
         search_url = f"{cls.site_base_url}/digital/videoa/-/list/search/=/?searchstr={dmm_keyword}"
         # 필요시 파라미터 추가: "&sort=ranking" 등
         logger.info(f"Using NEW search URL: {search_url}")
 
-        # 헤더 준비 (Referer는 상황에 맞게 설정 가능, 여기서는 기본 사용)
-        search_headers = cls._get_request_headers(referer=cls.site_base_url + "/")
+        # SiteUtil.get_tree 사용
+        search_headers = cls._get_request_headers(referer=cls.site_base_url + "/") # 적절한 Referer
         tree = None
         try:
-            # SiteUtil.get_tree 사용 (연령 확인은 _ensure_age_verified에서 처리 가정)
             tree = SiteUtil.get_tree(search_url, proxy_url=proxy_url, headers=search_headers)
         except Exception as e:
             logger.exception(f"Failed to get tree for search URL: {search_url}")
@@ -128,80 +127,115 @@ class SiteDmm:
             logger.warning(f"Failed to get tree (returned None) for URL: {search_url}")
             return []
 
-        # --- XPath: 최신 Tailwind 구조 기반 ---
-        list_xpath = '//div[contains(@class, "grid")]/div[contains(@class, "border-r") and contains(@class, "border-b")]'
+        # --- XPath 수정: 데스크톱/모바일 구조 모두 시도 ---
         lists = []
-        try:
-            lists = tree.xpath(list_xpath)
-        except Exception as e_xpath:
-            logger.error(f"XPath error ({list_xpath}): {e_xpath}")
-        logger.debug(f"Found {len(lists)} items using Tailwind XPath.")
+        # 1. 데스크톱 grid 구조 시도
+        list_xpath_desktop = '//div[contains(@class, "grid-cols-4")]//div[contains(@class, "border-r") and contains(@class, "border-b")]'
+        try: lists = tree.xpath(list_xpath_desktop)
+        except Exception as e_xpath: logger.error(f"XPath error (desktop): {e_xpath}")
+        list_type = "desktop"
+
+        # 2. 데스크톱 결과 없으면 모바일 flex 구조 시도
+        if not lists:
+            logger.debug("Desktop grid not found, trying mobile layout XPath...")
+            list_xpath_mobile = '//div[contains(@class, "divide-y")]/div[contains(@class, "flex") and contains(@class, "py-1.5")]'
+            try: lists = tree.xpath(list_xpath_mobile)
+            except Exception as e_xpath: logger.error(f"XPath error (mobile): {e_xpath}")
+            if lists: list_type = "mobile"
+            else: list_type = None # 둘 다 실패
+
+        logger.debug(f"Found {len(lists)} items using {list_type} layout XPath.")
 
         if not lists:
-            logger.warning(f"No items found using XPath: {list_xpath}.")
-            # 필요시 결과 없음 메시지 확인 로직 추가
+            logger.warning(f"No items found using either desktop or mobile XPath.")
             return []
 
-        # --- 개별 결과 처리 루프 (Tailwind 구조 기반 파싱) ---
+        # --- 개별 결과 처리 루프 (구조별 XPath 적용) ---
         ret = []
-        score = 60 # 원본 점수 로직 유지를 위해 사용 (아래에서 조정됨)
+        score = 60
         for node in lists[:10]:
             try:
                 item = EntityAVSearch(cls.site_name)
                 href = None; item.image_url = None; item.title = item.title_ko = "Not Found"; original_ps_url = None
 
-                # 정보 추출
-                link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]')
-                if not link_tag_img: continue
-                link_tag_img = link_tag_img[0]
-                href_img_link = link_tag_img.attrib.get("href", "").lower()
+                # --- 구조(list_type)에 따라 다른 XPath 적용 ---
+                if list_type == "desktop":
+                    link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]')
+                    if not link_tag_img: continue
+                    img_link_href = link_tag_img[0].attrib.get("href", "").lower()
 
-                img_tag = link_tag_img.xpath('./img')
-                if not img_tag: continue
-                img_tag = img_tag[0]
-                original_ps_url = img_tag.attrib.get("src") # 원본 ps_url 저장
-                if not original_ps_url: continue
+                    img_tag = link_tag_img[0].xpath('./img/@src')
+                    if not img_tag: continue
+                    original_ps_url = img_tag[0]
+
+                    title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]')
+                    if not title_link_tag: continue
+                    title_link_href = title_link_tag[0].attrib.get("href", "").lower()
+                    href = title_link_href if title_link_href else img_link_href # 상세페이지 링크
+
+                    title_p_tag = title_link_tag[0].xpath('./p[contains(@class, "hover:text-linkHover")]')
+                    if title_p_tag: item.title = item.title_ko = title_p_tag[0].text_content().strip()
+
+                elif list_type == "mobile":
+                    # 모바일 구조에 맞는 XPath (위 HTML 분석 기반)
+                    link_tag_img = node.xpath('.//a[div[contains(@class, "h-[180px]")]]') # 이미지를 포함하는 div를 가진 a
+                    if not link_tag_img: continue
+                    img_link_href = link_tag_img[0].attrib.get("href", "").lower()
+
+                    img_tag = link_tag_img[0].xpath('.//img/@src')
+                    if not img_tag: continue
+                    original_ps_url = img_tag[0]
+
+                    # 모바일 제목은 상세페이지 링크 안의 p 태그
+                    title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]') # 데스크톱과 같을 수 있음
+                    if not title_link_tag:
+                        # 다른 구조의 제목 링크 찾기 시도 (필요 시)
+                        title_link_tag = node.xpath('.//a[div/p[contains(@class, "line-clamp-2")]]') # 제목 p를 가진 div 안의 a
+                        if not title_link_tag: continue # 그래도 없으면 스킵
+
+                    title_link_href = title_link_tag[0].attrib.get("href", "").lower()
+                    href = title_link_href if title_link_href else img_link_href # 상세페이지 링크
+
+                    title_p_tag = title_link_tag[0].xpath('.//p[contains(@class, "line-clamp-2")]')
+                    if title_p_tag: item.title = item.title_ko = title_p_tag[0].text_content().strip()
+
+                else: # list_type이 None (알 수 없는 구조)
+                    logger.error("Unknown list type, cannot parse item.")
+                    continue
+
+                # --- 이하 공통 처리 로직 ---
+                if not original_ps_url: continue # 이미지 URL 없으면 스킵
                 if original_ps_url.startswith("//"): original_ps_url = "https:" + original_ps_url
 
-                # manual 모드에 따른 image_url 설정
                 if manual:
                     _image_mode = "1" if image_mode != "0" else image_mode
                     try: item.image_url = SiteUtil.process_image_mode(_image_mode, original_ps_url, proxy_url=proxy_url)
                     except Exception as e_img: logger.error(f"Error processing image: {e_img}"); item.image_url = original_ps_url
                 else:
-                    item.image_url = original_ps_url # 자동 모드는 원본 ps_url 사용
+                    item.image_url = original_ps_url
 
-                title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]')
-                if not title_link_tag: continue
-                title_link_tag = title_link_tag[0]
-                href_title_link = title_link_tag.attrib.get("href", "").lower()
-                href = href_title_link if href_title_link else href_img_link # 제목 링크 href 우선
-
-                title_p_tag = title_link_tag.xpath('./p[contains(@class, "hover:text-linkHover")]')
-                if title_p_tag: item.title = item.title_ko = title_p_tag[0].text_content().strip()
-
-                # 공통 처리
+                if not href: continue # 상세 페이지 링크 없으면 스킵
                 match_cid = cls.PTN_SEARCH_CID.search(href)
                 if match_cid: item.code = cls.module_char + cls.site_char + match_cid.group("code")
                 else: logger.warning(f"CID not found in href: {href}"); continue
                 if any(exist_item.get("code") == item.code for exist_item in ret): continue
                 if item.title == "Not Found": item.title = item.title_ko = item.code
 
-                # ps_url 캐싱 (원본 로직 유지)
+                # ps_url 캐싱
                 if item.code and original_ps_url:
                     cls._ps_url_cache[item.code] = original_ps_url
                     logger.debug(f"Stored ps_url for {item.code} in cache.")
 
-                # 번역 처리 (manual 아닐 때)
+                # 번역 처리
                 if not manual:
                     if do_trans and item.title:
                         try: item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
                         except Exception as e_trans: logger.error(f"Error translating title: {e_trans}"); item.title_ko = item.title
                     else: item.title_ko = item.title
-                else: # manual 일 때
+                else:
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
 
-                # 점수 계산 (원본 로직 유지)
+                # 점수 계산
                 match_real_no = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
                 if match_real_no: item_ui_code_base = match_real_no.group("real") + match_real_no.group("no")
                 else: item_ui_code_base = item.code[2:]
@@ -209,29 +243,29 @@ class SiteDmm:
                 if len(keyword_tmps) == 2:
                     if item_ui_code_base == dmm_keyword: current_score = 100
                     elif item_ui_code_base.replace("0", "") == dmm_keyword.replace("0", ""): current_score = 100
-                    elif dmm_keyword in item_ui_code_base: current_score = score # 이전 score 변수 사용
+                    elif dmm_keyword in item_ui_code_base: current_score = score
                     elif keyword_tmps[0] in item.code and keyword_tmps[1] in item.code: current_score = score
                     elif keyword_tmps[0] in item.code or keyword_tmps[1] in item.code: current_score = 60
                     else: current_score = 20
                 else:
-                    if item_ui_code_base == dmm_keyword: current_score = 100 # dmm_keyword와 비교
-                    elif dmm_keyword in item_ui_code_base: current_score = score # score 변수 사용
+                    if item_ui_code_base == dmm_keyword: current_score = 100
+                    elif dmm_keyword in item_ui_code_base: current_score = score
                     else: current_score = 20
                 item.score = current_score
-                if current_score < 100 and score > 20: score -= 5 # score 변수 업데이트 (원본 로직)
+                if current_score < 100 and score > 20: score -= 5
 
-
-                # UI 코드 형식화 (zfill(3) -> zfill(5) 수정)
+                # UI 코드 형식화
                 if match_real_no:
-                    item.ui_code = match_real_no.group("real").upper() + "-" + str(int(match_real_no.group("no"))).zfill(5) # 5자리 패딩
+                    item.ui_code = match_real_no.group("real").upper() + "-" + str(int(match_real_no.group("no"))).zfill(5)
                 else:
-                    # 원본 fallback 로직 유지하되, ui_code_base 사용
-                    if "00000" in item_ui_code_base: item.ui_code = item_ui_code_base.replace("00000", "-00").upper() # 5자리 기준
-                    elif "0000" in item_ui_code_base: item.ui_code = item_ui_code_base.replace("0000", "-00").upper()
-                    elif "000" in item_ui_code_base: item.ui_code = item_ui_code_base.replace("000", "-").upper() # 3자리 기준 추가
-                    elif "00" in item_ui_code_base: item.ui_code = item_ui_code_base.replace("00", "-").upper()
-                    else: item.ui_code = item_ui_code_base.upper() # 패딩 없을 경우
-                    # 하이픈 없는 경우 추가 시도 (예: abp123 -> ABP-123) - 복잡도 증가로 일단 생략
+                    # Fallback 로직 개선 필요 가능성 있음
+                    ui_code_temp = item_ui_code_base.upper()
+                    if ui_code_temp.startswith("H_"): ui_code_temp = ui_code_temp[2:] # H_ 제거
+                    # 하이픈 추가 로직 (더 견고하게 만들 필요 있음)
+                    # 예: 문자와 숫자 경계 찾기
+                    m = re.match(r"([a-zA-Z]+)(\d+.*)", ui_code_temp)
+                    if m: item.ui_code = m.group(1) + "-" + m.group(2)
+                    else: item.ui_code = ui_code_temp # 그대로 사용
 
                 logger.debug(f"Item found - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title}")
                 ret.append(item.as_dict())
