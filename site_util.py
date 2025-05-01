@@ -435,45 +435,87 @@ class SiteUtil:
     @classmethod
     def has_hq_poster(cls, im_sm, im_lg, proxy_url=None):
         try:
-            # --- imopen 호출 전에 URL 유효성 검사 ---
+            # --- URL 유효성 검사 ---
             if not im_sm or not isinstance(im_sm, str) or not im_lg or not isinstance(im_lg, str):
                 logger.debug("has_hq_poster: Invalid or empty URL provided.")
-                return None # 유효하지 않은 URL 입력 시 None 반환
+                return None
 
             im_sm_obj = cls.imopen(im_sm, proxy_url=proxy_url)
             im_lg_obj = cls.imopen(im_lg, proxy_url=proxy_url)
 
-            # --- imopen 결과 확인 ---
+            # --- 이미지 열기 확인 ---
             if im_sm_obj is None or im_lg_obj is None:
                 logger.debug("has_hq_poster: Failed to open one or both images.")
                 return None
+
             try:
-                from imagehash import average_hash as hfun
+                # --- imagehash 함수 임포트 ---
+                try:
+                    # average_hash 와 phash 를 함께 임포트
+                    from imagehash import average_hash, phash
+                except ImportError:
+                    logger.warning("ImageHash library not found, cannot perform similarity checks.")
+                    return None # 라이브러리 없으면 비교 불가
+
                 ws, hs = im_sm_obj.size
                 wl, hl = im_lg_obj.size
-                if ws > wl or hs > hl: return None
+                # 작은 이미지가 큰 이미지보다 클 수 없음
+                if ws > wl or hs > hl:
+                    logger.debug("has_hq_poster: Small image dimensions exceed large image.")
+                    return None
 
-                for pos in ["r", "l", "c"]:
+                found_pos = None # 최종 찾은 위치 저장 변수
+                positions = ["r", "l", "c"] # 비교할 위치
+
+                # --- 1차 시도: average_hash ---
+                logger.debug("has_hq_poster: Performing primary check using average_hash.")
+                ahash_threshold = 10 # average_hash 임계값
+                for pos in positions:
                     try:
                         cropped_im = cls.imcrop(im_lg_obj, position=pos)
                         if cropped_im is None: continue
-                        val = hfun(im_sm_obj) - hfun(cropped_im)
-                        if val <= 20:
-                            logger.debug(f"has_hq_poster: Found similar region at position '{pos}'.")
-                            return pos
+                        # average_hash 비교
+                        val = average_hash(im_sm_obj) - average_hash(cropped_im)
+                        logger.debug(f"  ahash comparison for pos '{pos}': distance = {val}")
+                        if val <= ahash_threshold:
+                            logger.debug(f"has_hq_poster: Found similar region (ahash <= {ahash_threshold}) at position '{pos}'.")
+                            found_pos = pos
+                            break # 찾으면 루프 종료
                     except Exception as crop_comp_e:
-                        logger.warning(f"Error comparing cropped image at pos '{pos}': {crop_comp_e}")
+                        logger.warning(f"Error comparing cropped image (ahash) at pos '{pos}': {crop_comp_e}")
                         continue
-                logger.debug("has_hq_poster: No similar region found.")
-                return None
-            except ImportError:
-                logger.warning("ImageHash library not found, cannot perform has_hq_poster check.")
-                return None
-            except Exception as hash_e:
+
+                # --- 2차 시도: phash (1차 실패 시) ---
+                if found_pos is None:
+                    logger.debug("has_hq_poster: Primary check (ahash) failed. Performing secondary check using phash.")
+                    phash_threshold = 10 # phash 임계값 (ahash와 동일하게 시작, 조정 가능)
+                    for pos in positions:
+                        try:
+                            cropped_im = cls.imcrop(im_lg_obj, position=pos)
+                            if cropped_im is None: continue
+                            # phash 비교
+                            val = phash(im_sm_obj) - phash(cropped_im)
+                            logger.debug(f"  phash comparison for pos '{pos}': distance = {val}")
+                            if val <= phash_threshold:
+                                logger.debug(f"has_hq_poster: Found similar region (phash <= {phash_threshold}) at position '{pos}'.")
+                                found_pos = pos
+                                break # 찾으면 루프 종료
+                        except Exception as crop_comp_e:
+                            logger.warning(f"Error comparing cropped image (phash) at pos '{pos}': {crop_comp_e}")
+                            continue
+
+                # --- 최종 결과 반환 ---
+                if found_pos:
+                    return found_pos # 찾은 위치 반환 ('r', 'l', 'c')
+                else:
+                    logger.debug("has_hq_poster: No similar region found using ahash or phash.")
+                    return None # 최종적으로 못 찾으면 None 반환
+
+            except Exception as hash_e: # 해시 계산 자체의 오류 처리
                 logger.exception(f"Error during image hash comparison in has_hq_poster: {hash_e}")
                 return None
-        except Exception as e:
-            logger.exception(f"고화질 포스터 확인 중 예외: {e}")
+        except Exception as e: # 이미지 열기 등 외부 오류 처리
+            logger.exception(f"Error in has_hq_poster function: {e}")
             return None
 
     @classmethod
