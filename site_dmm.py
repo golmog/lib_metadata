@@ -391,20 +391,34 @@ class SiteDmm:
                 else: logger.warning(f"[Videoa] Plot not found using XPath: {plot_xpath}")
                 # 예고편 처리 (v_new AJAX 방식)
                 entity.extras = []
-                if use_extras: # (AJAX/Iframe 로직)
+                if use_extras:
                     logger.debug(f"[Videoa] Attempting trailer AJAX/Iframe for {code}")
-                    try: # (예고편 처리 로직 v_new 것 그대로 삽입)
+                    try:
                         trailer_url = None; trailer_title = entity.title if entity.title and entity.title != code[2:].upper() else code
                         ajax_url = py_urllib_parse.urljoin(cls.site_base_url, f"/digital/videoa/-/detail/ajax-movie/=/cid={code[2:]}/")
                         ajax_headers = cls._get_request_headers(referer=detail_url); ajax_headers['Accept'] = 'text/html, */*; q=0.01'; ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
                         ajax_response = SiteUtil.get_response(ajax_url, proxy_url=proxy_url, headers=ajax_headers)
                         if not (ajax_response and ajax_response.status_code == 200): raise Exception(f"AJAX request failed (Status: {ajax_response.status_code if ajax_response else 'No Resp'})")
-                        ajax_html_text = ajax_response.text; iframe_tree = html.fromstring(ajax_html_text)
+
+                        ajax_html_text = ajax_response.text
+
+                        # --- lxml.html 임포트 확인 및 사용 ---
+                        try:
+                            from lxml import html # 사용 직전에 명시적 임포트
+                        except ImportError:
+                            logger.error("lxml library is required for AJAX trailer parsing but not installed.")
+                            raise # 상위 except에서 잡도록 함
+
+                        iframe_tree = html.fromstring(ajax_html_text) # 이제 html은 확실히 lxml.html 모듈
+                        # --- 임포트 확인 끝 ---
+
                         iframe_srcs = iframe_tree.xpath("//iframe/@src")
                         if not iframe_srcs: raise Exception("Iframe not found")
+
                         iframe_url = py_urllib_parse.urljoin(ajax_url, iframe_srcs[0]); player_headers = cls._get_request_headers(referer=ajax_url)
                         player_response_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=player_headers)
                         if not player_response_text: raise Exception("Failed to get player page content")
+
                         pos = player_response_text.find("const args = {");
                         if pos != -1:
                             json_start = player_response_text.find("{", pos); json_end = player_response_text.find("};", json_start)
@@ -422,7 +436,8 @@ class SiteDmm:
                             entity.extras.append(EntityExtra("trailer", SiteUtil.trans(trailer_title, do_trans=do_trans), "mp4", trailer_url))
                             logger.info(f"[Videoa] Trailer added successfully for {code}")
                         else: logger.error(f"[Videoa] Failed to extract trailer URL for {code}.")
-                    except Exception as extra_e: logger.exception(f"Error processing trailer for videoa {code}: {extra_e}")
+                    except Exception as extra_e: # ImportError 포함 모든 예외 처리
+                        logger.exception(f"Error processing trailer for videoa {code}: {extra_e}")
 
             except Exception as e_parse_videoa:
                 logger.exception(f"Error parsing videoa metadata: {e_parse_videoa}")
