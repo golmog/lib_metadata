@@ -112,7 +112,7 @@ class SiteDmm:
         logger.debug("keyword [%s] -> [%s]", keyword, dmm_keyword)
 
         # --- 검색 URL ---
-        search_url = f"{cls.site_base_url}/digital/videoa/-/list/search/=/?searchstr={dmm_keyword}"
+        search_url = f"{cls.site_base_url}/search/?redirect=1&enc=UTF-8&category=&searchstr={dmm_keyword}"
         # 필요시 파라미터 추가: "&sort=ranking" 등
         logger.info(f"Using NEW search URL: {search_url}")
 
