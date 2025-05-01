@@ -209,35 +209,42 @@ class SiteAvdbs:
                         else: logger.debug("DB 3차 쿼리(fallback): 결과 없음.")
 
                 if row:
-                    korean_name = row["inner_name_kr"]
-                    eng_orig_name = row["inner_name_en"]
-                    thumb_url = row["profile_img_view"]
+                    # DB row 객체에서 직접 값을 읽어와 db_info 딕셔너리 생성
+                    db_info = {
+                        "name": row["inner_name_kr"],       # 한국어 이름
+                        "name2": row["inner_name_cn"],      # 일본어 이름 (DB 컬럼 사용)
+                        "thumb": row["profile_img_view"]    # 썸네일 URL
+                    }
+                    logger.debug(f"DB 조회 결과: name='{db_info['name']}', name2='{db_info['name2']}', thumb='{db_info['thumb'][:60]}...'")
 
-                    if DISCORD_UTIL_AVAILABLE and thumb_url and DiscordUtil.isurlattachment(thumb_url):
-                        if DiscordUtil.isurlexpired(thumb_url):
-                            logger.warning(f"DB: 만료된 Discord URL 발견 ('{originalname}' -> found: {korean_name}). 갱신 시도...")
-                            try:
-                                renew_map = DiscordUtil.proxy_image_url([thumb_url])
-                                if renew_map is not None and thumb_url in renew_map and renew_map[thumb_url]:
-                                    renewed_url = renew_map[thumb_url]
-                                    if renewed_url != thumb_url:
-                                        logger.info(f"DB: Discord URL 갱신 성공: -> {renewed_url}")
-                                        thumb_url = renewed_url
-                                elif renew_map is None:
-                                    logger.error(f"DB: Discord URL 갱신 실패 - proxy_image_url 함수가 None을 반환했습니다.")
-                                else:
-                                    logger.warning(f"DB: Discord URL 갱신 실패 - 갱신된 URL을 받지 못했습니다. renew_map: {renew_map}")
-                            except Exception as e_renew: logger.error(f"DB: Discord URL 갱신 중 예외: {e_renew}")
+                    # DiscordUtil 사용 가능하고, 썸네일이 Discord 첨부파일 URL 형식인지 확인
+                    if DISCORD_UTIL_AVAILABLE and db_info.get("thumb") and DiscordUtil.isurlattachment(db_info["thumb"]):
+                        logger.debug(f"DB: Discord 첨부파일 URL 발견 ('{originalname}' -> {db_info.get('name')}). 갱신 시도 (renew_urls)...")
+                        original_thumb_before_renew = db_info["thumb"] # 비교용 원본 URL 저장
+                        try:
+                            # renew_urls 호출하여 db_info 내 thumb 값 갱신 시도
+                            db_info = DiscordUtil.renew_urls(db_info)
 
-                    db_info = {"name": korean_name, "name2": eng_orig_name, "thumb": thumb_url}
-                    if db_info["name2"]:
-                        match = re.match(r"^(.*?)\s*\(.*\)$", db_info["name2"])
-                        if match: db_info["name2"] = match.group(1).strip()
+                            # 갱신 후 로그 (URL 변경 여부 확인)
+                            if db_info.get("thumb") != original_thumb_before_renew:
+                                logger.info(f"DB: Discord URL 갱신 완료. 새 URL 적용됨.")
+                            else:
+                                logger.debug(f"DB: Discord URL 갱신 처리 완료 (URL 변경 없음 - 만료 전 또는 갱신 실패).")
+
+                        except Exception as e_renew:
+                            logger.error(f"DB: Discord URL 갱신 프로세스 중 예외: {e_renew}")
+                            # 오류 발생 시 db_info['thumb']는 이전 값을 유지
 
                     if db_info.get("name") and db_info.get("thumb"):
-                        logger.info(f"DB에서 '{originalname}' 검색됨 ({korean_name}).")
-                        info = db_info; info["site"] = "avdbs_db"; db_found_valid = True
-                    else: logger.debug(f"DB 결과 필수 정보 부족 ('{originalname}' -> found: {korean_name}).")
+                        logger.info(f"DB에서 '{originalname}' 정보 처리 완료 (이름: {db_info.get('name')}).")
+                        info = db_info # 최종 정보 할당 (갱신된 thumb 포함 가능)
+                        info["site"] = "avdbs_db"
+                        db_found_valid = True
+                    else:
+                        missing_fields = []
+                        if not db_info.get("name"): missing_fields.append("name (한국어 이름)")
+                        if not db_info.get("thumb"): missing_fields.append("thumb (썸네일)")
+                        logger.warning(f"DB 처리 후 필수 정보 부족: {', '.join(missing_fields)} ('{originalname}' -> 이름: {db_info.get('name')}, 썸네일: {db_info.get('thumb')})")
 
             except sqlite3.OperationalError as e_op: logger.error(f"DB OperationalError: {e_op}")
             except sqlite3.Error as e: logger.error(f"DB 조회 중 오류: {e}")
