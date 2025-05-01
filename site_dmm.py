@@ -476,17 +476,15 @@ class SiteDmm:
             except: entity.year = None
         else: logger.warning("No premiered date found."); entity.premiered = None; entity.year = None
 
-        # --- 줄거리 파싱 (원본 코드 로직) ---
-        # 이 XPath도 새 구조에서 작동 안 할 가능성 높음!
-        plot_xpath = '//div[@class="mg-b20 lh4"]/p[@class="mg-b20"]/text()' # 원본 XPath
-        # 또는 plot_xpath = '//div[@class="mg-b20 lh4"]/text()' # 이전 로그 기반
+        # --- 줄거리 파싱 ---
         try:
+            plot_xpath = '//div[@class="mg-b20 lh4"]/text()' # 이 클래스를 가진 div 아래의 텍스트 노드들
             plot_nodes = tree.xpath(plot_xpath)
             if plot_nodes:
                 plot_text = "\n".join([p.strip() for p in plot_nodes if p.strip()]).split("※")[0].strip()
                 entity.plot = SiteUtil.trans(plot_text, do_trans=do_trans)
                 logger.debug(f"Plot parsed: {entity.plot[:50]}...")
-            else: logger.warning(f"Plot not found using XPath: {plot_xpath}")
+            else: logger.warning("Plot node (div.mg-b20.lh4 > text()) not found.")
         except Exception as e: logger.exception(f"Error parsing plot: {e}")
 
 
