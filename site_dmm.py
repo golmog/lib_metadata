@@ -147,25 +147,21 @@ class SiteDmm:
             return []
 
         # --- XPath 탐색 ---
-        # 이 XPath들은 로그로 확인된 실제 HTML 구조에 맞춰 수정해야 함
         list_xpath_desktop = '//div[contains(@class, "grid-cols-4")]//div[contains(@class, "border-r") and contains(@class, "border-b")]'
+        # 모바일 XPath 수정: 상세 링크를 가진 div.flex 아이템 찾기
         list_xpath_mobile = '//div[contains(@class, "divide-y")]/div[contains(@class, "flex") and ./a[contains(@href, "/detail/=/cid=")]]'
-        list_xpath_ul = '//ul[@id="list"]/li'
-        lists = []
-        list_type = None
 
-        logger.debug("Attempting to parse HTML with known XPaths...")
+        lists = []; list_type = None
+        logger.debug("Attempting to parse final HTML with known XPaths...")
         try: lists = tree.xpath(list_xpath_desktop)
         except Exception: pass
         if lists: list_type = "desktop"
         else:
+            logger.debug(f"Trying XPath (Mobile): {list_xpath_mobile}")
             try: lists = tree.xpath(list_xpath_mobile)
             except Exception: pass
             if lists: list_type = "mobile"
-            else:
-                try: lists = tree.xpath(list_xpath_ul)
-                except Exception: pass
-                if lists: list_type = "ul_list"
+            # else: # ul#list 등 다른 XPath 시도
 
         logger.debug(f"Found {len(lists)} items using {list_type} layout XPath.")
         if not lists: logger.warning(f"No items found using any XPath."); return []
@@ -178,8 +174,9 @@ class SiteDmm:
                 href = None; item.image_url = None; item.title = "Not Found"; original_ps_url = None
                 match_real_no = None
 
-                # 파싱 로직 분기 (이 XPath들은 로그 확인 후 수정 필요)
+                # --- 파싱 로직 분기 (모바일 XPath 수정 반영) ---
                 if list_type == "desktop":
+                    # (이전 데스크톱 파싱 로직)
                     link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]')
                     if not link_tag_img: continue
                     img_link_href = link_tag_img[0].attrib.get("href", "").lower()
@@ -194,18 +191,20 @@ class SiteDmm:
                     if title_p_tag: item.title = title_p_tag[0].text_content().strip()
 
                 elif list_type == "mobile":
-                    link_tag_img = node.xpath('.//a[div[contains(@class, "h-[180px]")]]')
-                    if not link_tag_img: continue
-                    img_link_href = link_tag_img[0].attrib.get("href", "").lower()
-                    img_tag = link_tag_img[0].xpath('.//img/@src')
+                    # 상세 페이지 링크 추출 (첫번째 a 태그 또는 제목 포함 a 태그)
+                    detail_link_tags = node.xpath('./a[contains(@href, "/detail/=/cid=")]')
+                    if not detail_link_tags: continue
+                    href = detail_link_tags[0].attrib.get("href", "").lower() # 상세 링크 href
+
+                    # 이미지 URL 추출 (href 가진 a 태그 내부 img)
+                    img_tag = node.xpath('.//a[@href=$href]//img/@src', href=href) # 변수 사용
+                    # 또는 더 간단하게: img_tag = node.xpath('.//a[contains(@href,"/detail/=/cid=")]//img/@src')
+                    # 또는 더 구체적으로: img_tag = node.xpath('./a[1]//img/@src') # 첫번째 a 안의 img
                     if not img_tag: continue
                     original_ps_url = img_tag[0]
-                    title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]')
-                    if not title_link_tag: title_link_tag = node.xpath('.//a[div/p[contains(@class, "line-clamp-2")]]')
-                    if not title_link_tag: continue
-                    title_link_href = title_link_tag[0].attrib.get("href", "").lower()
-                    href = title_link_href if title_link_href else img_link_href
-                    title_p_tag = title_link_tag[0].xpath('.//p[contains(@class, "line-clamp-2")]')
+
+                    # 제목 추출 (href 가진 a 태그 내부 p.line-clamp-2)
+                    title_p_tag = node.xpath('.//a[@href=$href]//p[contains(@class, "line-clamp-2")]', href=href)
                     if title_p_tag: item.title = title_p_tag[0].text_content().strip()
 
                 elif list_type == "ul_list":
