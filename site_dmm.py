@@ -198,67 +198,123 @@ class SiteDmm:
     # --- __img_urls 수정: videoa 타입 처리 변경 ---
     @classmethod
     def __img_urls(cls, tree, content_type='unknown'):
-        logger.debug(f"Extracting image URLs for type: {content_type}")
-        img_urls = {'ps': "", 'pl': "", 'arts': []}
+        logger.debug(f"Extracting raw image URLs for type: {content_type}")
+        img_urls = {'ps': "", 'pl': "", 'arts': []} # 기본값 초기화
+
         try:
             if content_type == 'videoa':
-                # videoa: 샘플 이미지 블록(arts)을 먼저 찾고, pl은 arts[0] 사용
-                # XPath 수정 필요: 실제 샘플 이미지 블록 식별자 확인
-                arts_xpath = '//div[@id="sample-image-block"]//a/@href' # 예전 구조 XPath
-                arts_tags = tree.xpath(arts_xpath)
+                # videoa 타입 URL 추출
+                logger.debug("Extracting videoa URLs...")
+
+                # ps (작은 포스터): videoa 페이지 구조에 맞는 XPath 필요.
+                # 예시 XPath (검증 필요): //div[@class='product-summary__poster']//img/@src or similar
+                # 현재 로직은 __info 에서 캐시된 ps를 우선 사용하므로, 여기서는 비워둘 수 있음.
+                # 또는 fallback용 XPath 추가 가능:
+                ps_xpath = '//div[@id="sample-video"]//img/@src' # 원본 DVD 로직에서 가져온 XPath (videoa에서 작동하는지 확인 필요)
+                ps_tag = tree.xpath(ps_xpath)
+                if ps_tag:
+                    raw_ps = ps_tag[0]
+                    img_urls['ps'] = py_urllib_parse.urljoin(cls.site_base_url, raw_ps) if raw_ps else ""
+                    logger.debug(f"Found videoa ps (fallback?): {img_urls['ps']}")
+                else:
+                    logger.warning("Could not find videoa ps using XPath: %s", ps_xpath)
+
+
+                # pl (큰 포스터 링크 - videoa는 보통 없음, arts[0]를 pl로 사용)
+                # arts (샘플 이미지)
+                arts_xpath_main = '//div[@id="sample-image-block"]//a/@href'
+                arts_xpath_alt = '//a[contains(@id, "sample-image")]/@href' # 대체 XPath
+
+                arts_tags = tree.xpath(arts_xpath_main)
                 if not arts_tags:
-                    # 대체 XPath 시도 (최신 구조에서 발견된 패턴?)
-                    arts_xpath_alt = '//a[contains(@id, "sample-image")]/@href'
-                    logger.debug(f"Trying alternative arts XPath: {arts_xpath_alt}")
+                    logger.debug(f"Trying alternative arts XPath for videoa: {arts_xpath_alt}")
                     arts_tags = tree.xpath(arts_xpath_alt)
 
                 if arts_tags:
                     logger.debug(f"Found {len(arts_tags)} potential arts links for videoa.")
-                    all_arts = []
+                    processed_arts = []
                     for href in arts_tags:
                         if href and href.strip():
-                            # href 자체가 이미지 URL일 수 있음 (고화질 링크)
-                            full_href = href if href.startswith("http") else py_urllib_parse.urljoin(cls.site_base_url, href)
-                            all_arts.append(full_href)
-                    # 중복 제거 및 순서 유지
-                    unique_arts = sorted(list(set(all_arts)), key=all_arts.index)
+                            full_href = py_urllib_parse.urljoin(cls.site_base_url, href)
+                            processed_arts.append(full_href)
+                    # 중복 제거 및 순서 유지 (set 사용 시 순서 보장 안 됨, list comprehension 사용)
+                    unique_arts = []
+                    [unique_arts.append(x) for x in processed_arts if x not in unique_arts]
                     img_urls['arts'] = unique_arts
-                    # pl은 arts의 첫 번째 이미지로 설정
+
+                    # videoa는 보통 첫번째 art가 pl 역할
                     if img_urls['arts']:
                         img_urls['pl'] = img_urls['arts'][0]
                         logger.debug(f"PL for videoa set from first art: {img_urls['pl']}")
-                    else:
-                        logger.warning("Arts found for videoa, but list is empty after processing.")
                 else:
                     logger.warning("Arts block not found for videoa using known XPaths.")
-                    # Fallback: 메인 플레이어 이미지를 pl로 시도
-                    pl_xpath_fallback = '//div[@id="sample-video"]//img/@src'
-                    pl_tags_fallback = tree.xpath(pl_xpath_fallback)
-                    if pl_tags_fallback:
-                        img_urls['pl'] = pl_tags_fallback[0]
-                        if img_urls['pl'].startswith("//"): img_urls['pl'] = "https:" + img_urls['pl']
-                        logger.debug(f"PL for videoa set from fallback sample-video: {img_urls['pl']}")
-                    else:
-                        logger.error("PL could not be found for videoa using any method.")
+                    # pl을 위한 Fallback (필요 시):
+                    # pl_xpath_fallback = '//div[@id="sample-video"]//a/@href' # DVD 스타일 XPath
+                    # pl_tags_fallback = tree.xpath(pl_xpath_fallback)
+                    # if pl_tags_fallback: img_urls['pl'] = py_urllib_parse.urljoin(cls.site_base_url, pl_tags_fallback[0])
+
 
             elif content_type == 'dvd':
+                # dvd 타입 URL 추출 (XPath는 실제 DVD 페이지 기준으로 검증/수정 필요!)
+                logger.debug("Extracting dvd URLs...")
 
-                img_urls = cls.__img_urls(tree)
-                SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
+                # ps (작은 포스터) - 예시 XPath (검증 필요!)
+                ps_xpath = '//div[contains(@class, "package-image")]//img/@src' # 예시 1
+                # ps_xpath = '//div[@id="sample-video"]//img/@src' # 예시 2 (원본 코드 참고)
+                ps_tag = tree.xpath(ps_xpath)
+                if ps_tag:
+                    raw_ps = ps_tag[0]
+                    img_urls['ps'] = py_urllib_parse.urljoin(cls.site_base_url, raw_ps) if raw_ps else ""
+                    logger.debug(f"Found dvd ps: {img_urls['ps']}")
+                else:
+                    logger.warning("Could not find dvd ps using XPath: %s", ps_xpath)
 
-                entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
+                # pl (큰 포스터 링크) - 예시 XPath (검증 필요!)
+                pl_xpath = '//div[contains(@class, "package-image")]//a/@href' # 예시 1
+                # pl_xpath = '//div[@id="sample-video"]/a/@href' # 예시 2 (원본 코드 참고)
+                pl_tag = tree.xpath(pl_xpath)
+                if pl_tag:
+                    raw_pl = pl_tag[0]
+                    img_urls['pl'] = py_urllib_parse.urljoin(cls.site_base_url, raw_pl) if raw_pl else ""
+                    logger.debug(f"Found dvd pl: {img_urls['pl']}")
+                else:
+                    logger.warning("Could not find dvd pl using XPath: %s", pl_xpath)
 
-                entity.fanart = []
-                for href in img_urls["arts"][:max_arts]:
-                    entity.fanart.append(SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url))
+                # arts (샘플 이미지) - 예시 XPath (검증 필요!)
+                arts_xpath = '//div[@id="sample-images"]//a/@href' # 예시 1
+                # arts_xpath = '//a[@name="sample-image"]/@href' # 예시 2 (원본 코드 참고)
+                arts_tags = tree.xpath(arts_xpath)
+                if arts_tags:
+                    logger.debug(f"Found {len(arts_tags)} potential arts links for dvd.")
+                    processed_arts = []
+                    for href in arts_tags:
+                        if href and href.strip():
+                            full_href = py_urllib_parse.urljoin(cls.site_base_url, href)
+                            processed_arts.append(full_href)
+                    # 중복 제거 및 순서 유지
+                    unique_arts = []
+                    [unique_arts.append(x) for x in processed_arts if x not in unique_arts]
+                    img_urls['arts'] = unique_arts
+                else:
+                    logger.warning("Could not find dvd arts using XPath: %s", arts_xpath)
+
+                # --- 여기서 SiteUtil 호출이나 entity 관련 코드 모두 제거 ---
+                # --- NameError 유발하던 코드 제거 ---
 
             else:
                 logger.error(f"Unknown content type '{content_type}' in __img_urls")
 
         except Exception as e:
             logger.exception(f"Error extracting image URLs: {e}")
+            # 실패 시 기본값 반환
+            img_urls = {'ps': "", 'pl': "", 'arts': []}
 
+        # 추출된 결과 로깅
         logger.debug(f"Extracted img_urls: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} arts={len(img_urls.get('arts',[]))}")
+        # 추출된 URL 값 로깅 (디버깅 시 유용)
+        # logger.debug(f"PS URL: {img_urls.get('ps')}")
+        # logger.debug(f"PL URL: {img_urls.get('pl')}")
+        # logger.debug(f"Arts URLs: {img_urls.get('arts')}")
         return img_urls
 
 
@@ -286,7 +342,9 @@ class SiteDmm:
 
         logger.info(f"Accessing DMM detail page ({content_type}): {detail_url}")
         info_headers = cls._get_request_headers(referer=cls.fanza_av_url)
-        tree = None; received_html_content = None
+        tree = None;
+
+        received_html_content = None
         try:
             tree = SiteUtil.get_tree(detail_url, proxy_url=proxy_url, headers=info_headers)
             if tree is None: raise Exception("SiteUtil.get_tree returned None.")
@@ -303,6 +361,61 @@ class SiteDmm:
         except Exception as e: logger.exception(f"Failed get/process detail tree: {e}"); raise
 
         entity = EntityMovie(cls.site_name, code); entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
+
+        # --- 원시 이미지 URL 추출 ---
+        # !! 중요: 이제 __img_urls는 URL만 반환 !!
+        img_urls = cls.__img_urls(tree, content_type=content_type)
+
+        # --- 캐시된 ps_url 적용 (존재할 경우) ---
+        if ps_url_from_cache:
+            logger.debug(f"Overriding ps url from cache: {ps_url_from_cache}")
+            img_urls['ps'] = ps_url_from_cache
+        # 캐시된 ps가 없을 경우, __img_urls에서 추출된 ps (있다면) 사용됨
+
+        # --- SiteUtil을 이용한 이미지 처리 (resolve & process) ---
+        # 이 로직은 videoa 와 dvd 공통으로 사용될 수 있음 (SiteUtil 내부에서 처리)
+        logger.debug(f"Image URLs before resolve: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} arts={len(img_urls.get('arts',[]))}")
+        try:
+            SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
+            logger.debug(f"Image URLs after resolve: poster={bool(img_urls.get('poster'))} crop={img_urls.get('poster_crop')} landscape={bool(img_urls.get('landscape'))}")
+
+            entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
+
+            entity.fanart = []
+            # resolve_jav_imgs 후의 arts 리스트 사용
+            resolved_arts = img_urls.get("arts", [])
+            landscape_url = img_urls.get("landscape") # landscape로 사용된 이미지는 팬아트에서 제외 가능성
+            poster_url = img_urls.get("poster")       # poster로 사용된 이미지도 팬아트에서 제외 가능성
+
+            logger.debug(f"Processing {len(resolved_arts)} arts for fanart (max: {max_arts})")
+            processed_fanart_count = 0
+            for href in resolved_arts:
+                if processed_fanart_count >= max_arts:
+                    logger.debug("Reached max_arts limit.")
+                    break
+                # 랜드스케이프나 포스터로 이미 사용된 URL은 팬아트에서 제외할 수 있음 (선택적)
+                # if href == landscape_url:
+                #     logger.debug(f"Skipping fanart (same as landscape): {href}")
+                #     continue
+                # if href == poster_url:
+                #     logger.debug(f"Skipping fanart (same as poster): {href}")
+                #     continue
+
+                try:
+                    fanart_url = SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url)
+                    if fanart_url:
+                        entity.fanart.append(fanart_url)
+                        processed_fanart_count += 1
+                except Exception as e_fanart:
+                    logger.error(f"Error processing fanart image {href}: {e_fanart}")
+
+            logger.debug(f"Final Thumb: {entity.thumb}, Fanart Count: {len(entity.fanart)}")
+
+        except Exception as e_img_proc:
+            logger.exception(f"Error during SiteUtil image processing: {e_img_proc}")
+            entity.thumb = []
+            entity.fanart = []
+
 
         # --- 파싱 로직 분기 ---
         if content_type == 'videoa':
