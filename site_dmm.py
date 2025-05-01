@@ -146,27 +146,21 @@ class SiteDmm:
             logger.exception(f"Failed to get tree for initial search URL {search_url}: {e}")
             return []
 
-        # --- XPath 탐색 ---
-        list_xpath_desktop = '//div[contains(@class, "grid-cols-4")]//div[contains(@class, "border-r") and contains(@class, "border-b")]'
-        # 모바일 XPath 수정: 상세 링크를 가진 div.flex 아이템 찾기
-        list_xpath_mobile = '//div[contains(@class, "divide-y")]/div[contains(@class, "flex") and ./a[contains(@href, "/detail/=/cid=")]]'
+        # --- XPath: 데스크톱 grid 구조만 사용 ---
+        list_xpath = '//div[contains(@class, "grid-cols-4")]//div[contains(@class, "border-r") and contains(@class, "border-b")]'
+        lists = []
+        logger.debug(f"Attempting XPath (Desktop Grid): {list_xpath}")
+        try:
+            lists = tree.xpath(list_xpath)
+        except Exception as e_xpath:
+            logger.error(f"XPath error ({list_xpath}): {e_xpath}")
 
-        lists = []; list_type = None
-        logger.debug("Attempting to parse final HTML with known XPaths...")
-        try: lists = tree.xpath(list_xpath_desktop)
-        except Exception: pass
-        if lists: list_type = "desktop"
-        else:
-            logger.debug(f"Trying XPath (Mobile): {list_xpath_mobile}")
-            try: lists = tree.xpath(list_xpath_mobile)
-            except Exception: pass
-            if lists: list_type = "mobile"
-            # else: # ul#list 등 다른 XPath 시도
+        logger.debug(f"Found {len(lists)} items using Desktop Grid XPath.")
+        if not lists:
+            logger.warning(f"No items found using Desktop Grid XPath. Check HTML structure or 'no results' message.")
+            return []
 
-        logger.debug(f"Found {len(lists)} items using {list_type} layout XPath.")
-        if not lists: logger.warning(f"No items found using any XPath."); return []
-
-        # --- 개별 결과 처리 루프 ---
+        # --- 개별 결과 처리 루프 (데스크톱 파싱 로직만 사용) ---
         ret = []; score = 60
         for node in lists[:10]:
             try:
@@ -174,52 +168,25 @@ class SiteDmm:
                 href = None; item.image_url = None; item.title = "Not Found"; original_ps_url = None
                 match_real_no = None
 
-                # --- 파싱 로직 분기 ---
-                if list_type == "desktop":
-                    # 이 XPath들이 데스크톱 구조 HTML과 맞는지 확인!
-                    link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]')
-                    if not link_tag_img: continue
-                    img_link_href = link_tag_img[0].attrib.get("href", "").lower()
+                # --- 데스크톱 구조 파싱 ---
+                link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]')
+                if not link_tag_img: continue
+                img_link_href = link_tag_img[0].attrib.get("href", "").lower()
 
-                    img_tag = link_tag_img[0].xpath('./img/@src') # 이미지 src
-                    if not img_tag: continue
-                    original_ps_url = img_tag[0]
+                img_tag = link_tag_img[0].xpath('./img/@src')
+                if not img_tag: continue
+                original_ps_url = img_tag[0]
 
-                    title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]')
-                    if not title_link_tag: continue
-                    title_link_href = title_link_tag[0].attrib.get("href", "").lower()
-                    href = title_link_href if title_link_href else img_link_href # 상세 링크 href
+                title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]')
+                if not title_link_tag: continue
+                title_link_with_p = node.xpath('.//a[contains(@href, "/detail/=/cid=") and ./p[contains(@class, "hover:text-linkHover")]]')
+                if title_link_with_p: title_link_tag = title_link_with_p[0]
+                else: title_link_tag = title_link_tag[0]
+                title_link_href = title_link_tag.attrib.get("href", "").lower()
+                href = title_link_href if title_link_href else img_link_href
 
-                    title_p_tag = title_link_tag[0].xpath('./p[contains(@class, "hover:text-linkHover")]') # 제목 p
-                    if title_p_tag: item.title = title_p_tag[0].text_content().strip()
-
-                elif list_type == "mobile":
-                    # 상세 페이지 링크 추출 (첫번째 a 태그 또는 제목 포함 a 태그)
-                    detail_link_tags = node.xpath('./a[contains(@href, "/detail/=/cid=")]')
-                    if not detail_link_tags: continue
-                    href = detail_link_tags[0].attrib.get("href", "").lower() # 상세 링크 href
-
-                    # 이미지 URL 추출 (href 가진 a 태그 내부 img)
-                    img_tag = node.xpath('.//a[@href=$href]//img/@src', href=href) # 변수 사용
-                    # 또는 더 간단하게: img_tag = node.xpath('.//a[contains(@href,"/detail/=/cid=")]//img/@src')
-                    # 또는 더 구체적으로: img_tag = node.xpath('./a[1]//img/@src') # 첫번째 a 안의 img
-                    if not img_tag: continue
-                    original_ps_url = img_tag[0]
-
-                    # 제목 추출 (href 가진 a 태그 내부 p.line-clamp-2)
-                    title_p_tag = node.xpath('.//a[@href=$href]//p[contains(@class, "line-clamp-2")]', href=href)
-                    if title_p_tag: item.title = title_p_tag[0].text_content().strip()
-
-                elif list_type == "ul_list":
-                    link_tag_title = node.xpath('.//p[@class="tmb"]/a')
-                    if not link_tag_title: continue
-                    href = link_tag_title[0].attrib.get("href", "").lower()
-                    img_tag_list = node.xpath('.//p[@class="tmb"]/a/span[@class="img"]/img')
-                    if not img_tag_list: continue
-                    img_tag = img_tag_list[0]
-                    original_ps_url = img_tag.attrib.get("src")
-                    item.title = img_tag.attrib.get("alt", "").strip()
-                else: continue
+                title_p_tag = title_link_tag.xpath('./p[contains(@class, "hover:text-linkHover")]')
+                if title_p_tag: item.title = title_p_tag[0].text_content().strip()
 
                 # 공통 처리
                 if not original_ps_url: continue
