@@ -118,14 +118,37 @@ class SiteDmm:
         # SiteUtil.get_tree 사용
         search_headers = cls._get_request_headers(referer=cls.site_base_url + "/") # 적절한 Referer
         tree = None
+        received_html_content = None # HTML 내용 저장 변수
+
         try:
+            # SiteUtil.get_tree 사용
             tree = SiteUtil.get_tree(search_url, proxy_url=proxy_url, headers=search_headers)
+
+            # --- 실제 받아온 HTML 내용 로깅/저장 ---
+            if tree is not None:
+                try:
+                    # lxml 객체를 예쁘게 포맷된 문자열로 변환
+                    received_html_content = etree.tostring(tree, pretty_print=True, encoding='unicode', method='html')
+
+                    # 로그로 출력 (너무 길면 잘릴 수 있음)
+                    logger.debug(">>>>>> Received HTML Start >>>>>>")
+                    # 로그 길이를 고려하여 적절히 나누어 출력하거나 앞부분만 출력
+                    log_chunk_size = 1500
+                    for i in range(0, len(received_html_content), log_chunk_size):
+                        logger.debug(received_html_content[i:i+log_chunk_size])
+                    # logger.debug(f"Received HTML content:\n{received_html_content[:8000]}") # 앞 8000자 출력
+                    logger.debug("<<<<<< Received HTML End <<<<<<")
+
+                except Exception as e_log_html:
+                    logger.error(f"Error converting or logging received HTML: {e_log_html}")
+            else:
+                logger.warning("SiteUtil.get_tree returned None, cannot log HTML.")
+                return [] # tree가 None이면 더 이상 진행 불가
+
         except Exception as e:
             logger.exception(f"Failed to get tree for search URL: {search_url}")
             return []
-        if tree is None:
-            logger.warning(f"Failed to get tree (returned None) for URL: {search_url}")
-            return []
+        # tree가 None 이면 위에서 return 되었으므로 아래 코드는 실행 안 됨
 
         # --- XPath 수정: 데스크톱/모바일 구조 모두 시도 ---
         lists = []
