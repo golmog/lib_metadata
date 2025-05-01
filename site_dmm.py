@@ -111,7 +111,7 @@ class SiteDmm:
 
     @classmethod
     def __search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
-        # --- 키워드 처리 (기존과 동일) ---
+        # --- 키워드 처리 ---
         keyword = keyword.strip().lower()
         if keyword[-3:-1] == "cd": keyword = keyword[:-3]
         keyword = keyword.replace("-", " ")
@@ -120,18 +120,14 @@ class SiteDmm:
         else: dmm_keyword = keyword
         logger.debug("keyword [%s] -> [%s]", keyword, dmm_keyword)
 
-        # --- 검색 URL 수정: 원래의 최신 URL 사용 ---
-        # 원래: /digital/videoa/-/list/search/=/?searchstr={dmm_keyword}
-        # 참고: 이 URL은 파라미터 순서나 추가 파라미터가 필요할 수 있음 (예: 정렬, 필터 등)
-        #      최소한의 형태로 시도
+        # --- 검색 URL: 최신 URL 사용 ---
         search_url = f"{cls.site_base_url}/digital/videoa/-/list/search/=/?searchstr={dmm_keyword}"
-        # 필요하다면 limit, sort 파라미터 추가 가능:
-        # search_url += "&sort=rankprofile" # 예시
-        logger.info(f"Accessing NEW DMM search URL: {search_url}")
+        # search_url += "&sort=rankprofile" # 필요시 추가
+        logger.info(f"Target NEW DMM search URL: {search_url}")
 
-        # --- requests.Session 사용 및 연령 확인 처리 (이전 답변의 세션 로직 사용 권장) ---
+        # --- requests.Session 사용 및 연령 확인 처리 ---
         session = requests.Session()
-        session_headers = { # 헤더 설정
+        session_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
             "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -142,25 +138,59 @@ class SiteDmm:
         tree = None
 
         try:
-            # --- 연령 확인 처리 로직 포함하여 HTML 가져오기 ---
-            # (이전 답변의 세션 사용 + 초기 접속 + 연령 확인 시뮬레이션 로직 필요)
-            # 여기서는 간단하게 GET 요청만 표시 (실제로는 이전 세션 코드 사용)
-            logger.debug("Attempting to get search results via session...")
+            # 단계 1: 초기 접속 (쿠키 획득 목적)
+            initial_url = cls.fanza_av_url # 리다이렉션된 최종 URL 사용
+            logger.debug(f"Making initial request to: {initial_url}")
+            session.headers['Referer'] = cls.site_base_url + "/"
+            try:
+                init_resp = session.get(initial_url, timeout=10, verify=False, allow_redirects=True, proxies=proxies)
+                init_resp.raise_for_status()
+                logger.debug(f"Initial request successful. Cookies: {session.cookies.get_dict()}")
+            except Exception as e_init:
+                logger.warning(f"Initial request failed (continuing anyway): {e_init}")
+
+            # 단계 2: 연령 확인 시뮬레이션 (GET 방식 예시 - 실제 방식 확인 필요)
+            redirect_target = quote(search_url, safe='')
+            confirm_url = cls.age_check_confirm_url_template.format(redirect_url=redirect_target)
+            logger.debug(f"Simulating age check confirmation by GET: {confirm_url}")
+            session.headers['Referer'] = initial_url # 초기 페이지가 Referer
+            try:
+                confirm_resp = session.get(confirm_url, timeout=10, verify=False, allow_redirects=True, proxies=proxies)
+                confirm_resp.raise_for_status()
+                logger.debug(f"Age check confirmation request successful. Cookies now: {session.cookies.get_dict()}")
+                # 확인 후에도 쿠키 없으면 수동 설정 시도 (이전 성공 로직에 있었다면)
+                if 'age_check_done' not in session.cookies.get_dict(domain='.dmm.co.jp'):
+                    logger.warning("age_check_done cookie STILL not set after confirmation attempt. Manually setting...")
+                    session.cookies.set("age_check_done", "1", domain=".dmm.co.jp")
+                    session.cookies.set("age_check_done", "1", domain=".dmm.com")
+            except Exception as e_confirm:
+                # 확인 실패해도 다음 단계 진행 (때로는 성공할 수도 있음)
+                logger.error(f"Age check confirmation request failed: {e_confirm}")
+
+            # 단계 3: 실제 검색 요청 (최신 URL 사용)
+            logger.info(f"Making final search request to: {search_url}")
+            session.headers['Referer'] = confirm_url # 확인 페이지가 Referer
             response = session.get(search_url, timeout=15, verify=False, allow_redirects=True, proxies=proxies)
             response.raise_for_status()
             received_html = response.text
-            logger.debug(f"Received HTML for {search_url}:\n{received_html[:1000]}...") # 로그 줄임
+            logger.debug(f"Received HTML for final search request:\n{received_html[:1000]}...")
 
+            # 연령 확인 페이지 재확인
             if "<title>年齢認証 - FANZA</title>" in received_html:
-                logger.error("Age verification page received. Cannot parse results.")
-                return [] # 연령 확인 페이지면 실패
+                logger.error("Age verification page received ON FINAL ATTEMPT.")
+                logger.error(f"Final Cookies Sent: {session.cookies.get_dict()}")
+                return [] # 실패
 
+            # HTML 파싱
             tree = html.fromstring(received_html)
 
         except requests.exceptions.RequestException as e_req:
             logger.error(f"Request failed for {search_url}: {e_req}")
+            if hasattr(e_req, 'response') and e_req.response is not None:
+                logger.error(f"Failed Response Status: {e_req.response.status_code}")
+                # logger.error(f"Failed Response Content: {e_req.response.text[:500]}")
             return []
-        except Exception as e_parse:
+        except Exception as e_parse: # lxml 파싱 오류 포함
             logger.error(f"Error processing response or parsing HTML for {search_url}: {e_parse}")
             return []
 
@@ -168,8 +198,7 @@ class SiteDmm:
             logger.error("Failed to get valid HTML tree.")
             return []
 
-        # --- XPath: Tailwind CSS 구조 기반 ---
-        # 검색 결과 아이템 목록 XPath
+        # --- XPath 및 결과 처리: 최신 Tailwind 구조 기반 ---
         list_xpath = '//div[contains(@class, "grid")]/div[contains(@class, "border-r") and contains(@class, "border-b")]'
         lists = []
         try:
@@ -179,48 +208,45 @@ class SiteDmm:
         logger.debug(f"Found {len(lists)} items using Tailwind XPath.")
 
         if not lists:
-            # 결과 없음 메시지 확인 등 추가 가능
             logger.warning(f"No items found using XPath: {list_xpath}. Checking for 'no results' message...")
+            # 필요시 결과 없음 메시지 확인 XPath 추가
+            # no_results_msg = tree.xpath('//xpath/to/no_results_message')
+            # if no_results_msg: logger.info("DMM page indicates no results found.")
             return []
 
-        # --- 개별 결과 처리 루프 (Tailwind 구조 기반 XPath 사용) ---
+        # --- 개별 결과 처리 루프 ---
         ret = []
         for node in lists[:10]: # 최대 10개 처리
             try:
                 item = EntityAVSearch(cls.site_name)
                 href = None; item.image_url = None; item.title = item.title_ko = "Not Found"
 
-                # 이미지 링크 및 URL, 상세 페이지 링크 추출
+                # 정보 추출 (Tailwind 구조 기반)
                 link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]')
                 if not link_tag_img: continue
                 link_tag_img = link_tag_img[0]
-                href_img_link = link_tag_img.attrib.get("href", "").lower() # 이미지 링크의 href (상세페이지 링크)
+                href_img_link = link_tag_img.attrib.get("href", "").lower()
 
                 img_tag = link_tag_img.xpath('./img')
                 if not img_tag: continue
-                item.image_url = img_tag[0].attrib.get("src") # 썸네일 URL
+                item.image_url = img_tag[0].attrib.get("src")
                 if not item.image_url: continue
 
-                # 제목 추출 (별도 링크 안의 p 태그)
                 title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]')
-                if not title_link_tag: continue # 제목 링크 없으면 스킵
+                if not title_link_tag: continue
                 title_link_tag = title_link_tag[0]
-                href_title_link = title_link_tag.attrib.get("href", "").lower() # 제목 링크의 href (상세페이지 링크)
-                # 이미지 링크와 제목 링크의 상세페이지 URL이 다를 수 있으므로 주의 (보통 같음)
-                href = href_title_link if href_title_link else href_img_link # 제목 링크 우선 사용
+                href_title_link = title_link_tag.attrib.get("href", "").lower()
+                href = href_title_link if href_title_link else href_img_link
 
                 title_p_tag = title_link_tag.xpath('./p[contains(@class, "hover:text-linkHover")]')
                 if title_p_tag: item.title = item.title_ko = title_p_tag[0].text_content().strip()
-                # 제목 태그 못찾으면 일단 진행 (나중에 cid로 대체)
 
-                # --- 이하 공통 처리 로직 (cid 추출, 점수 계산 등) ---
+                # --- 공통 처리 로직 ---
                 match_cid = cls.PTN_SEARCH_CID.search(href)
                 if match_cid: item.code = cls.module_char + cls.site_char + match_cid.group("code")
                 else: logger.warning(f"CID not found in href: {href}"); continue
                 if any(exist_item["code"] == item.code for exist_item in ret): continue
                 if item.image_url.startswith("//"): item.image_url = "https:" + item.image_url
-
-                # 제목 없으면 코드로 대체
                 if item.title == "Not Found": item.title = item.title_ko = item.code
 
                 # 점수 계산
@@ -244,10 +270,12 @@ class SiteDmm:
                     _image_mode = "1" if image_mode != "0" else image_mode
                     try: item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
                     except NameError: logger.error("SiteUtil not defined for image processing")
+                    except Exception as e_img: logger.error(f"Error processing image: {e_img}")
                     if do_trans: item.title_ko = "(번역 안 함) " + item.title
                 else:
                     try: item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
                     except NameError: logger.error("SiteUtil not defined for translation"); item.title_ko = item.title
+                    except Exception as e_trans: logger.error(f"Error translating title: {e_trans}"); item.title_ko = item.title
 
                 # UI 코드 형식화
                 if match_real_no:
