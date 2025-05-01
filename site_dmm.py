@@ -3,17 +3,9 @@ import json
 import re
 import requests
 import urllib.parse as py_urllib_parse
-from lxml import html, etree
+from lxml import html, etree # etree 추가
 import os
 import sqlite3
-
-# BeautifulSoup 임포트
-try:
-    from bs4 import BeautifulSoup
-    BS4_AVAILABLE = True
-except ImportError:
-    P.logger.warning("BeautifulSoup4 library not found. HTML logging will be raw.")
-    BS4_AVAILABLE = False
 
 # lib_metadata 패키지 내 다른 모듈 import
 from .entity_av import EntityAVSearch
@@ -36,8 +28,7 @@ class SiteDmm:
         "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
         "Referer": site_base_url + "/",
         "Sec-Ch-Ua": '"Chromium";v="110", "Not A(Brand";v="24", "Google Chrome";v="110"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Ch-Ua-Mobile": "?0", "Sec-Ch-Ua-Platform": '"Windows"',
         "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "same-origin", "Sec-Fetch-User": "?1", "Upgrade-Insecure-Requests": "1", "DNT": "1", "Cache-Control": "max-age=0", "Connection": "keep-alive",
     }
 
@@ -55,17 +46,17 @@ class SiteDmm:
 
     @classmethod
     def _ensure_age_verified(cls, proxy_url=None):
-        # (이전 원본 코드 내용 유지)
+        # (이전 원본 코드 내용 유지 - SiteUtil.session 사용)
         if not cls.age_verified or cls.last_proxy_used != proxy_url:
             logger.debug("Checking/Performing DMM age verification...")
             cls.last_proxy_used = proxy_url
             session_cookies = SiteUtil.session.cookies
-            domain_checks = ['.dmm.co.jp', '.dmm.com'] # 체크할 도메인
+            domain_checks = ['.dmm.co.jp', '.dmm.com']
             if any('age_check_done' in session_cookies.get_dict(domain=d) and session_cookies.get_dict(domain=d)['age_check_done'] == '1' for d in domain_checks):
-                logger.debug("Age verification cookie already present in SiteUtil.session.")
+                logger.debug("Age verification cookie found in SiteUtil.session.")
                 cls.age_verified = True; return True
 
-            logger.debug("Attempting DMM age verification process...")
+            logger.debug("Attempting DMM age verification via confirmation GET...")
             try:
                 target_rurl = cls.fanza_av_url
                 confirm_path = f"/age_check/=/declared=yes/?rurl={py_urllib_parse.quote(target_rurl, safe='')}"
@@ -75,33 +66,24 @@ class SiteDmm:
                     age_check_confirm_url, method='GET', proxy_url=proxy_url,
                     headers=confirm_headers, allow_redirects=False
                 )
-                logger.debug(f"Confirmation GET response status: {confirm_response.status_code}")
-                logger.debug(f"Session Cookies after confirmation: {[(c.name, c.value, c.domain) for c in SiteUtil.session.cookies]}")
-
-                if confirm_response.status_code == 302 and 'Location' in confirm_response.headers:
-                    if 'age_check_done=1' in confirm_response.headers.get('Set-Cookie', ''):
-                        logger.debug("Age confirmation successful via Set-Cookie.")
-                        # 세션에 반영되었는지 최종 확인
-                        final_cookies = SiteUtil.session.cookies
-                        if any('age_check_done' in final_cookies.get_dict(domain=d) and final_cookies.get_dict(domain=d)['age_check_done'] == '1' for d in domain_checks):
-                            logger.debug("age_check_done=1 confirmed in session.")
-                            cls.age_verified = True; return True
-                        else:
-                            logger.warning("Set-Cookie received, but not updated in session. Trying manual set...")
-                            try:
-                                SiteUtil.session.cookies.set("age_check_done", "1", domain=".dmm.co.jp", path="/")
-                                SiteUtil.session.cookies.set("age_check_done", "1", domain=".dmm.com", path="/")
-                                logger.info("Manually set age_check_done cookie.")
-                                cls.age_verified = True; return True
-                            except Exception as e_set: logger.error(f"Failed to manually set cookie: {e_set}")
-                    else: logger.warning("'age_check_done=1' not in Set-Cookie.")
-                else: logger.warning(f"Expected 302 redirect not received. Status: {confirm_response.status_code}")
-            except Exception as e: logger.exception(f"Failed age verification: {e}")
-
+                logger.debug(f"Confirmation GET status: {confirm_response.status_code}")
+                logger.debug(f"Session Cookies after confirm GET: {[(c.name, c.value, c.domain) for c in SiteUtil.session.cookies]}")
+                if confirm_response.status_code == 302 and 'age_check_done=1' in confirm_response.headers.get('Set-Cookie', ''):
+                    logger.debug("Age confirmation successful via Set-Cookie.")
+                    # 최종 확인
+                    final_cookies = SiteUtil.session.cookies
+                    if any('age_check_done' in final_cookies.get_dict(domain=d) and final_cookies.get_dict(domain=d)['age_check_done'] == '1' for d in domain_checks):
+                        logger.debug("age_check_done=1 confirmed in session.")
+                        cls.age_verified = True; return True
+                    else:
+                        logger.warning("Set-Cookie received, but not updated in session. Trying manual set...")
+                        SiteUtil.session.cookies.set("age_check_done", "1", domain=".dmm.co.jp", path="/"); SiteUtil.session.cookies.set("age_check_done", "1", domain=".dmm.com", path="/")
+                        logger.info("Manually set age_check_done cookie."); cls.age_verified = True; return True
+                else: logger.warning(f"Age check failed (Status: {confirm_response.status_code} or cookie missing).")
+            except Exception as e: logger.exception(f"Age verification exception: {e}")
             cls.age_verified = False; return False
         else:
-            logger.debug("Age verification already done.")
-            return True
+            logger.debug("Age verification already done."); return True
 
     @classmethod
     def __search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
@@ -118,7 +100,7 @@ class SiteDmm:
         else: dmm_keyword = keyword
         logger.debug("keyword [%s] -> [%s]", keyword, dmm_keyword)
 
-        # 검색 URL
+        # 검색 URL (카테고리 미지정)
         search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': dmm_keyword }
         search_url = f"{cls.site_base_url}/search/?{py_urllib_parse.urlencode(search_params)}"
         logger.info(f"Using search URL: {search_url}")
@@ -128,86 +110,51 @@ class SiteDmm:
         received_html_content = None
 
         try:
+            # SiteUtil.get_tree 사용 (리다이렉션 자동 처리 가정)
+            logger.debug("Calling SiteUtil.get_tree for the search URL...")
             tree = SiteUtil.get_tree(search_url, proxy_url=proxy_url, headers=search_headers, allow_redirects=True)
 
             if tree is not None:
-                # --- HTML 로깅 개선 ---
+                # --- Raw HTML 로깅 ---
                 try:
-                    received_html_content = etree.tostring(tree, encoding='unicode', method='html')
-                    logger.debug(">>>>>> Received HTML Content (for XPath analysis) Start >>>>>>")
-                    if BS4_AVAILABLE:
-                        soup = BeautifulSoup(received_html_content, 'html.parser')
-                        # 데스크톱 리스트 찾기 (더 구체적인 상위 요소 포함 가능)
-                        desktop_list = soup.select_one('div.hidden.md\\:flex div.flex-1 div.grid[class*="grid-cols-"]')
-                        if desktop_list:
-                            logger.debug("--- Relevant Desktop HTML Structure ---")
-                            # 각 아이템의 구조를 보기 위해 첫 2개 아이템 정도만 출력
-                            items = desktop_list.select('div[class*="border-r"]')[:2]
-                            for i, item_soup in enumerate(items):
-                                logger.debug(f"--- Desktop Item {i+1} ---")
-                                logger.debug(item_soup.prettify(formatter="html5"))
-                                logger.debug("-" * 20)
-                        else:
-                            logger.debug("--- Desktop List Container Not Found (Selector: div.hidden.md:flex div.flex-1 div.grid) ---")
+                    received_html_content = etree.tostring(tree, pretty_print=True, encoding='unicode', method='html')
+                    logger.debug(">>>>>> Received HTML Start >>>>>>")
+                    log_chunk_size = 1500
+                    for i in range(0, len(received_html_content), log_chunk_size):
+                        logger.debug(received_html_content[i:i+log_chunk_size])
+                    logger.debug("<<<<<< Received HTML End <<<<<<")
 
-                        # 모바일 리스트 찾기
-                        mobile_list = soup.select_one('div.md\\:hidden div.divide-y')
-                        if mobile_list:
-                            logger.debug("--- Relevant Mobile HTML Structure ---")
-                            items = mobile_list.select('div.flex.py-1.5')[:2]
-                            for i, item_soup in enumerate(items):
-                                logger.debug(f"--- Mobile Item {i+1} ---")
-                                logger.debug(item_soup.prettify(formatter="html5"))
-                                logger.debug("-" * 20)
-                        else:
-                            logger.debug("--- Mobile List Container Not Found (Selector: div.md:hidden div.divide-y) ---")
-
-                        # ul#list 구조 확인 (혹시 모를 대비)
-                        ul_list = soup.select_one('ul#list')
-                        if ul_list:
-                            logger.debug("--- Found ul#list Structure ---")
-                            items = ul_list.select('li')[:2]
-                            for i, item_soup in enumerate(items):
-                                logger.debug(f"--- ul#list Item {i+1} ---")
-                                logger.debug(item_soup.prettify(formatter="html5"))
-                                logger.debug("-" * 20)
-
-                    else: # BS4 없을 경우 raw HTML
-                        logger.debug("--- Raw HTML (Partial) ---")
-                        logger.debug(received_html_content[:6000]) # 앞부분 6000자
-
-                    logger.debug("<<<<<< Received HTML Content End <<<<<<")
-
-                except Exception as e_log_html: logger.error(f"Error logging HTML: {e_log_html}")
-
-                title_tags_check = tree.xpath('//title/text()')
-                if title_tags_check and "年齢認証 - FANZA" in title_tags_check[0]:
-                    logger.error("Age verification page received unexpectedly.")
-                    return []
+                    # 연령 확인 페이지 체크
+                    title_tags_check = tree.xpath('//title/text()')
+                    if title_tags_check and "年齢認証 - FANZA" in title_tags_check[0]:
+                        logger.error("Age verification page received unexpectedly.")
+                        return []
+                except Exception as e_log_html:
+                    logger.error(f"Error converting or logging received HTML: {e_log_html}")
             else:
-                logger.warning("SiteUtil.get_tree returned None.")
+                logger.warning("SiteUtil.get_tree returned None for search URL.")
                 return []
-        except Exception as e: logger.exception(f"Failed to get tree: {e}"); return []
+        except Exception as e:
+            logger.exception(f"Failed to get tree for search URL: {search_url}")
+            return []
 
-        # XPath 탐색
-        lists = []
-        list_type = None
-        # XPath 우선순위: 데스크톱 -> 모바일 -> 이전 ul#list
+        # --- XPath 탐색 ---
+        # 이 XPath들은 로그로 확인된 실제 HTML 구조에 맞춰 수정해야 함
         list_xpath_desktop = '//div[contains(@class, "grid-cols-4")]//div[contains(@class, "border-r") and contains(@class, "border-b")]'
         list_xpath_mobile = '//div[contains(@class, "divide-y")]/div[contains(@class, "flex") and ./a[contains(@href, "/detail/=/cid=")]]'
         list_xpath_ul = '//ul[@id="list"]/li'
+        lists = []
+        list_type = None
 
-        logger.debug(f"Attempting XPath (Desktop): {list_xpath_desktop}")
+        logger.debug("Attempting to parse HTML with known XPaths...")
         try: lists = tree.xpath(list_xpath_desktop)
         except Exception: pass
         if lists: list_type = "desktop"
         else:
-            logger.debug(f"Attempting XPath (Mobile): {list_xpath_mobile}")
             try: lists = tree.xpath(list_xpath_mobile)
             except Exception: pass
             if lists: list_type = "mobile"
             else:
-                logger.debug(f"Attempting XPath (ul#list): {list_xpath_ul}")
                 try: lists = tree.xpath(list_xpath_ul)
                 except Exception: pass
                 if lists: list_type = "ul_list"
@@ -215,15 +162,15 @@ class SiteDmm:
         logger.debug(f"Found {len(lists)} items using {list_type} layout XPath.")
         if not lists: logger.warning(f"No items found using any XPath."); return []
 
-        # 개별 결과 처리 루프
+        # --- 개별 결과 처리 루프 ---
         ret = []; score = 60
         for node in lists[:10]:
             try:
                 item = EntityAVSearch(cls.site_name)
                 href = None; item.image_url = None; item.title = "Not Found"; original_ps_url = None
-                match_real_no = None # 루프 내에서 사용
+                match_real_no = None
 
-                # --- 파싱 로직 분기 ---
+                # 파싱 로직 분기 (이 XPath들은 로그 확인 후 수정 필요)
                 if list_type == "desktop":
                     link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]')
                     if not link_tag_img: continue
@@ -264,10 +211,9 @@ class SiteDmm:
                     item.title = img_tag.attrib.get("alt", "").strip()
                 else: continue
 
-                # --- 이하 공통 처리 로직 ---
+                # 공통 처리
                 if not original_ps_url: continue
                 if original_ps_url.startswith("//"): original_ps_url = "https:" + original_ps_url
-
                 if manual:
                     _image_mode = "1" if image_mode != "0" else image_mode
                     try: item.image_url = SiteUtil.process_image_mode(_image_mode, original_ps_url, proxy_url=proxy_url)
@@ -281,8 +227,7 @@ class SiteDmm:
                 if any(exist_item.get("code") == item.code for exist_item in ret): continue
                 if not item.title or item.title == "Not Found": logger.warning(f"Title not found for {item.code}, using code."); item.title = item.code
 
-                if item.code and original_ps_url:
-                    cls._ps_url_cache[item.code] = original_ps_url; logger.debug(f"Stored ps_url for {item.code} in cache.")
+                if item.code and original_ps_url: cls._ps_url_cache[item.code] = original_ps_url; logger.debug(f"Stored ps_url for {item.code} in cache.")
 
                 if manual: item.title_ko = f"(현재 인터페이스에서는 번역을 제공하지 않습니다) {item.title}"
                 else:
@@ -311,12 +256,10 @@ class SiteDmm:
 
                 if match_real_no:
                     real_part = match_real_no.group("real").upper()
-                    try:
-                        no_part_str = str(int(match_real_no.group("no"))).zfill(3)
-                        item.ui_code = f"{real_part}-{no_part_str}"
+                    try: no_part_str = str(int(match_real_no.group("no"))).zfill(3); item.ui_code = f"{real_part}-{no_part_str}"
                     except ValueError: item.ui_code = f"{real_part}-{match_real_no.group('no')}"
                 else:
-                    ui_code_temp = item.code[2:].upper()
+                    ui_code_temp = item.code[2:].upper();
                     if ui_code_temp.startswith("H_"): ui_code_temp = ui_code_temp[2:]
                     m = re.match(r"([a-zA-Z]+)(\d+.*)", ui_code_temp)
                     if m:
