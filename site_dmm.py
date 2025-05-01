@@ -488,18 +488,84 @@ class SiteDmm:
         except Exception as e: logger.exception(f"Error parsing plot: {e}")
 
 
-        # --- 예고편 처리 (원본 코드 로직 - 수정 필요) ---
+        # --- 예고편 처리 (AJAX -> Iframe -> Player 분석) ---
         entity.extras = []
         if use_extras:
-            logger.warning("Trailer parsing logic needs update based on new structure.")
-            # 원본의 onclick 또는 AJAX/iframe 방식 분석 필요
-            # try:
-            #     # 예: ajax_url = tree.xpath('//a[@id="sample-video1"]/@data-video-url')
-            #     # ... ajax/iframe 파싱 ...
-            #     # 또는 onclick_text = tree.xpath('//a[@id="sample-video1"]/@onclick')
-            #     # ... onclick 파싱 ...
-            #     # if trailer_url: entity.extras.append(...)
-            # except Exception as extra_e: logger.exception(f"Trailer parsing error: {extra_e}")
+            logger.debug(f"Attempting to extract trailer for {code} via AJAX/Iframe")
+            try:
+                trailer_url = None
+                trailer_title = entity.title if entity.title and entity.title != code[2:].upper() else code
+
+                # 1. AJAX 요청 URL 생성 및 실행
+                ajax_url = py_urllib_parse.urljoin(cls.site_base_url, f"/digital/videoa/-/detail/ajax-movie/=/cid={code[2:]}/")
+                logger.debug(f"Trailer Step 1: Requesting AJAX URL: {ajax_url}")
+                ajax_headers = cls._get_request_headers(referer=detail_url)
+                ajax_headers['Accept'] = 'text/html, */*; q=0.01'
+                ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
+                ajax_response = SiteUtil.get_response(ajax_url, proxy_url=proxy_url, headers=ajax_headers)
+
+                if not (ajax_response and ajax_response.status_code == 200):
+                    logger.warning(f"Trailer Step 1 Failed: AJAX request failed (Status: {ajax_response.status_code if ajax_response else 'No Resp'})")
+                    raise Exception("AJAX request failed")
+
+                ajax_html_text = ajax_response.text
+                logger.debug("Trailer Step 1 Success: AJAX response received.")
+
+                # 2. Iframe URL 추출
+                iframe_tree = html.fromstring(ajax_html_text)
+                iframe_srcs = iframe_tree.xpath("//iframe/@src")
+                if not iframe_srcs:
+                    logger.warning("Trailer Step 2 Failed: No iframe found in AJAX response.")
+                    raise Exception("Iframe not found")
+
+                iframe_url = py_urllib_parse.urljoin(ajax_url, iframe_srcs[0])
+                logger.debug(f"Trailer Step 2 Success: Found iframe URL: {iframe_url}")
+
+                # 3. 플레이어 페이지 요청
+                logger.debug(f"Trailer Step 3: Requesting Player Page URL: {iframe_url}")
+                player_headers = cls._get_request_headers(referer=ajax_url)
+                player_response_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=player_headers)
+
+                if not player_response_text:
+                    logger.warning(f"Trailer Step 3 Failed: Empty content from Player Page: {iframe_url}")
+                    raise Exception("Failed to get player page content")
+
+                logger.debug(f"Trailer Step 3 Success: Player page content received.")
+
+                # 4. 플레이어 페이지 HTML 분석 및 비디오 URL 추출 (const args JSON)
+                logger.debug("Trailer Step 4: Parsing 'const args' JSON...")
+                pos = player_response_text.find("const args = {")
+                if pos != -1:
+                    json_start = player_response_text.find("{", pos)
+                    json_end = player_response_text.find("};", json_start) # 세미콜론 포함
+                    if json_start != -1 and json_end != -1:
+                        data_str = player_response_text[json_start : json_end+1]
+                        try:
+                            data = json.loads(data_str)
+                            bitrates = sorted(data.get("bitrates",[]), key=lambda k: k.get("bitrate", 0), reverse=True)
+                            if bitrates:
+                                trailer_src = bitrates[0].get("src")
+                                if trailer_src:
+                                    trailer_url = "https:" + trailer_src if trailer_src.startswith("//") else trailer_src # https: 추가
+                                    if data.get("title"): trailer_title = data.get("title").strip()
+                                    logger.info(f"Trailer URL found via JSON: {trailer_url}")
+                                else: logger.warning("Highest bitrate found, but 'src' key is missing.")
+                            else: logger.warning("'bitrates' array found in JSON, but it's empty.")
+                        except json.JSONDecodeError as je: logger.warning(f"Failed to decode 'const args' JSON: {je}")
+                    else: logger.warning("Could not find end '};' for 'const args' JSON.")
+                else:
+                    logger.warning("'const args' pattern not found in player page HTML.")
+                    # 여기서 Regex 등 다른 방법 시도 가능
+
+                # 5. 최종 EntityExtra 추가
+                if trailer_url:
+                    entity.extras.append(EntityExtra("trailer", SiteUtil.trans(trailer_title, do_trans=do_trans), "mp4", trailer_url))
+                    logger.info(f"Trailer added successfully for {code}")
+                else:
+                    logger.error(f"Failed to extract trailer URL for {code}.")
+
+            except Exception as extra_e:
+                logger.exception(f"Error processing trailer for {code}: {extra_e}")
 
 
         # --- 원본 제목/정렬 제목 설정 (UI 코드 형식화 적용) ---
