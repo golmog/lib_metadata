@@ -111,129 +111,168 @@ class SiteDmm:
 
     @classmethod
     def __search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
-        if not cls._ensure_age_verified(proxy_url=proxy_url):
-            return [] # 빈 리스트 반환
-
+        # --- 키워드 처리 (기존과 동일) ---
         keyword = keyword.strip().lower()
         if keyword[-3:-1] == "cd": keyword = keyword[:-3]
         keyword = keyword.replace("-", " ")
         keyword_tmps = keyword.split(" ")
-        if len(keyword_tmps) == 2:
-            dmm_keyword = keyword_tmps[0] + keyword_tmps[1].zfill(5)
-        else:
-            dmm_keyword = keyword
+        if len(keyword_tmps) == 2: dmm_keyword = keyword_tmps[0] + keyword_tmps[1].zfill(5)
+        else: dmm_keyword = keyword
         logger.debug("keyword [%s] -> [%s]", keyword, dmm_keyword)
 
-        url = f"{cls.site_base_url}/mono/-/search/=/searchstr={dmm_keyword}/"
-        logger.debug(f"Using search URL: {url}")
+        # --- 검색 URL 수정: 원래의 최신 URL 사용 ---
+        # 원래: /digital/videoa/-/list/search/=/?searchstr={dmm_keyword}
+        # 참고: 이 URL은 파라미터 순서나 추가 파라미터가 필요할 수 있음 (예: 정렬, 필터 등)
+        #      최소한의 형태로 시도
+        search_url = f"{cls.site_base_url}/digital/videoa/-/list/search/=/?searchstr={dmm_keyword}"
+        # 필요하다면 limit, sort 파라미터 추가 가능:
+        # search_url += "&sort=rankprofile" # 예시
+        logger.info(f"Accessing NEW DMM search URL: {search_url}")
 
-        search_headers = cls._get_request_headers()
+        # --- requests.Session 사용 및 연령 확인 처리 (이전 답변의 세션 로직 사용 권장) ---
+        session = requests.Session()
+        session_headers = { # 헤더 설정
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer": cls.site_base_url + "/",
+        }
+        session.headers.update(session_headers)
+        proxies = {'http': proxy_url, 'https': proxy_url} if proxy_url else None
+        tree = None
+
         try:
-            tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=search_headers)
-        except Exception as e:
-            logger.exception(f"Failed to get tree for search URL: {url}")
+            # --- 연령 확인 처리 로직 포함하여 HTML 가져오기 ---
+            # (이전 답변의 세션 사용 + 초기 접속 + 연령 확인 시뮬레이션 로직 필요)
+            # 여기서는 간단하게 GET 요청만 표시 (실제로는 이전 세션 코드 사용)
+            logger.debug("Attempting to get search results via session...")
+            response = session.get(search_url, timeout=15, verify=False, allow_redirects=True, proxies=proxies)
+            response.raise_for_status()
+            received_html = response.text
+            logger.debug(f"Received HTML for {search_url}:\n{received_html[:1000]}...") # 로그 줄임
+
+            if "<title>年齢認証 - FANZA</title>" in received_html:
+                logger.error("Age verification page received. Cannot parse results.")
+                return [] # 연령 확인 페이지면 실패
+
+            tree = html.fromstring(received_html)
+
+        except requests.exceptions.RequestException as e_req:
+            logger.error(f"Request failed for {search_url}: {e_req}")
             return []
+        except Exception as e_parse:
+            logger.error(f"Error processing response or parsing HTML for {search_url}: {e_parse}")
+            return []
+
         if tree is None:
-            logger.warning(f"Failed to get tree for URL: {url}")
+            logger.error("Failed to get valid HTML tree.")
             return []
 
-        lists = tree.xpath('//ul[@id="list"]/li')
-        logger.debug("dmm search len lists2 :%s", len(lists))
+        # --- XPath: Tailwind CSS 구조 기반 ---
+        # 검색 결과 아이템 목록 XPath
+        list_xpath = '//div[contains(@class, "grid")]/div[contains(@class, "border-r") and contains(@class, "border-b")]'
+        lists = []
+        try:
+            lists = tree.xpath(list_xpath)
+        except Exception as e_xpath:
+            logger.error(f"XPath error ({list_xpath}): {e_xpath}")
+        logger.debug(f"Found {len(lists)} items using Tailwind XPath.")
 
-        ret = [] # 최종 반환될 딕셔너리 리스트
-        score = 60
-        for node in lists[:10]:
+        if not lists:
+            # 결과 없음 메시지 확인 등 추가 가능
+            logger.warning(f"No items found using XPath: {list_xpath}. Checking for 'no results' message...")
+            return []
+
+        # --- 개별 결과 처리 루프 (Tailwind 구조 기반 XPath 사용) ---
+        ret = []
+        for node in lists[:10]: # 최대 10개 처리
             try:
                 item = EntityAVSearch(cls.site_name)
+                href = None; item.image_url = None; item.title = item.title_ko = "Not Found"
 
-                link_tag_xpath = './/p[@class="tmb"]/a'
-                link_tags = node.xpath(link_tag_xpath)
-                if not link_tags: continue
-                link_tag = link_tags[0]
-                href = link_tag.attrib["href"].lower()
+                # 이미지 링크 및 URL, 상세 페이지 링크 추출
+                link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]')
+                if not link_tag_img: continue
+                link_tag_img = link_tag_img[0]
+                href_img_link = link_tag_img.attrib.get("href", "").lower() # 이미지 링크의 href (상세페이지 링크)
 
-                match = cls.PTN_SEARCH_CID.search(href)
-                if not match:
-                    logger.warning(f"Could not extract CID from href: {href}")
-                    continue
-                item.code = cls.module_char + cls.site_char + match.group("code")
+                img_tag = link_tag_img.xpath('./img')
+                if not img_tag: continue
+                item.image_url = img_tag[0].attrib.get("src") # 썸네일 URL
+                if not item.image_url: continue
 
-                # 중복 제거 (딕셔너리 리스트에서 code 키 확인)
-                already_exist = any(exist_item.get("code") == item.code for exist_item in ret)
-                if already_exist: continue
+                # 제목 추출 (별도 링크 안의 p 태그)
+                title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]')
+                if not title_link_tag: continue # 제목 링크 없으면 스킵
+                title_link_tag = title_link_tag[0]
+                href_title_link = title_link_tag.attrib.get("href", "").lower() # 제목 링크의 href (상세페이지 링크)
+                # 이미지 링크와 제목 링크의 상세페이지 URL이 다를 수 있으므로 주의 (보통 같음)
+                href = href_title_link if href_title_link else href_img_link # 제목 링크 우선 사용
 
-                img_tag_xpath = './/p[@class="tmb"]/a/span[@class="img"]/img'
-                img_tags = node.xpath(img_tag_xpath)
-                original_ps_url = None
-                if img_tags:
-                    img_tag = img_tags[0]
-                    item.title = item.title_ko = img_tag.attrib.get("alt", "").strip()
-                    original_ps_url = img_tag.attrib.get("src")
-                    if original_ps_url and not original_ps_url.startswith("http"):
-                        original_ps_url = "https:" + original_ps_url
+                title_p_tag = title_link_tag.xpath('./p[contains(@class, "hover:text-linkHover")]')
+                if title_p_tag: item.title = item.title_ko = title_p_tag[0].text_content().strip()
+                # 제목 태그 못찾으면 일단 진행 (나중에 cid로 대체)
 
-                    if manual:
-                        _image_mode = "1" if image_mode != "0" else image_mode
-                        item.image_url = SiteUtil.process_image_mode(_image_mode, original_ps_url, proxy_url=proxy_url)
-                    else:
-                        item.image_url = original_ps_url
-                else:
-                    item.title = item.title_ko = "제목 정보 없음"
-                    item.image_url = None
+                # --- 이하 공통 처리 로직 (cid 추출, 점수 계산 등) ---
+                match_cid = cls.PTN_SEARCH_CID.search(href)
+                if match_cid: item.code = cls.module_char + cls.site_char + match_cid.group("code")
+                else: logger.warning(f"CID not found in href: {href}"); continue
+                if any(exist_item["code"] == item.code for exist_item in ret): continue
+                if item.image_url.startswith("//"): item.image_url = "https:" + item.image_url
 
-                if item.code and original_ps_url:
-                    cls._ps_url_cache[item.code] = original_ps_url
-                    logger.debug(f"Stored ps_url for {item.code} in cache.")
-
-                # 번역 처리 (manual 아닐 때만)
-                if not manual:
-                    if do_trans and item.title:
-                        item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
-                    else:
-                        item.title_ko = item.title
-                else:
-                    item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
-
-
-                match_real_no = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
-                if match_real_no:
-                    item.ui_code = match_real_no.group("real") + match_real_no.group("no")
-                else:
-                    item.ui_code = item.code[2:]
+                # 제목 없으면 코드로 대체
+                if item.title == "Not Found": item.title = item.title_ko = item.code
 
                 # 점수 계산
+                match_real_no = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
+                if match_real_no: ui_code_base = match_real_no.group("real") + match_real_no.group("no")
+                else: ui_code_base = item.code[2:]
+                current_score = 0
                 if len(keyword_tmps) == 2:
-                    if item.ui_code == dmm_keyword: item.score = 100
-                    elif item.ui_code.replace("0", "") == dmm_keyword.replace("0", ""): item.score = 100
-                    elif dmm_keyword in item.ui_code: item.score = score; score -= 5
-                    elif keyword_tmps[0] in item.code and keyword_tmps[1] in item.code: item.score = score; score -= 5
-                    elif keyword_tmps[0] in item.code or keyword_tmps[1] in item.code: item.score = 60
-                    else: item.score = 20
+                    if ui_code_base == dmm_keyword: current_score = 100
+                    elif ui_code_base.replace("0", "") == dmm_keyword.replace("0", ""): current_score = 100
+                    elif keyword_tmps[0] in item.code and keyword_tmps[1] in item.code: current_score = 70
+                    elif keyword_tmps[0] in item.code or keyword_tmps[1] in item.code: current_score = 60
+                    else: current_score = 20
                 else:
-                    if item.ui_code == dmm_keyword: item.score = 100
-                    elif dmm_keyword in item.ui_code: item.score = score; score -= 5
-                    else: item.score = 20
+                    if item.code[2:] == keyword_tmps[0]: current_score = 100
+                    else: current_score = 20
+                item.score = current_score
 
-                # UI 코드 포맷팅
+                # manual 모드 처리 및 번역
+                if manual:
+                    _image_mode = "1" if image_mode != "0" else image_mode
+                    try: item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
+                    except NameError: logger.error("SiteUtil not defined for image processing")
+                    if do_trans: item.title_ko = "(번역 안 함) " + item.title
+                else:
+                    try: item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
+                    except NameError: logger.error("SiteUtil not defined for translation"); item.title_ko = item.title
+
+                # UI 코드 형식화
                 if match_real_no:
-                    item.ui_code = match_real_no.group("real").upper() + "-" + str(int(match_real_no.group("no"))).zfill(3)
+                    item.ui_code = match_real_no.group("real").upper() + "-" + str(int(match_real_no.group("no"))).zfill(5)
                 else:
-                    if "0000" in item.ui_code: item.ui_code = item.ui_code.replace("0000", "-00").upper()
-                    else: item.ui_code = item.ui_code.replace("00", "-").upper()
-                    if item.ui_code.endswith("-"): item.ui_code = item.ui_code[:-1] + "00"
+                    if "0000" in ui_code_base: item.ui_code = ui_code_base.replace("0000", "-00").upper()
+                    else: item.ui_code = ui_code_base.replace("00", "-").upper()
+                    if item.ui_code.endswith("-"): item.ui_code = ui_code_base[:-1] + "00"
 
-                logger.debug(f"Item found - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title}")
-                ret.append(item.as_dict()) # 딕셔너리로 변환하여 추가
+                logger.debug("Score: %s, Code: %s, UI Code: %s, Title: %s", item.score, item.code, item.ui_code, item.title_ko)
+                ret.append(item.as_dict())
 
-            except Exception as e:
-                logger.exception(f"Error processing individual search result item: {e}")
+            except Exception as e_inner:
+                logger.exception(f"Exception processing search item node: {e_inner}")
 
-        if not ret and len(keyword_tmps) == 2 and len(keyword_tmps[1]) == 5:
+        # 최종 정렬
+        sorted_ret = sorted(ret, key=lambda k: k.get("score", 0), reverse=True)
+
+        # 재검색 로직
+        if not sorted_ret and len(keyword_tmps) == 2 and len(keyword_tmps[1]) == 5:
             new_title = keyword_tmps[0] + keyword_tmps[1].zfill(6)
-            logger.debug(f"No results found for {dmm_keyword}, retrying with {new_title}")
+            logger.debug(f"결과 없고 5자리 숫자 -> 6자리로 재시도: {new_title}")
             return cls.__search(new_title, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode, manual=manual)
 
-        return sorted(ret, key=lambda k: k["score"], reverse=True) # 딕셔너리 리스트 정렬
+        return sorted_ret
 
     @classmethod
     def search(cls, keyword, **kwargs):
