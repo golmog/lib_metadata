@@ -269,137 +269,138 @@ class SiteDmm:
             ret["ret"] = "success" if data_list else "no_match"; ret["data"] = data_list
         return ret
 
+
     # --- __info 메소드: 상세 페이지 구조 분석 후 수정 필요 ---
     @classmethod
     def __img_urls(cls, tree):
-        """상세 페이지 HTML(tree)에서 이미지 URL들을 추출합니다."""
+        # 상세 페이지 구조 분석 후 수정 필요
+        logger.warning("__img_urls: XPath needs update based on actual detail page HTML.")
         img_urls = {'ps': "", 'pl': "", 'arts': []}
         try:
-            # 메인 이미지 (pl) 추출
-            pl_xpath = '//div[@id="sample-video"]//img/@src' # 메인 비디오/이미지 영역의 img src
+            # 예전 XPath (수정 필요 가능성 높음)
+            pl_xpath = '//div[@id="sample-video"]//img/@src' # 메인 이미지
             pl_tags = tree.xpath(pl_xpath)
             if pl_tags:
                 img_urls['pl'] = pl_tags[0]
-                # // 로 시작하면 https: 추가
                 if img_urls['pl'].startswith("//"): img_urls['pl'] = "https:" + img_urls['pl']
-                # ps가 없다면 pl을 ps로 우선 사용 (썸네일 캐시 없을 경우 대비)
-                if not img_urls['ps']: img_urls['ps'] = img_urls['pl']
-            else:
-                logger.warning("__img_urls: Main image (pl) not found.")
+            else: # 다른 경로 시도 (예: fn-sampleImage-imagebox)
+                pl_xpath_alt = '//div[@id="fn-sampleImage-imagebox"]/img/@src'
+                pl_tags_alt = tree.xpath(pl_xpath_alt)
+                if pl_tags_alt:
+                    img_urls['pl'] = pl_tags_alt[0]
+                    if img_urls['pl'].startswith("//"): img_urls['pl'] = "https:" + img_urls['pl']
 
-            # 샘플 이미지 (arts) 추출 (고화질 링크 우선)
-            arts_xpath = '//div[@id="sample-image-block"]//a/@href' # 샘플 이미지 링크(href)
+            arts_xpath = '//a[@name="sample-image"]/@href' # 샘플 이미지 링크들
             arts_tags = tree.xpath(arts_xpath)
             if arts_tags:
-                # 첫번째 링크는 pl과 동일할 수 있으므로 제외하거나 확인 후 추가
-                # 여기서는 일단 모두 추가하되, 중복 제거 및 pl과 다른 것만 선택
                 all_arts = []
                 for href in arts_tags:
-                    if href and href.strip(): # 비어있지 않은 링크만
+                    if href and href.strip():
                         full_href = href if href.startswith("http") else py_urllib_parse.urljoin(cls.site_base_url, href)
-                        # pl 과 다른 이미지만 추가 (선택적)
-                        if full_href != img_urls.get('pl'):
-                            all_arts.append(full_href)
-                # 중복 제거 (순서 유지)
-                img_urls['arts'] = sorted(list(set(all_arts)), key=all_arts.index)
-            else:
-                logger.warning("__img_urls: Sample images (arts) not found.")
+                        # 첫번째 샘플 이미지가 pl과 같으면 제외 (선택적)
+                        if idx == 0 and full_href == img_urls.get('pl'): continue
+                        all_arts.append(full_href)
+                img_urls['arts'] = sorted(list(set(all_arts)), key=all_arts.index) # 중복 제거
 
-        except Exception as e:
-            logger.exception(f"Error extracting image URLs in __img_urls: {e}")
+            # ps 는 캐시 또는 pl fallback 사용 (아래 info 에서 처리)
 
-        logger.debug(f"Extracted image URLs: ps={bool(img_urls.get('ps'))}, pl={bool(img_urls.get('pl'))}, arts={len(img_urls.get('arts',[]))}")
+        except Exception as e: logger.exception(f"Error extracting image URLs: {e}")
+        logger.debug(f"Extracted img_urls: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} arts={len(img_urls.get('arts',[]))}")
         return img_urls
 
     @classmethod
     def __info( cls, code, do_trans=True, proxy_url=None, image_mode="0", max_arts=10, use_extras=True, ps_to_poster=False, crop_mode=None):
-        logger.info(f"Getting detail info for {code} using new parsing logic.")
+        logger.info(f"Getting detail info for {code}")
         ps_url_from_cache = cls._ps_url_cache.pop(code, None)
-        if ps_url_from_cache: logger.debug(f"Using cached ps_url for {code}.")
-        else: logger.warning(f"ps_url for {code} not found in cache. Fallback needed.")
+        if ps_url_from_cache: logger.debug(f"Using cached ps_url: {ps_url_from_cache}")
+        else: logger.warning(f"ps_url for {code} not found in cache.")
 
         if not cls._ensure_age_verified(proxy_url=proxy_url):
             raise Exception(f"DMM age verification failed for info ({code}).")
 
-        # 상세 페이지 URL (경로 확인 필요 - videoa 가 맞는지 mono/dvd 인지)
-        # 일단 videoa 로 시도
+        # 상세 페이지 URL (videoa 경로 사용)
         detail_url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={code[2:]}/"
         logger.info(f"Accessing DMM detail page: {detail_url}")
-        info_headers = cls._get_request_headers(referer=cls.site_base_url + "/digital/videoa/")
+        info_headers = cls._get_request_headers(referer=cls.fanza_av_url) # Referer 설정
         tree = None
+        received_html_content = None
+
         try:
             tree = SiteUtil.get_tree(detail_url, proxy_url=proxy_url, headers=info_headers)
-            if tree is None: raise Exception("SiteUtil.get_tree returned None.")
-            # 연령 확인 페이지 체크
-            title_tags_check = tree.xpath('//title/text()')
-            if title_tags_check and "年齢認証 - FANZA" in title_tags_check[0]:
-                raise Exception("Received age verification page instead of detail.")
-        except Exception as e:
-            logger.exception(f"Failed to get or verify detail page tree for {code}: {e}")
-            raise # 에러 다시 발생
+            if tree is not None:
+                # --- 상세 페이지 Raw HTML 로깅 ---
+                try:
+                    received_html_content = etree.tostring(tree, pretty_print=True, encoding='unicode', method='html')
+                    logger.debug(f">>>>>> Received Detail HTML for {code} Start >>>>>>")
+                    log_chunk_size = 1500
+                    for i in range(0, len(received_html_content), log_chunk_size): logger.debug(received_html_content[i:i+log_chunk_size])
+                    logger.debug(f"<<<<<< Received Detail HTML for {code} End <<<<<<")
 
+                    title_tags_check = tree.xpath('//title/text()')
+                    if title_tags_check and "年齢認証 - FANZA" in title_tags_check[0]:
+                        raise Exception("Received age verification page instead of detail.")
+                except Exception as e_log_html: logger.error(f"Error logging detail HTML: {e_log_html}")
+            else: raise Exception("SiteUtil.get_tree returned None for detail page.")
+        except Exception as e: logger.exception(f"Failed get/process detail tree: {e}"); raise
+
+        # --- 파싱 시작 ---
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
 
-        # --- 제목 / Tagline ---
+        # --- 이미지 처리 (원본 코드의 __img_urls 호출 및 후처리) ---
         try:
-            title_node = tree.xpath('//h1[@id="title"]')
-            if title_node:
-                h1_text = title_node[0].text_content().strip()
-                # 앞부분 태그 제거 (예: 【最新作】)
-                prefix_tags = title_node[0].xpath('./span[@class="red"]/text()')
-                title_cleaned = h1_text
-                if prefix_tags:
-                    title_cleaned = h1_text.replace(prefix_tags[0].strip(), "").strip()
-                entity.tagline = SiteUtil.trans(title_cleaned, do_trans=do_trans)
-                logger.debug(f"Tagline parsed: {entity.tagline[:50]}...")
+            img_urls = cls.__img_urls(tree) # XPath 수정 필요할 수 있음
+            img_urls['ps'] = ps_url_from_cache if ps_url_from_cache else img_urls.get('ps', "")
+            # ps가 여전히 없으면 pl에서 가져오기 시도 (최후 fallback)
+            if not img_urls['ps'] and img_urls.get('pl'):
+                logger.warning("PS URL missing, using PL as fallback for PS.")
+                img_urls['ps'] = img_urls['pl']
+            if not img_urls['ps']: logger.error("Crucial PS URL is missing.")
+
+            logger.debug(f"Image URLs for SiteUtil: {img_urls}")
+            SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
+            entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
+            entity.fanart = []
+            resolved_arts = img_urls.get("arts", [])
+            landscape_url = img_urls.get("landscape")
+            for href in resolved_arts[:max_arts]:
+                if href != landscape_url: entity.fanart.append(SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url))
+            logger.debug(f"Final Thumb: {entity.thumb}, Fanart Count: {len(entity.fanart)}")
+        except Exception as e: logger.exception(f"Error processing images: {e}")
+
+        # --- 제목/Tagline (원본 코드 로직) ---
+        try:
+            # 원본 코드는 h1#title 사용 - 새 구조에서는 다를 수 있음!
+            title_xpath = '//h1[@id="title"]'
+            title_tags = tree.xpath(title_xpath)
+            if title_tags:
+                h1_full_text = title_tags[0].text_content().strip()
+                # span_text_nodes = title_tags[0].xpath('./span[contains(@class, "txt_before-sale")]/text()') # 이전 span 클래스
+                span_text_nodes = title_tags[0].xpath('./span[@class="red"]/text()') # 새 구조의 span 클래스
+                span_text = "".join(span_text_nodes).strip()
+                title_text = h1_full_text.replace(span_text, "").strip() if span_text else h1_full_text
+                if title_text:
+                    entity.tagline = SiteUtil.trans(title_text, do_trans=do_trans).replace("[배달 전용]", "").replace("[특가]", "").strip()
+                    logger.debug(f"Tagline parsed: {entity.tagline[:50]}...")
+                else: logger.warning("Could not extract text from h1#title.")
             else: logger.warning("Tagline (h1#title) not found.")
         except Exception as e: logger.error(f"Error parsing tagline: {e}")
 
-        # --- 이미지 URL 추출 및 처리 (SiteUtil 호출 강화) ---
-        try:
-            img_urls = cls.__img_urls(tree) # ['ps':?, 'pl':?, 'arts':[]] 반환 예상
-            img_urls['ps'] = ps_url_from_cache if ps_url_from_cache else img_urls.get('ps', "")
-            if not img_urls['ps']: logger.error("Failed to obtain ps_url.")
-
-            logger.debug(f"Calling SiteUtil.resolve_jav_imgs with: {img_urls}")
-            # resolve_jav_imgs 가 내부적으로 비율 체크 및 비교 로직 수행 가정
-            # 반환되는 img_urls 에는 결정된 poster, landscape, crop_mode 등이 포함될 것임
-            SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
-            logger.debug(f"Result from SiteUtil.resolve_jav_imgs: {img_urls}") # 결과 확인
-
-            # process_jav_imgs 는 resolve 결과를 바탕으로 최종 썸네일 URL 생성
-            entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
-            logger.debug(f"Final entity.thumb: {entity.thumb}")
-
-            # 팬아트 처리 (landscape 는 제외)
-            entity.fanart = []
-            resolved_arts = img_urls.get("arts", [])
-            landscape_url = img_urls.get("landscape") # resolve 에서 결정된 landscape URL
-            logger.debug(f"Resolved arts count: {len(resolved_arts)}, Landscape URL: {landscape_url}")
-            for href in resolved_arts[:max_arts]:
-                # 팬아트 목록에서 최종 landscape URL과 동일한 것은 제외
-                if href != landscape_url:
-                    entity.fanart.append(SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url))
-            logger.debug(f"Final fanart count: {len(entity.fanart)}")
-
-        except Exception as e: logger.exception(f"Error processing images: {e}")
-
-        # --- 정보 테이블 파싱 ---
-        info_table_xpath = '//table[contains(@class, "mg-b20")]//tr' # mg-b20 클래스를 가진 테이블 내 tr
+        # --- 정보 테이블 파싱 (원본 코드 로직) ---
+        # 이 XPath는 새 구조에서 작동 안 할 가능성 높음!
+        # info_table_xpath = '//*[@id="mu"]/div/table//tr/td[1]/table//tr' # 원본 XPath
+        info_table_xpath = '//table[contains(@class, "mg-b20")]//tr' # 이전 로그 기반 XPath
         tags = tree.xpath(info_table_xpath)
-        logger.debug(f"Found {len(tags)} rows in info table.")
-        premiered_shouhin = None; premiered_haishin = None;
+        logger.debug(f"Found {len(tags)} rows in info table (using: {info_table_xpath}).")
+        premiered_shouhin = None; premiered_haishin = None; premiered_hatsubai = None; # 원본 변수명 유지
 
         for tag in tags:
             try:
-                # 키(th)와 값(td) 추출 시도 (td가 2개인 구조 예상)
-                key_node = tag.xpath('./td[@class="nw"]/text()') # nw 클래스 td의 텍스트
-                value_node = tag.xpath('./td[not(@class="nw")]') # nw 클래스 없는 td
-
-                if not key_node or not value_node: continue # 키 또는 값이 없으면 스킵
-                key = key_node[0].strip().replace("：", "") # 콜론 제거
-                value_td = value_node[0] # 값 td 요소
+                key_node = tag.xpath('./td[@class="nw"]/text()')
+                value_node = tag.xpath('./td[not(@class="nw")]')
+                if not key_node or not value_node: continue
+                key = key_node[0].strip().replace("：", "")
+                value_td = value_node[0]
                 value_text_all = value_td.text_content().strip()
                 if value_text_all == "----" or not value_text_all: continue
 
@@ -407,44 +408,37 @@ class SiteDmm:
 
                 if key == "配信開始日": premiered_haishin = value_text_all.replace("/", "-")
                 elif key == "商品発売日": premiered_shouhin = value_text_all.replace("/", "-")
+                # 원본 코드에는 '発売日' 처리도 있었음 (필요시 추가)
+                elif key == "発売日：": premiered_hatsubai = value_text_all.replace("/", "-")
                 elif key == "収録時間":
-                    m = re.search(r"(\d+)", value_text_all)
-                    if m: entity.runtime = int(m.group(1))
+                    m = re.search(r"(\d+)", value_text_all); entity.runtime = int(m.group(1)) if m else None
                 elif key == "出演者":
-                    # 링크가 있으면 링크 텍스트, 없으면 전체 텍스트 (하지만 이 경우 '----'일 가능성 높음)
                     actors_found = [a.strip() for a in value_td.xpath('.//a/text()') if a.strip()]
-                    if actors_found:
-                        entity.actor = [EntityActor(name) for name in actors_found]
-                    else:
-                        # '----'가 아닐 경우 텍스트를 그대로 사용 (쉼표 등으로 구분된 경우?)
-                        if value_text_all != '----':
-                            # 공백 등으로 분리 시도 (불확실)
-                            possible_actors = [name.strip() for name in value_text_all.split()]
-                            entity.actor = [EntityActor(name) for name in possible_actors if name]
-                        else: entity.actor = [] # 명시적으로 빈 리스트
+                    if actors_found: entity.actor = [EntityActor(name) for name in actors_found]
+                    elif value_text_all != '----': entity.actor = [EntityActor(name.strip()) for name in value_text_all.split() if name.strip()]
+                    else: entity.actor = []
                 elif key == "監督":
                     directors = [a.strip() for a in value_td.xpath('.//a/text()') if a.strip()]
                     entity.director = directors[0] if directors else (value_text_all if value_text_all != '----' else None)
                 elif key == "シリーズ":
                     if entity.tag is None: entity.tag = []
-                    series_list = [a.strip() for a in value_td.xpath('.//a/text()') if a.strip()]
-                    series_name = series_list[0] if series_list else (value_text_all if value_text_all != '----' else None)
-                    if series_name: entity.tag.append(SiteUtil.trans(series_name, do_trans=do_trans))
+                    series = [a.strip() for a in value_td.xpath('.//a/text()') if a.strip()]
+                    s_name = series[0] if series else (value_text_all if value_text_all != '----' else None)
+                    if s_name: entity.tag.append(SiteUtil.trans(s_name, do_trans=do_trans))
                 elif key == "メーカー":
-                    if entity.studio is None: # 레이블 정보가 없을 때만 사용
+                    if entity.studio is None:
                         makers = [a.strip() for a in value_td.xpath('.//a/text()') if a.strip()]
-                        maker_name = makers[0] if makers else (value_text_all if value_text_all != '----' else None)
-                        if maker_name: entity.studio = SiteUtil.trans(maker_name, do_trans=do_trans)
-                elif key == "レーベル": # 레이블 정보를 우선 사용
+                        m_name = makers[0] if makers else (value_text_all if value_text_all != '----' else None)
+                        if m_name: entity.studio = SiteUtil.trans(m_name, do_trans=do_trans)
+                elif key == "レーベル":
                     labels = [a.strip() for a in value_td.xpath('.//a/text()') if a.strip()]
-                    label_name = labels[0] if labels else (value_text_all if value_text_all != '----' else None)
-                    if label_name:
-                        if do_trans: entity.studio = SiteUtil.av_studio.get(label_name, SiteUtil.trans(label_name))
-                        else: entity.studio = label_name
+                    l_name = labels[0] if labels else (value_text_all if value_text_all != '----' else None)
+                    if l_name:
+                        if do_trans: entity.studio = SiteUtil.av_studio.get(l_name, SiteUtil.trans(l_name))
+                        else: entity.studio = l_name
                 elif key == "ジャンル":
                     entity.genre = []
-                    genre_links = value_td.xpath('.//a/text()')
-                    for genre_ja in genre_links:
+                    for genre_ja in value_td.xpath('.//a/text()'):
                         genre_ja = genre_ja.strip()
                         if not genre_ja or "％OFF" in genre_ja or genre_ja in SiteUtil.av_genre_ignore_ja: continue
                         if genre_ja in SiteUtil.av_genre: entity.genre.append(SiteUtil.av_genre[genre_ja])
@@ -452,106 +446,87 @@ class SiteDmm:
                             genre_ko = SiteUtil.trans(genre_ja, do_trans=do_trans).replace(" ", "")
                             if genre_ko not in SiteUtil.av_genre_ignore_ko: entity.genre.append(genre_ko)
                 elif key == "品番":
-                    # 검색 결과에서 이미 설정했으므로 여기서 title 설정은 불필요
-                    # 레이블 정보 추출은 여기서 다시 시도 가능 (선택적)
                     match_real = cls.PTN_SEARCH_REAL_NO.match(value_text_all)
                     if match_real:
                         label = match_real.group("real").upper()
                         if entity.tag is None: entity.tag = []
-                        if label not in entity.tag: entity.tag.append(label) # 태그에 레이블 추가
+                        if label not in entity.tag: entity.tag.append(label)
                 elif key == "平均評価":
-                    # 평점 이미지 추출
-                    rating_img_tags = value_td.xpath('.//img/@src')
-                    if rating_img_tags:
-                        match_rating = cls.PTN_RATING.search(rating_img_tags[0])
-                        if match_rating:
-                            rating_value_str = match_rating.group("rating")
+                    rating_img = value_td.xpath('.//img/@src')
+                    if rating_img:
+                        match_rate = cls.PTN_RATING.search(rating_img[0])
+                        if match_rate:
+                            rate_str = match_rate.group("rating")
                             try:
-                                # 값 보정: DMM 평점은 50점 만점 기준일 수 있음 (예: 45 -> 4.5)
-                                # 또는 5점 만점 기준이면 그대로 사용
-                                # 여기서는 5점 만점으로 가정하고 변환
-                                rating_value = float(rating_value_str) # 0~50 예상
-                                if rating_value > 5: rating_value = rating_value / 10.0 # 5 초과 시 10으로 나눔
-                                if 0 <= rating_value <= 5:
-                                    rating_img_url = "https:" + rating_img_tags[0] if rating_img_tags[0].startswith("//") else rating_img_tags[0]
-                                    entity.ratings = [EntityRatings(rating_value, max=5, name="dmm", image_url=rating_img_url)]
-                                    logger.debug(f"Rating parsed from table: {rating_value}")
-                            except ValueError: logger.warning(f"Cannot convert rating value: {rating_value_str}")
-            except Exception as e_row: logger.exception(f"Error parsing info table row: {e_row}")
+                                rate_val = float(rate_str)
+                                if rate_val > 5: rate_val /= 10.0 # 5점 만점 변환
+                                if 0 <= rate_val <= 5:
+                                    img_url = "https:" + rating_img[0] if rating_img[0].startswith("//") else rating_img[0]
+                                    entity.ratings = [EntityRatings(rate_val, max=5, name="dmm", image_url=img_url)]
+                                    logger.debug(f"Rating parsed: {rate_val}")
+                            except ValueError: logger.warning(f"Rating conv err: {rate_str}")
 
+            except Exception as e_row: logger.exception(f"Error parsing info row (key:{key}): {e_row}")
 
-        # 최종 날짜 설정 (상품 출시일 우선)
-        final_premiered = None
-        if premiered_shouhin: final_premiered = premiered_shouhin; logger.debug("Using 商品発売日 for premiered date.")
-        elif premiered_haishin: final_premiered = premiered_haishin; logger.debug("Using 配信開始日 for premiered date.")
-        else: logger.warning("No premiered date found in table.")
+        # 최종 날짜 설정
+        final_premiered = premiered_shouhin or premiered_haishin or premiered_hatsubai # 상품 출시일 우선
         if final_premiered:
             entity.premiered = final_premiered
             try: entity.year = int(final_premiered[:4])
-            except ValueError: logger.warning(f"Could not parse year: {final_premiered}"); entity.year = None
-        else: entity.premiered = None; entity.year = None
+            except: entity.year = None
+        else: logger.warning("No premiered date found."); entity.premiered = None; entity.year = None
 
-        # --- 줄거리 파싱 ---
+        # --- 줄거리 파싱 (원본 코드 로직) ---
+        # 이 XPath도 새 구조에서 작동 안 할 가능성 높음!
+        plot_xpath = '//div[@class="mg-b20 lh4"]/p[@class="mg-b20"]/text()' # 원본 XPath
+        # 또는 plot_xpath = '//div[@class="mg-b20 lh4"]/text()' # 이전 로그 기반
         try:
-            plot_xpath = '//div[@class="mg-b20 lh4"]/text()' # 이 클래스를 가진 div 아래의 텍스트 노드들
             plot_nodes = tree.xpath(plot_xpath)
             if plot_nodes:
                 plot_text = "\n".join([p.strip() for p in plot_nodes if p.strip()]).split("※")[0].strip()
                 entity.plot = SiteUtil.trans(plot_text, do_trans=do_trans)
                 logger.debug(f"Plot parsed: {entity.plot[:50]}...")
-            else: logger.warning("Plot node (div.mg-b20.lh4 > text()) not found.")
+            else: logger.warning(f"Plot not found using XPath: {plot_xpath}")
         except Exception as e: logger.exception(f"Error parsing plot: {e}")
 
-        # --- 예고편 처리 (수정 필요) ---
+
+        # --- 예고편 처리 (원본 코드 로직 - 수정 필요) ---
         entity.extras = []
         if use_extras:
-            logger.warning("Trailer parsing logic needs implementation based on new structure.")
-            # 예시: 새로운 구조에서 예고편 URL 찾는 로직 추가
+            logger.warning("Trailer parsing logic needs update based on new structure.")
+            # 원본의 onclick 또는 AJAX/iframe 방식 분석 필요
             # try:
-            #      trailer_script = tree.xpath('//script[contains(text(),"sample")]/text()')
-            #      # ... JSON 파싱 또는 URL 추출 ...
-            #      if trailer_url: entity.extras.append(...)
-            # except Exception as e: logger.error(f"Error parsing extras: {e}")
+            #     # 예: ajax_url = tree.xpath('//a[@id="sample-video1"]/@data-video-url')
+            #     # ... ajax/iframe 파싱 ...
+            #     # 또는 onclick_text = tree.xpath('//a[@id="sample-video1"]/@onclick')
+            #     # ... onclick 파싱 ...
+            #     # if trailer_url: entity.extras.append(...)
+            # except Exception as extra_e: logger.exception(f"Trailer parsing error: {extra_e}")
 
-        # --- 원본 제목/정렬 제목 설정 (UI 코드 형식 수정) ---
-        # title, originaltitle, sorttitle 을 최종적으로 UI 코드 형식으로 설정
-        final_ui_code = code[2:].upper()
+
+        # --- 원본 제목/정렬 제목 설정 (UI 코드 형식화 적용) ---
         match_real_no = cls.PTN_SEARCH_REAL_NO.search(code[2:])
+        final_ui_code = code[2:].upper() # 기본값
         if match_real_no:
             real_part = match_real_no.group("real").upper()
-            # 숫자 부분을 정수로 변환 후, zfill(3)을 사용하여 최소 3자리로 패딩
-            try:
-                no_part_str = str(int(match_real_no.group("no"))).zfill(3) # 3자리 패딩 적용
-                final_ui_code = f"{real_part}-{no_part_str}" # 예: HAME-041
-            except ValueError:
-                logger.warning(f"Could not parse number part for UI code: {match_real_no.group('no')}")
-                # 숫자 변환 실패 시, 정규식 그룹 그대로 사용 시도 (다른 문자가 섞인 경우?)
-                final_ui_code = f"{real_part}-{match_real_no.group('no')}"
+            try: no_part_str = str(int(match_real_no.group("no"))).zfill(3); final_ui_code = f"{real_part}-{no_part_str}"
+            except ValueError: final_ui_code = f"{real_part}-{match_real_no.group('no')}"
         else:
-            # 정규식 매칭 실패 시 (예: h_ 접두사 등)
             ui_code_temp = code[2:].upper()
             if ui_code_temp.startswith("H_"): ui_code_temp = ui_code_temp[2:]
-            # 문자-숫자 분리 후 숫자 부분 3자리 패딩 시도
             m = re.match(r"([a-zA-Z]+)(\d+.*)", ui_code_temp)
             if m:
-                real_part = m.group(1)
-                num_part_match = re.match(r"(\d+)", m.group(2))
-                if num_part_match:
-                    no_part_str = str(int(num_part_match.group(1))).zfill(3) # 3자리 패딩
-                    final_ui_code = f"{real_part}-{no_part_str}"
-                else: # 숫자 부분 못찾으면 그대로 붙임
-                    final_ui_code = f"{real_part}-{m.group(2)}"
-            else: # 분리 실패 시 그냥 사용
-                final_ui_code = ui_code_temp
-
+                real = m.group(1); rest = m.group(2); num_m = re.match(r"(\d+)", rest)
+                final_ui_code = f"{real}-{str(int(num_m.group(1))).zfill(3)}" if num_m else f"{real}-{rest}"
+            else: final_ui_code = ui_code_temp
         entity.title = entity.originaltitle = entity.sorttitle = final_ui_code
-        logger.debug(f"Final title/originaltitle/sorttitle set to formatted UI code: {entity.title}")
+        logger.debug(f"Final title/originaltitle/sorttitle set to: {entity.title}")
+        if not entity.tagline: entity.tagline = entity.title # Tagline fallback
 
-        return entity # 최종 entity 반환
+        return entity
 
     @classmethod
-    def info(cls, code, **kwargs):
-        # 원본 유지
+    def info(cls, code, **kwargs): # 원본 유지
         ret = {}
         try:
             entity = cls.__info(code, **kwargs)
