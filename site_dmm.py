@@ -100,42 +100,50 @@ class SiteDmm:
         else: dmm_keyword = keyword
         logger.debug("keyword [%s] -> [%s]", keyword, dmm_keyword)
 
-        # 검색 URL (카테고리 미지정)
-        search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': dmm_keyword }
+        # --- 검색 URL: /search/?... 경로 사용 ---
+        search_params = {
+            'redirect': '1',
+            'enc': 'UTF-8',
+            'category': '', # 카테고리 지정 안 함
+            'searchstr': dmm_keyword,
+            # 'commit.x': '23', # 불필요
+            # 'commit.y': '22'
+        }
         search_url = f"{cls.site_base_url}/search/?{py_urllib_parse.urlencode(search_params)}"
-        logger.info(f"Using search URL: {search_url}")
+        logger.info(f"Using search URL (will follow redirects): {search_url}")
 
+        # 헤더 준비 (Referer는 FANZA 홈 등)
         search_headers = cls._get_request_headers(referer=cls.fanza_av_url)
         tree = None
         received_html_content = None
 
         try:
-            # SiteUtil.get_tree 사용 (리다이렉션 자동 처리 가정)
-            logger.debug("Calling SiteUtil.get_tree for the search URL...")
-            tree = SiteUtil.get_tree(search_url, proxy_url=proxy_url, headers=search_headers, allow_redirects=True)
+            # SiteUtil.get_tree 사용 (allow_redirects=True 가 기본이거나 내부 처리 가정)
+            logger.debug(f"Calling SiteUtil.get_tree for {search_url} (expecting redirect handling)")
+            tree = SiteUtil.get_tree(search_url, proxy_url=proxy_url, headers=search_headers, allow_redirects=True) # 명시적으로 True 추가
 
             if tree is not None:
-                # --- Raw HTML 로깅 ---
+                # --- 최종 도착 페이지의 HTML 로깅 ---
                 try:
                     received_html_content = etree.tostring(tree, pretty_print=True, encoding='unicode', method='html')
-                    logger.debug(">>>>>> Received HTML Start >>>>>>")
+                    logger.debug(">>>>>> Received FINAL HTML after redirects Start >>>>>>")
                     log_chunk_size = 1500
                     for i in range(0, len(received_html_content), log_chunk_size):
                         logger.debug(received_html_content[i:i+log_chunk_size])
-                    logger.debug("<<<<<< Received HTML End <<<<<<")
+                    logger.debug("<<<<<< Received FINAL HTML after redirects End <<<<<<")
 
                     # 연령 확인 페이지 체크
                     title_tags_check = tree.xpath('//title/text()')
                     if title_tags_check and "年齢認証 - FANZA" in title_tags_check[0]:
-                        logger.error("Age verification page received unexpectedly.")
+                        logger.error("Age verification page received unexpectedly after redirects.")
                         return []
                 except Exception as e_log_html:
-                    logger.error(f"Error converting or logging received HTML: {e_log_html}")
+                    logger.error(f"Error converting or logging final HTML: {e_log_html}")
             else:
-                logger.warning("SiteUtil.get_tree returned None for search URL.")
+                logger.warning("SiteUtil.get_tree returned None after potential redirects.")
                 return []
         except Exception as e:
-            logger.exception(f"Failed to get tree for search URL: {search_url}")
+            logger.exception(f"Failed to get tree for initial search URL {search_url}: {e}")
             return []
 
         # --- XPath 탐색 ---
