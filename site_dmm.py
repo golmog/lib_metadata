@@ -340,14 +340,68 @@ class SiteDmm:
         if content_type == 'videoa':
             logger.debug("Processing type 'videoa'...")
             try:
-                # --- videoa 이미지 처리 ---
-                img_urls = cls.__img_urls(tree, content_type='videoa')
+                # --- videoa 원시 이미지 URL 추출 ---
+                raw_img_urls = cls.__img_urls(tree, content_type='videoa')
+                original_pl_url = raw_img_urls.get('pl')
+
+                # --- 원본 pl 이미지 방향 미리 확인 ---
+                is_pl_vertical = False
+                is_pl_landscape = False # 가로 여부 변수 추가
+                pl_width = 0; pl_height = 0 # 크기 저장 변수
+                if original_pl_url:
+                    try:
+                        logger.debug(f"Checking orientation for videoa pl: {original_pl_url}")
+                        im = SiteUtil.imopen(original_pl_url, proxy_url=proxy_url)
+                        if im:
+                            pl_width, pl_height = im.size
+                            if pl_width < pl_height: is_pl_vertical = True
+                            elif pl_width > pl_height: is_pl_landscape = True # 가로 조건 추가
+                            logger.debug(f"Original videoa 'pl' image ({pl_width}x{pl_height}) - Vertical: {is_pl_vertical}, Landscape: {is_pl_landscape}")
+                        else: logger.warning("Could not open videoa pl image to check orientation.")
+                    except Exception as e_imopen: logger.warning(f"Could not determine videoa pl orientation: {e_imopen}")
+                # --- 방향 확인 끝 ---
+
+                # --- videoa 이미지 처리 시작 ---
+                img_urls = raw_img_urls.copy()
                 if ps_url_from_cache: img_urls['ps'] = ps_url_from_cache
-                elif not img_urls['ps'] and img_urls['pl']: img_urls['ps'] = img_urls['pl'] # ps fallback
+                elif not img_urls['ps'] and img_urls['pl']: img_urls['ps'] = img_urls['pl']
                 elif not img_urls['ps'] and not img_urls['pl']: logger.error("Videoa ps and pl URLs are missing.")
+
+                current_ps_url = img_urls.get('ps') # 비교용 ps URL
 
                 logger.debug(f"[Videoa] Image URLs before resolve: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} arts={len(img_urls.get('arts',[]))}")
                 SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
+                logger.debug(f"[Videoa] Image URLs *after* resolve: poster={bool(img_urls.get('poster'))} crop={img_urls.get('poster_crop')} landscape={bool(img_urls.get('landscape'))}")
+
+                # --- !!! 후처리 로직 강화 !!! ---
+                resolved_poster_url = img_urls.get('poster')
+                resolved_crop_mode = img_urls.get('poster_crop') # crop 모드 확인
+
+                override_applied = False # 후처리 적용 여부 플래그
+
+                # 조건 1: SiteUtil이 ps로 fallback했는데, 원본 pl이 세로였다면 원본 pl 사용
+                if not override_applied and is_pl_vertical and current_ps_url and resolved_poster_url == current_ps_url and original_pl_url:
+                    logger.info("Override 1: SiteUtil fallback to 'ps', but original 'pl' was vertical. Using original 'pl' as poster.")
+                    img_urls['poster'] = original_pl_url
+                    img_urls['poster_crop'] = None
+                    if img_urls.get('landscape') == original_pl_url: img_urls['landscape'] = "" # 세로 pl은 landscape 아님
+                    override_applied = True
+
+                # 조건 2: SiteUtil이 원본 pl을 포스터로 선택했지만, crop 안 했고 & 원본 pl이 가로였다면 -> ps로 강제 fallback
+                if not override_applied and is_pl_landscape and resolved_poster_url == original_pl_url and resolved_crop_mode is None and current_ps_url:
+                    # ps가 있어야 fallback 가능
+                    logger.info("Override 2: SiteUtil chose landscape 'pl' as poster without cropping. Falling back to 'ps'.")
+                    img_urls['poster'] = current_ps_url
+                    img_urls['poster_crop'] = None # ps는 crop 없음
+                    # landscape는 원래 pl 유지 (SiteUtil 결정 존중 또는 원본 pl 강제 지정 가능)
+                    # img_urls['landscape'] = original_pl_url # 명시적으로 설정
+                    override_applied = True
+
+                if override_applied:
+                     logger.debug(f"[Videoa] Image URLs *after* override: poster={bool(img_urls.get('poster'))} crop={img_urls.get('poster_crop')} landscape={bool(img_urls.get('landscape'))}")
+                # --- 후처리 끝 ---
+
+                # --- 최종 이미지 처리 및 할당 ---
                 entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
                 entity.fanart = []
                 resolved_arts = img_urls.get("arts", [])
