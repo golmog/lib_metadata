@@ -157,7 +157,7 @@ class SiteDmm:
 
         logger.debug(f"Found {len(lists)} items using Desktop Grid XPath.")
         if not lists:
-            logger.warning(f"No items found using Desktop Grid XPath. Check HTML structure or 'no results' message.")
+            logger.warning(f"No items found using Desktop Grid XPath.")
             return []
 
         # --- 개별 결과 처리 루프 (데스크톱 파싱 로직만 사용) ---
@@ -172,11 +172,9 @@ class SiteDmm:
                 link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]')
                 if not link_tag_img: continue
                 img_link_href = link_tag_img[0].attrib.get("href", "").lower()
-
                 img_tag = link_tag_img[0].xpath('./img/@src')
                 if not img_tag: continue
                 original_ps_url = img_tag[0]
-
                 title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]')
                 if not title_link_tag: continue
                 title_link_with_p = node.xpath('.//a[contains(@href, "/detail/=/cid=") and ./p[contains(@class, "hover:text-linkHover")]]')
@@ -184,7 +182,6 @@ class SiteDmm:
                 else: title_link_tag = title_link_tag[0]
                 title_link_href = title_link_tag.attrib.get("href", "").lower()
                 href = title_link_href if title_link_href else img_link_href
-
                 title_p_tag = title_link_tag.xpath('./p[contains(@class, "hover:text-linkHover")]')
                 if title_p_tag: item.title = title_p_tag[0].text_content().strip()
 
@@ -245,7 +242,7 @@ class SiteDmm:
                         else: item.ui_code = f"{real_part}-{m.group(2)}"
                     else: item.ui_code = ui_code_temp
 
-                logger.debug(f"Item found ({list_type}) - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title_ko}")
+                logger.debug(f"Item found - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title_ko}")
                 ret.append(item.as_dict())
 
             except Exception as e_inner: logger.exception(f"Error processing item node: {e_inner}")
