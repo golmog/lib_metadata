@@ -208,8 +208,7 @@ class SiteDmm:
         for node in lists[:10]:
             try:
                 item = EntityAVSearch(cls.site_name)
-                href = None; item.image_url = None; item.title = item.title_ko = "Not Found"; original_ps_url = None
-                match_real_no_local = None
+                href = None; item.image_url = None; item.title = "Not Found"; original_ps_url = None
 
                 if list_type == "desktop":
                     link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]')
@@ -219,11 +218,12 @@ class SiteDmm:
                     if not img_tag: continue
                     original_ps_url = img_tag[0]
                     title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]')
-                    if not title_link_tag: continue
-                    title_link_href = title_link_tag[0].attrib.get("href", "").lower()
-                    href = title_link_href if title_link_href else img_link_href
-                    title_p_tag = title_link_tag[0].xpath('./p[contains(@class, "hover:text-linkHover")]')
-                    if title_p_tag: item.title = item.title_ko = title_p_tag[0].text_content().strip()
+                    if title_link_tag:
+                        title_link_tag = title_link_tag[0]
+                        title_link_href = title_link_tag.attrib.get("href", "").lower()
+                        href = title_link_href if title_link_href else img_link_href
+                        title_p_tag = title_link_tag.xpath('./p[contains(@class, "hover:text-linkHover")]')
+                        if title_p_tag: item.title = title_p_tag[0].text_content().strip()
 
                 elif list_type == "mobile":
                     link_tag_img = node.xpath('.//a[div[contains(@class, "h-[180px]")]]')
@@ -233,13 +233,13 @@ class SiteDmm:
                     if not img_tag: continue
                     original_ps_url = img_tag[0]
                     title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]')
-                    if not title_link_tag:
-                        title_link_tag = node.xpath('.//a[div/p[contains(@class, "line-clamp-2")]]')
-                        if not title_link_tag: continue
-                    title_link_href = title_link_tag[0].attrib.get("href", "").lower()
-                    href = title_link_href if title_link_href else img_link_href
-                    title_p_tag = title_link_tag[0].xpath('.//p[contains(@class, "line-clamp-2")]')
-                    if title_p_tag: item.title = item.title_ko = title_p_tag[0].text_content().strip()
+                    if not title_link_tag: title_link_tag = node.xpath('.//a[div/p[contains(@class, "line-clamp-2")]]')
+                    if title_link_tag:
+                        title_link_tag = title_link_tag[0]
+                        title_link_href = title_link_tag.attrib.get("href", "").lower()
+                        href = title_link_href if title_link_href else img_link_href
+                        title_p_tag = title_link_tag[0].xpath('.//p[contains(@class, "line-clamp-2")]')
+                        if title_p_tag: item.title = title_p_tag[0].text_content().strip()
                 else: continue
 
                 # --- 공통 처리 로직 ---
@@ -259,25 +259,25 @@ class SiteDmm:
                 if match_cid: item.code = cls.module_char + cls.site_char + match_cid.group("code")
                 else: logger.warning(f"CID not found in href: {href}"); continue
                 if any(exist_item.get("code") == item.code for exist_item in ret): continue
-                if item.title == "Not Found": item.title = item.title_ko = item.code # 제목 없으면 코드로
 
-                # ps_url 캐싱
-                if item.code and original_ps_url:
-                    cls._ps_url_cache[item.code] = original_ps_url
-                    logger.debug(f"Stored ps_url for {item.code} in cache.")
+                # --- 제목 Fallback 및 title_ko 설정 수정 ---
+                # XPath에서 제목을 못 찾았거나 비어있으면 코드로 대체
+                if not item.title or item.title == "Not Found":
+                    logger.warning(f"Title not found via XPath for {item.code}, using code as title.")
+                    item.title = item.code # 원본 제목을 코드로 설정
 
-                # --- 제목(title_ko) 처리 수정 ---
+                # title_ko 설정
                 if manual:
-                    # manual=True 이면 항상 지정된 형식 사용
+                    # manual=True 이면 항상 지정된 형식 사용 (item.title 사용 확인)
                     item.title_ko = f"(현재 인터페이스에서는 번역을 제공하지 않습니다) {item.title}"
                 else:
                     # manual=False 일 때만 번역 시도
                     if do_trans and item.title:
                         try: item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
                         except Exception as e_trans: logger.error(f"Error translating title: {e_trans}"); item.title_ko = item.title
-                    else: item.title_ko = item.title # 번역 안하거나 실패 시 원본 제목 사용
+                    else: item.title_ko = item.title
 
-                # --- 점수 계산 (원본 로직 유지 또는 수정된 로직) ---
+                # --- 점수 계산 ---
                 match_real_no_local = cls.PTN_SEARCH_REAL_NO.search(item.code[2:]) # 여기서 match 결과 저장
                 if match_real_no_local: item_ui_code_base = match_real_no_local.group("real") + match_real_no_local.group("no")
                 else: item_ui_code_base = item.code[2:]
@@ -318,7 +318,7 @@ class SiteDmm:
                         else: item.ui_code = f"{real_part}-{m.group(2)}"
                     else: item.ui_code = ui_code_temp # 최종 fallback
 
-                logger.debug(f"Item found - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title_ko}") # title_ko 로깅
+                logger.debug(f"Item found - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title_ko}")
                 ret.append(item.as_dict())
 
             except Exception as e_inner:
