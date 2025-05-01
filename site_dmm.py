@@ -209,6 +209,7 @@ class SiteDmm:
             try:
                 item = EntityAVSearch(cls.site_name)
                 href = None; item.image_url = None; item.title = item.title_ko = "Not Found"; original_ps_url = None
+                match_real_no_local = None
 
                 if list_type == "desktop":
                     link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]')
@@ -241,36 +242,47 @@ class SiteDmm:
                     if title_p_tag: item.title = item.title_ko = title_p_tag[0].text_content().strip()
                 else: continue
 
+                # --- 공통 처리 로직 ---
                 if not original_ps_url: continue
                 if original_ps_url.startswith("//"): original_ps_url = "https:" + original_ps_url
+
+                # 이미지 URL 설정 (manual 여부 따라)
                 if manual:
                     _image_mode = "1" if image_mode != "0" else image_mode
                     try: item.image_url = SiteUtil.process_image_mode(_image_mode, original_ps_url, proxy_url=proxy_url)
                     except Exception as e_img: logger.error(f"Error processing image: {e_img}"); item.image_url = original_ps_url
-                else: item.image_url = original_ps_url
+                else:
+                    item.image_url = original_ps_url
 
                 if not href: continue
                 match_cid = cls.PTN_SEARCH_CID.search(href)
                 if match_cid: item.code = cls.module_char + cls.site_char + match_cid.group("code")
                 else: logger.warning(f"CID not found in href: {href}"); continue
                 if any(exist_item.get("code") == item.code for exist_item in ret): continue
-                if item.title == "Not Found": item.title = item.title_ko = item.code
+                if item.title == "Not Found": item.title = item.title_ko = item.code # 제목 없으면 코드로
 
+                # ps_url 캐싱
                 if item.code and original_ps_url:
                     cls._ps_url_cache[item.code] = original_ps_url
                     logger.debug(f"Stored ps_url for {item.code} in cache.")
 
-                if not manual:
+                # --- 제목(title_ko) 처리 수정 ---
+                if manual:
+                    # manual=True 이면 항상 지정된 형식 사용
+                    item.title_ko = f"(현재 인터페이스에서는 번역을 제공하지 않습니다) {item.title}"
+                else:
+                    # manual=False 일 때만 번역 시도
                     if do_trans and item.title:
                         try: item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
                         except Exception as e_trans: logger.error(f"Error translating title: {e_trans}"); item.title_ko = item.title
-                    else: item.title_ko = item.title
-                else: item.title_ko = "(번역 안 함) " + item.title
+                    else: item.title_ko = item.title # 번역 안하거나 실패 시 원본 제목 사용
 
-                match_real_no = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
-                if match_real_no: item_ui_code_base = match_real_no.group("real") + match_real_no.group("no")
+                # --- 점수 계산 (원본 로직 유지 또는 수정된 로직) ---
+                match_real_no_local = cls.PTN_SEARCH_REAL_NO.search(item.code[2:]) # 여기서 match 결과 저장
+                if match_real_no_local: item_ui_code_base = match_real_no_local.group("real") + match_real_no_local.group("no")
                 else: item_ui_code_base = item.code[2:]
                 current_score = 0
+
                 if len(keyword_tmps) == 2:
                     if item_ui_code_base == dmm_keyword: current_score = 100
                     elif item_ui_code_base.replace("0", "") == dmm_keyword.replace("0", ""): current_score = 100
@@ -285,31 +297,44 @@ class SiteDmm:
                 item.score = current_score
                 if current_score < 100 and score > 20: score -= 5
 
-                if match_real_no:
-                    real_part = match_real_no.group("real").upper()
-                    no_part_str = str(int(match_real_no.group("no")))
-                    item.ui_code = f"{real_part}-{no_part_str}"
+                # --- UI 코드 형식화 수정 (zfill(3) 적용) ---
+                if match_real_no_local:
+                    real_part = match_real_no_local.group("real").upper()
+                    try:
+                        no_part_str = str(int(match_real_no_local.group("no"))).zfill(3) # 3자리 패딩
+                        item.ui_code = f"{real_part}-{no_part_str}"
+                    except ValueError: # 숫자 변환 실패 시
+                        item.ui_code = f"{real_part}-{match_real_no_local.group('no')}" # 그룹 그대로 사용
                 else:
                     ui_code_temp = item.code[2:].upper()
                     if ui_code_temp.startswith("H_"): ui_code_temp = ui_code_temp[2:]
                     m = re.match(r"([a-zA-Z]+)(\d+.*)", ui_code_temp)
-                    if m: item.ui_code = f"{m.group(1)}-{m.group(2)}"
-                    else: item.ui_code = ui_code_temp
+                    if m:
+                        real_part = m.group(1)
+                        num_part_match = re.match(r"(\d+)", m.group(2))
+                        if num_part_match:
+                            no_part_str = str(int(num_part_match.group(1))).zfill(3) # 3자리 패딩
+                            item.ui_code = f"{real_part}-{no_part_str}"
+                        else: item.ui_code = f"{real_part}-{m.group(2)}"
+                    else: item.ui_code = ui_code_temp # 최종 fallback
 
-                logger.debug(f"Item found - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title}")
+                logger.debug(f"Item found - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title_ko}") # title_ko 로깅
                 ret.append(item.as_dict())
 
             except Exception as e_inner:
                 logger.exception(f"Error processing individual search result item: {e_inner}")
 
+        # 최종 정렬
         sorted_ret = sorted(ret, key=lambda k: k.get("score", 0), reverse=True)
 
+        # 재검색 로직
         if not sorted_ret and len(keyword_tmps) == 2 and len(keyword_tmps[1]) == 5:
             new_title = keyword_tmps[0] + keyword_tmps[1].zfill(6)
             logger.debug(f"No results found for {dmm_keyword}, retrying with {new_title}")
             return cls.__search(new_title, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode, manual=manual)
 
         return sorted_ret
+
 
     @classmethod
     def search(cls, keyword, **kwargs):
