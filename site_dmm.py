@@ -12,6 +12,7 @@ from .entity_av import EntityAVSearch
 from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings
 from .plugin import P
 from .site_util import SiteUtil
+from lxml import html, etree # etree 추가 (HTML 출력용)
 
 logger = P.logger
 
