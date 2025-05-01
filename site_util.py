@@ -458,7 +458,7 @@ class SiteUtil:
                         cropped_im = cls.imcrop(im_lg_obj, position=pos)
                         if cropped_im is None: continue
                         val = hfun(im_sm_obj) - hfun(cropped_im)
-                        if val <= 10:
+                        if val <= 20:
                             logger.debug(f"has_hq_poster: Found similar region at position '{pos}'.")
                             return pos
                     except Exception as crop_comp_e:
