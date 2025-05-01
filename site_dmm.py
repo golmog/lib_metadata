@@ -410,25 +410,33 @@ class SiteDmm:
             else: logger.warning("Tagline (h1#title) not found.")
         except Exception as e: logger.error(f"Error parsing tagline: {e}")
 
-        # --- 이미지 URL 추출 및 처리 ---
+        # --- 이미지 URL 추출 및 처리 (SiteUtil 호출 강화) ---
         try:
-            img_urls = cls.__img_urls(tree)
-            # 캐시된 ps_url 우선 사용, 없으면 추출된 ps (pl fallback 포함) 사용
+            img_urls = cls.__img_urls(tree) # ['ps':?, 'pl':?, 'arts':[]] 반환 예상
             img_urls['ps'] = ps_url_from_cache if ps_url_from_cache else img_urls.get('ps', "")
-            if not img_urls['ps']:
-                logger.error("Failed to obtain ps_url (neither cache nor parsed).")
-                # ps 가 없으면 후처리가 어려울 수 있음
+            if not img_urls['ps']: logger.error("Failed to obtain ps_url.")
 
+            logger.debug(f"Calling SiteUtil.resolve_jav_imgs with: {img_urls}")
+            # resolve_jav_imgs 가 내부적으로 비율 체크 및 비교 로직 수행 가정
+            # 반환되는 img_urls 에는 결정된 poster, landscape, crop_mode 등이 포함될 것임
             SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
+            logger.debug(f"Result from SiteUtil.resolve_jav_imgs: {img_urls}") # 결과 확인
+
+            # process_jav_imgs 는 resolve 결과를 바탕으로 최종 썸네일 URL 생성
             entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
+            logger.debug(f"Final entity.thumb: {entity.thumb}")
+
+            # 팬아트 처리 (landscape 는 제외)
             entity.fanart = []
             resolved_arts = img_urls.get("arts", [])
-            logger.debug(f"Resolved arts count: {len(resolved_arts)}")
+            landscape_url = img_urls.get("landscape") # resolve 에서 결정된 landscape URL
+            logger.debug(f"Resolved arts count: {len(resolved_arts)}, Landscape URL: {landscape_url}")
             for href in resolved_arts[:max_arts]:
-                # landscape 이미지가 팬아트에 포함되지 않도록 확인 (선택적)
-                # if href != img_urls.get("landscape"):
-                entity.fanart.append(SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url))
+                # 팬아트 목록에서 최종 landscape URL과 동일한 것은 제외
+                if href != landscape_url:
+                    entity.fanart.append(SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url))
             logger.debug(f"Final fanart count: {len(entity.fanart)}")
+
         except Exception as e: logger.exception(f"Error processing images: {e}")
 
         # --- 정보 테이블 파싱 ---
@@ -559,24 +567,39 @@ class SiteDmm:
             #      if trailer_url: entity.extras.append(...)
             # except Exception as e: logger.error(f"Error parsing extras: {e}")
 
-
-        # 원본 제목 설정 (cid 기반 - 이 부분은 유효)
-        # 단, 위 테이블 파싱에서 title이 설정되지 않았으므로 여기서 설정
+        # --- 원본 제목/정렬 제목 설정 (UI 코드 형식 수정) ---
+        # title, originaltitle, sorttitle 을 최종적으로 UI 코드 형식으로 설정
+        final_ui_code = code[2:].upper()
         match_real_no = cls.PTN_SEARCH_REAL_NO.search(code[2:])
         if match_real_no:
             real_part = match_real_no.group("real").upper()
-            no_part_str = str(int(match_real_no.group("no"))) # 앞 0 제거
-            entity.title = entity.originaltitle = entity.sorttitle = f"{real_part}-{no_part_str}"
+            # 숫자 부분을 정수로 변환 후, zfill(3)을 사용하여 최소 3자리로 패딩
+            try:
+                no_part_str = str(int(match_real_no.group("no"))).zfill(3) # 3자리 패딩 적용
+                final_ui_code = f"{real_part}-{no_part_str}" # 예: HAME-041
+            except ValueError:
+                logger.warning(f"Could not parse number part for UI code: {match_real_no.group('no')}")
+                # 숫자 변환 실패 시, 정규식 그룹 그대로 사용 시도 (다른 문자가 섞인 경우?)
+                final_ui_code = f"{real_part}-{match_real_no.group('no')}"
         else:
+            # 정규식 매칭 실패 시 (예: h_ 접두사 등)
             ui_code_temp = code[2:].upper()
             if ui_code_temp.startswith("H_"): ui_code_temp = ui_code_temp[2:]
+            # 문자-숫자 분리 후 숫자 부분 3자리 패딩 시도
             m = re.match(r"([a-zA-Z]+)(\d+.*)", ui_code_temp)
-            if m: entity.title = entity.originaltitle = entity.sorttitle = f"{m.group(1)}-{m.group(2)}"
-            else: entity.title = entity.originaltitle = entity.sorttitle = ui_code_temp
-        logger.debug(f"Set title/originaltitle/sorttitle from code: {entity.title}")
-        # Tagline이 없으면 title로 대체 (선택적)
-        if not entity.tagline: entity.tagline = entity.title
+            if m:
+                real_part = m.group(1)
+                num_part_match = re.match(r"(\d+)", m.group(2))
+                if num_part_match:
+                    no_part_str = str(int(num_part_match.group(1))).zfill(3) # 3자리 패딩
+                    final_ui_code = f"{real_part}-{no_part_str}"
+                else: # 숫자 부분 못찾으면 그대로 붙임
+                    final_ui_code = f"{real_part}-{m.group(2)}"
+            else: # 분리 실패 시 그냥 사용
+                final_ui_code = ui_code_temp
 
+        entity.title = entity.originaltitle = entity.sorttitle = final_ui_code
+        logger.debug(f"Final title/originaltitle/sorttitle set to formatted UI code: {entity.title}")
 
         return entity # 최종 entity 반환
 
