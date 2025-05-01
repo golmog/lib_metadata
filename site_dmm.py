@@ -140,7 +140,21 @@ class SiteDmm:
                 if match_cid: item.code = cls.module_char + cls.site_char + match_cid.group("code")
                 else: continue
                 if any(i.get("code") == item.code for i in ret): continue
-                if not item.title or item.title == "Not Found": item.title = item.code
+                # --- 컨텐츠 타입 표시 추가 ---
+                type_prefix = ""
+                if content_type == 'dvd':
+                    type_prefix = "[DVD] "
+                elif content_type == 'videoa':
+                    type_prefix = "[DigitalVideo] "
+                # 제목 설정 시 prefix 추가
+                if not item.title or item.title == "Not Found":
+                    # 제목 없으면 품번 사용하고 prefix 추가
+                    match_real_no_for_title = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
+                    default_title = match_real_no_for_title.group("real").upper() + "-" + str(int(match_real_no_for_title.group("no"))).zfill(3) if match_real_no_for_title else item.code[2:].upper()
+                    item.title = type_prefix + default_title
+                else:
+                    # 기존 제목에 prefix 추가
+                    item.title = type_prefix + item.title
                 if item.code and original_ps_url:
                     cls._ps_url_cache[item.code] = {'ps': original_ps_url, 'type': content_type}
                     logger.debug(f"Stored ps & type for {item.code} in cache: {content_type}")
@@ -201,12 +215,24 @@ class SiteDmm:
         try:
             if content_type == 'videoa':
                 logger.debug("Extracting videoa URLs...")
+                pl_url = None
+                pl_xpath = '//div[@id="sample-image-block"]//a/@href'
+                pl_href_tags = tree.xpath(pl_xpath)
+                if pl_href_tags:
+                    # 첫 번째 링크를 pl로 사용
+                    first_href = pl_href_tags[0].strip()
+                    if first_href:
+                        pl_url = py_urllib_parse.urljoin(cls.site_base_url, first_href)
+                        img_urls['pl'] = pl_url
+                        logger.debug(f"Found videoa pl from div#sample-image-block first link: {pl_url}")
+                    else:
+                        logger.warning("First link in div#sample-image-block is empty.")
+                else:
+                    logger.warning("Could not find any links (a/@href) inside div#sample-image-block.")
+
                 arts_xpath_main = '//div[@id="sample-image-block"]//a/@href'
                 arts_xpath_alt = '//a[contains(@id, "sample-image")]/@href'
-                arts_tags = tree.xpath(arts_xpath_main)
-                if not arts_tags:
-                    logger.debug(f"Trying alternative arts XPath for videoa: {arts_xpath_alt}")
-                    arts_tags = tree.xpath(arts_xpath_alt)
+                arts_tags = tree.xpath(arts_xpath_main) or tree.xpath(arts_xpath_alt)
                 if arts_tags:
                     processed_arts = []
                     for href in arts_tags:
@@ -215,9 +241,7 @@ class SiteDmm:
                             processed_arts.append(full_href)
                     unique_arts = []; [unique_arts.append(x) for x in processed_arts if x not in unique_arts]
                     img_urls['arts'] = unique_arts
-                    if img_urls['arts']:
-                        img_urls['pl'] = img_urls['arts'][0]
-                        logger.debug(f"PL for videoa set from first art: {img_urls['pl']}")
+                    # videoa는 pl을 위에서 찾았으므로, 여기서 arts[0]으로 덮어쓰지 않음
                 else: logger.warning("Arts block not found for videoa using known XPaths.")
 
             elif content_type == 'dvd':
