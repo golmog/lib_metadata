@@ -218,11 +218,15 @@ class SiteAvdbs:
                             logger.warning(f"DB: 만료된 Discord URL 발견 ('{originalname}' -> found: {korean_name}). 갱신 시도...")
                             try:
                                 renew_map = DiscordUtil.proxy_image_url([thumb_url])
-                                if thumb_url in renew_map and renew_map[thumb_url]:
+                                if renew_map is not None and thumb_url in renew_map and renew_map[thumb_url]:
                                     renewed_url = renew_map[thumb_url]
                                     if renewed_url != thumb_url:
                                         logger.info(f"DB: Discord URL 갱신 성공: -> {renewed_url}")
                                         thumb_url = renewed_url
+                                elif renew_map is None:
+                                    logger.error(f"DB: Discord URL 갱신 실패 - proxy_image_url 함수가 None을 반환했습니다.")
+                                else:
+                                    logger.warning(f"DB: Discord URL 갱신 실패 - 갱신된 URL을 받지 못했습니다. renew_map: {renew_map}")
                             except Exception as e_renew: logger.error(f"DB: Discord URL 갱신 중 예외: {e_renew}")
 
                     db_info = {"name": korean_name, "name2": eng_orig_name, "thumb": thumb_url}
