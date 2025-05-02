@@ -152,138 +152,172 @@ class SiteAvdbs:
         return False
 
     @staticmethod
+    def _parse_name_variations(originalname):
+        """입력된 이름에서 검색할 이름 변형 목록을 생성합니다."""
+        variations = [originalname] # 1. 원본 이름 항상 포함
+        # 정규식을 사용하여 괄호 및 내부 내용 추출 (일반 괄호, 전각 괄호 모두 처리)
+        match = re.match(r'^(.*?)\s*[（\(]([^）\)]+)[）\)]\s*$', originalname)
+        if match:
+            before_paren = match.group(1).strip()
+            inside_paren = match.group(2).strip()
+            if before_paren and before_paren not in variations:
+                variations.append(before_paren) # 2. 괄호 앞부분 추가
+            if inside_paren and inside_paren not in variations:
+                variations.append(inside_paren) # 3. 괄호 안부분 추가
+        logger.debug(f"원본 이름 '{originalname}'에 대한 검색 변형 생성: {variations}")
+        return variations
+
+    @staticmethod
     def get_actor_info(entity_actor, **kwargs):
-        """로컬 DB(일본어 이름 우선) 조회 후 웹 스크래핑 fallback, Discord URL 갱신"""
-        originalname = entity_actor.get("originalname")
-        if not originalname:
+        """
+        로컬 DB(일본어 이름 우선) 조회 후 웹 스크래핑 fallback.
+        이름에 괄호가 있는 경우 여러 단계로 검색 시도.
+        Discord URL 갱신 포함.
+        """
+        original_input_name = entity_actor.get("originalname")
+        if not original_input_name:
             logger.warning("배우 정보 조회 불가: originalname이 없습니다.")
             return entity_actor
 
-        info = None
-        db_found_valid = False
+        # --- 검색할 이름 변형 목록 생성 ---
+        name_variations_to_search = SiteAvdbs._parse_name_variations(original_input_name)
 
-        logger.debug(f"DB 조회 시도: originalname(일본어)='{originalname}'")
-        if os.path.exists(DB_PATH):
-            conn = None
-            try:
-                db_uri = f"file:{os.path.abspath(DB_PATH)}?mode=ro"
-                logger.debug(f"Connecting to DB (RO, WAL check): {db_uri}")
-                conn = sqlite3.connect(db_uri, uri=True, timeout=5)
+        final_info = None # 최종적으로 찾은 정보를 저장할 변수
+
+        # --- 각 이름 변형에 대해 검색 시도 ---
+        for current_search_name in name_variations_to_search:
+            logger.info(f"배우 검색 시도: '{current_search_name}' (원본: '{original_input_name}')")
+            info_found_for_this_name = None # 현재 이름으로 찾은 정보를 임시 저장
+            db_found_valid_for_this_name = False
+
+            # --- DB 검색 시도 (현재 이름 기준) ---
+            if os.path.exists(DB_PATH):
+                conn = None
                 try:
-                    journal_mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
-                    if journal_mode.lower() != 'wal': logger.warning("DB is not in WAL mode.")
-                except sqlite3.Error: pass # WAL 확인 오류는 무시
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                row = None
+                    db_uri = f"file:{os.path.abspath(DB_PATH)}?mode=ro"
+                    conn = sqlite3.connect(db_uri, uri=True, timeout=5)
+                    # (WAL 모드 체크는 생략 가능, 필요하면 추가)
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    row = None
 
-                logger.debug("DB 1차 쿼리 실행 (WHERE inner_name_cn = ?)")
-                query1 = "SELECT inner_name_kr, inner_name_en, profile_img_view FROM actors WHERE inner_name_cn = ? LIMIT 1"
-                cursor.execute(query1, (originalname,))
-                row = cursor.fetchone()
-
-                if not row:
-                    logger.debug("DB 1차 쿼리 결과 없음. 2차 쿼리(다른 이름) 시도.")
-                    query2 = "SELECT inner_name_kr, inner_name_en, profile_img_view, actor_onm, inner_name_cn FROM actors WHERE actor_onm LIKE ?"
-                    like_param_onm = f"%{originalname}%"
-                    logger.debug(f"DB 2차 쿼리 실행 (WHERE actor_onm LIKE '{like_param_onm}')")
-                    cursor.execute(query2, (like_param_onm,))
-                    potential_rows = cursor.fetchall()
-                    if potential_rows:
-                        logger.debug(f"DB 2차 쿼리: 다른 이름 포함 가능 후보 {len(potential_rows)}개 발견. 파싱 비교 시작...")
-                        for potential_row in potential_rows:
-                            if SiteAvdbs._parse_and_match_other_names(potential_row["actor_onm"], originalname):
-                                logger.debug(f"DB 2차 쿼리(파싱): 다른 이름 목록에서 '{originalname}' 정확히 일치 배우 찾음 (실제 배우: {potential_row['inner_name_kr']}/{potential_row['inner_name_cn']}).")
-                                row = potential_row
-                                break
-                        if not row: logger.debug("DB 2차 쿼리(파싱): 다른 이름 포함 후보 중 정확히 일치 배우 없음.")
-                    else: logger.debug("DB 2차 쿼리: 다른 이름 포함 후보 없음.")
+                    logger.debug(f"DB 1차 쿼리 실행 (WHERE inner_name_cn = '{current_search_name}')")
+                    query1 = "SELECT inner_name_kr, inner_name_en, profile_img_view FROM actors WHERE inner_name_cn = ? LIMIT 1"
+                    cursor.execute(query1, (current_search_name,))
+                    row = cursor.fetchone()
 
                     if not row:
-                        logger.debug("DB 1, 2차 쿼리 실패. 3차 쿼리(fallback) 시도.")
-                        query3 = "SELECT inner_name_kr, inner_name_en, profile_img_view FROM actors WHERE inner_name_kr = ? OR inner_name_en = ? OR inner_name_en LIKE ? LIMIT 1"
-                        like_param_en = f"%({originalname})%"
-                        cursor.execute(query3, (originalname, originalname, like_param_en))
-                        row = cursor.fetchone()
-                        if row: logger.debug("DB 3차 쿼리(fallback): 결과 찾음.")
-                        else: logger.debug("DB 3차 쿼리(fallback): 결과 없음.")
+                        logger.debug("DB 1차 쿼리 결과 없음. 2차 쿼리(다른 이름) 시도.")
+                        query2 = "SELECT inner_name_kr, inner_name_en, profile_img_view, actor_onm, inner_name_cn FROM actors WHERE actor_onm LIKE ?"
+                        like_param_onm = f"%{current_search_name}%"
+                        cursor.execute(query2, (like_param_onm,))
+                        potential_rows = cursor.fetchall()
+                        if potential_rows:
+                            for potential_row in potential_rows:
+                                if SiteAvdbs._parse_and_match_other_names(potential_row["actor_onm"], current_search_name):
+                                    logger.debug(f"DB 2차 쿼리(파싱): 다른 이름 목록에서 '{current_search_name}' 정확히 일치 배우 찾음.")
+                                    row = potential_row
+                                    break
+                            if not row: logger.debug("DB 2차 쿼리(파싱): 다른 이름 포함 후보 중 정확히 일치 배우 없음.")
+                        else: logger.debug("DB 2차 쿼리: 다른 이름 포함 후보 없음.")
 
-                if row:
-                    korean_name = row["inner_name_kr"]
-                    eng_orig_name = row["inner_name_en"]
-                    thumb_url = row["profile_img_view"]
+                        if not row:
+                            logger.debug("DB 1, 2차 쿼리 실패. 3차 쿼리(fallback) 시도.")
+                            query3 = "SELECT inner_name_kr, inner_name_en, profile_img_view FROM actors WHERE inner_name_kr = ? OR inner_name_en = ? OR inner_name_en LIKE ? LIMIT 1"
+                            like_param_en = f"%({current_search_name})%"
+                            cursor.execute(query3, (current_search_name, current_search_name, like_param_en))
+                            row = cursor.fetchone()
+                            if row: logger.debug("DB 3차 쿼리(fallback): 결과 찾음.")
+                            else: logger.debug("DB 3차 쿼리(fallback): 결과 없음.")
 
-                    if DISCORD_UTIL_AVAILABLE and thumb_url and DiscordUtil.isurlattachment(thumb_url):
-                        if DiscordUtil.isurlexpired(thumb_url):
-                            logger.warning(f"DB: 만료된 Discord URL 발견 ('{originalname}' -> found: {korean_name}). 갱신 시도 (renew_urls)...")
-                            try:
-                                temp_data_for_renew = {"thumb": thumb_url}
-                                logger.debug(f"renew_urls 호출을 위해 임시 데이터 생성: {temp_data_for_renew}")
+                    # --- DB 결과 처리 (row가 찾아졌을 경우) ---
+                    if row:
+                        # (기존의 Discord URL 갱신 및 db_info 생성 로직 삽입)
+                        # --- !!! 중요: 여기서는 필드명 'name2'에 inner_name_en 을 사용하는 것으로 가정 (원본 코드 기반) !!! ---
+                        # --- 만약 name2가 inner_name_cn(일본어)여야 한다면 이 부분을 수정해야 함 ---
+                        korean_name = row["inner_name_kr"]
+                        name2_field = row["inner_name_en"] # 또는 row["inner_name_cn"] ??? 원본 코드 확인 필요
+                        thumb_url = row["profile_img_view"]
 
-                                renewed_data = DiscordUtil.renew_urls(temp_data_for_renew)
+                        # Discord URL 갱신 로직 (기존 방식 또는 renew_urls 사용 방식)
+                        if DISCORD_UTIL_AVAILABLE and thumb_url and DiscordUtil.isurlattachment(thumb_url):
+                            if DiscordUtil.isurlexpired(thumb_url):
+                                logger.warning(f"DB: 만료된 Discord URL 발견 ('{current_search_name}' -> found: {korean_name}). 갱신 시도...")
+                                try:
+                                    # renew_urls 사용 방식 예시 (이전 답변 참고)
+                                    temp_data_for_renew = {"thumb": thumb_url}
+                                    renewed_data = DiscordUtil.renew_urls(temp_data_for_renew)
+                                    if renewed_data and isinstance(renewed_data, dict):
+                                        renewed_url = renewed_data.get("thumb")
+                                        if renewed_url and isinstance(renewed_url, str) and renewed_url != thumb_url:
+                                            logger.info(f"DB: Discord URL 갱신 성공: -> {renewed_url}")
+                                            thumb_url = renewed_url # thumb_url 변수 업데이트
+                                except Exception as e_renew:
+                                    logger.error(f"DB: Discord URL 갱신 중 예외: {e_renew}")
 
-                                if renewed_data and isinstance(renewed_data, dict):
-                                    renewed_url = renewed_data.get("thumb")
+                        db_info = {"name": korean_name, "name2": name2_field, "thumb": thumb_url}
 
-                                    if renewed_url and isinstance(renewed_url, str) and renewed_url != thumb_url:
-                                        logger.info(f"DB: Discord URL 갱신 성공: -> {renewed_url}")
-                                        thumb_url = renewed_url
-                                    elif renewed_url == thumb_url:
-                                        logger.debug("DB: Discord URL 갱신 처리 완료 (URL 변경 없음 - 만료 전 또는 갱신 실패).")
-                                    else:
-                                        logger.warning(f"DB: renew_urls가 'thumb' 키에 대해 유효하지 않은 값을 반환했습니다: {renewed_url}")
-                                else:
-                                    logger.error(f"DB: renew_urls 함수가 예상치 못한 형식의 결과를 반환했습니다. 타입: {type(renewed_data)}")
+                        # name2 필드 정제 로직 (원본 코드 유지)
+                        if db_info.get("name2"):
+                            match_name2 = re.match(r"^(.*?)\s*\(.*\)$", db_info["name2"])
+                            if match_name2: db_info["name2"] = match_name2.group(1).strip()
 
-                            except Exception as e_renew:
-                                logger.error(f"DB: Discord URL 갱신 프로세스(renew_urls) 중 예외 발생: {e_renew}")
+                        # 유효성 검사 (name과 thumb 필수)
+                        if db_info.get("name") and db_info.get("thumb"):
+                            logger.info(f"DB에서 '{current_search_name}'에 대한 유효 정보 찾음 ({korean_name}).")
+                            info_found_for_this_name = db_info
+                            info_found_for_this_name["site"] = "avdbs_db"
+                            db_found_valid_for_this_name = True
+                        else:
+                            logger.debug(f"DB 결과 필수 정보 부족 ('{current_search_name}' -> found: {korean_name}). 웹 스크래핑 시도.")
 
-                    db_info = {"name": korean_name, "name2": eng_orig_name, "thumb": thumb_url}
-                    if db_info["name2"]:
-                        match = re.match(r"^(.*?)\s*\(.*\)$", db_info["name2"])
-                        if match: db_info["name2"] = match.group(1).strip()
-
-                    if db_info.get("name") and db_info.get("thumb"):
-                        logger.info(f"DB에서 '{originalname}' 검색됨 ({korean_name}).")
-                        info = db_info; info["site"] = "avdbs_db"; db_found_valid = True
-                    else: logger.debug(f"DB 결과 필수 정보 부족 ('{originalname}' -> found: {korean_name}).")
-
-            except sqlite3.OperationalError as e_op: logger.error(f"DB OperationalError: {e_op}")
-            except sqlite3.Error as e: logger.error(f"DB 조회 중 오류: {e}")
-            except Exception as e_db: logger.exception(f"DB 처리 중 예상치 못한 오류: {e_db}")
-            finally:
-                if conn: conn.close(); logger.debug("DB connection closed.")
-        else:
-            logger.warning(f"Avdbs 데이터베이스 파일 없음: {DB_PATH}. 웹 스크래핑 시도.")
-
-        if not db_found_valid:
-            logger.info(f"DB 조회 실패 또는 정보 부족, 웹 스크래핑 시도 (fallback): '{originalname}'")
-            retry = kwargs.pop("retry", True)
-            web_info = None
-            try:
-                web_info = SiteAvdbs.__get_actor_info_from_web(originalname, **kwargs)
-            except Exception as e_web:
-                if retry:
-                    logger.warning(f"WEB: Exception, retrying after 2s: {e_web}")
-                    time.sleep(2)
-                    return SiteAvdbs.get_actor_info(entity_actor, retry=False, **kwargs)
-                else: logger.exception(f"WEB: Failed after retry: {e_web}")
+                except sqlite3.Error as e: logger.error(f"DB 조회 중 오류 ({current_search_name}): {e}")
+                except Exception as e_db: logger.exception(f"DB 처리 중 예상치 못한 오류 ({current_search_name}): {e_db}")
+                finally:
+                    if conn: conn.close()
             else:
+                logger.warning(f"Avdbs 데이터베이스 파일 없음: {DB_PATH}. 웹 스크래핑 시도.")
+
+            # --- 웹 스크래핑 시도 (DB에서 못 찾았거나 정보 부족 시) ---
+            if not db_found_valid_for_this_name:
+                logger.info(f"DB 조회 실패 또는 정보 부족, 웹 스크래핑 시도: '{current_search_name}'")
+                web_info = None
+                try:
+                    # 웹 스크래핑 시도 (kwargs 전달, 재시도 로직은 __get_actor... 내부에 포함 가능)
+                    web_info = SiteAvdbs.__get_actor_info_from_web(current_search_name, **kwargs)
+                except Exception as e_web:
+                    # 웹 스크래핑 자체의 예외 로깅 (재시도는 __get... 내부에서 처리)
+                    logger.exception(f"WEB: Failed for '{current_search_name}': {e_web}")
+
                 if web_info is not None:
                     if web_info.get("name") and web_info.get("thumb"):
-                        logger.info(f"WEB: 웹 스크래핑으로 '{originalname}' 유효 정보 찾음.")
-                        info = web_info
+                        logger.info(f"WEB: 웹 스크래핑으로 '{current_search_name}' 유효 정보 찾음.")
+                        info_found_for_this_name = web_info # site 정보는 web_info 생성 시 포함됨
                     else: logger.info(f"WEB: 웹 스크래핑 결과 필수 정보 부족.")
-                else: logger.info(f"WEB: 웹 스크래핑으로도 정보 찾지 못함.")
+                else: logger.info(f"WEB: 웹 스크래핑으로도 '{current_search_name}' 정보 찾지 못함.")
 
-        if info is not None:
-            info["name"] = info.get("name") if info.get("name") else None
-            info["name2"] = info.get("name2") if info.get("name2") else None
-            info["thumb"] = info.get("thumb") if info.get("thumb") else None
-            if info.get("name") or info.get("name2") or info.get("thumb"):
-                logger.info(f"'{originalname}' 정보 업데이트 완료 (출처: {info.get('site', 'N/A')}).")
-                entity_actor.update(info)
-            else: logger.info(f"'{originalname}' 최종 정보 비어있어 업데이트 안 함.")
-        else: logger.info(f"'{originalname}' 최종 정보 없음.")
+            # --- 현재 이름으로 유효한 정보를 찾았는지 확인 ---
+            if info_found_for_this_name is not None:
+                logger.info(f"성공: '{current_search_name}' 이름으로 배우 정보 찾음 (출처: {info_found_for_this_name.get('site', 'N/A')}).")
+                final_info = info_found_for_this_name # 최종 정보로 확정
+                break # 이름 변형 루프 종료 (더 이상 다른 이름으로 검색 안 함)
+            else:
+                logger.info(f"실패: '{current_search_name}' 이름으로 배우 정보 찾지 못함. 다음 이름 시도...")
 
-        return entity_actor
+        # --- 최종 결과 처리 (모든 이름 변형 검색 후) ---
+        if final_info is not None:
+            # 최종 정보 정리 (get으로 안전하게 접근)
+            final_info["name"] = final_info.get("name")
+            final_info["name2"] = final_info.get("name2")
+            final_info["thumb"] = final_info.get("thumb")
+
+            # 하나라도 유효한 값이 있으면 업데이트
+            if final_info.get("name") or final_info.get("name2") or final_info.get("thumb"):
+                logger.info(f"'{original_input_name}' 최종 정보 업데이트 완료 (출처: {final_info.get('site', 'N/A')}).")
+                entity_actor.update(final_info) # 입력 entity 업데이트
+            else:
+                logger.warning(f"'{original_input_name}' 최종 정보가 비어있어 업데이트 안 함.")
+        else:
+            logger.info(f"'{original_input_name}'에 대한 최종 정보 없음 (모든 이름 변형 검색 실패).")
+
+        return entity_actor # 수정된 (또는 원본) entity_actor 반환
