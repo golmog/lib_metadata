@@ -80,8 +80,10 @@ class SiteDmm:
 
     @classmethod
     def __search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
-        # (이전 통합 버전의 개선된 검색 로직 - 타입 판별 및 캐싱 - 그대로 사용)
+        # 연령 확인
         if not cls._ensure_age_verified(proxy_url=proxy_url): return []
+
+        # 키워드 정규화
         keyword = keyword.strip().lower()
         if keyword[-3:-1] == "cd": keyword = keyword[:-3]
         keyword = keyword.replace("-", " ")
@@ -89,6 +91,8 @@ class SiteDmm:
         if len(keyword_tmps) == 2: dmm_keyword = keyword_tmps[0] + keyword_tmps[1].zfill(5)
         else: dmm_keyword = keyword
         logger.debug("keyword [%s] -> [%s]", keyword, dmm_keyword)
+
+        # 검색 요청
         search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': dmm_keyword }
         search_url = f"{cls.site_base_url}/search/?{py_urllib_parse.urlencode(search_params)}"
         logger.info(f"Using search URL: {search_url}")
@@ -100,69 +104,129 @@ class SiteDmm:
             title_tags_check = tree.xpath('//title/text()')
             if title_tags_check and "年齢認証 - FANZA" in title_tags_check[0]: logger.error("Age page received during search."); return []
         except Exception as e: logger.exception(f"Failed to get tree for search: {e}"); return []
+
+        # 검색 결과 목록 추출
         list_xpath = '//div[contains(@class, "grid-cols-4")]//div[contains(@class, "border-r") and contains(@class, "border-b")]'
         lists = []; logger.debug(f"Attempting XPath (Desktop Grid): {list_xpath}")
         try: lists = tree.xpath(list_xpath)
         except Exception as e_xpath: logger.error(f"XPath error: {e_xpath}")
         logger.debug(f"Found {len(lists)} items using Desktop Grid XPath.")
         if not lists: logger.warning(f"No items found using Desktop Grid XPath."); return []
-        ret = []; score = 60
+
+        # 결과 처리를 위한 변수 초기화
+        ret = []; score = 60 # score 기본값 (부분일치 시 사용)
+
+        # 검색 결과 아이템 루프 (최대 10개)
         for node in lists[:10]:
             try:
-                item = EntityAVSearch(cls.site_name); href = None; original_ps_url = None; content_type = "unknown"
+                item = EntityAVSearch(cls.site_name)
+                href = None; original_ps_url = None; content_type = "unknown" # 기본 타입 unknown
+
+                # --- 링크 및 이미지 URL 추출 ---
                 link_tag_img = node.xpath('.//a[contains(@class, "flex justify-center")]');
                 if not link_tag_img: continue
-                img_link_href = link_tag_img[0].attrib.get("href", "").lower()
+                img_link_href = link_tag_img[0].attrib.get("href", "").lower() # 이미지 링크 (타입 판별 보조)
                 img_tag = link_tag_img[0].xpath('./img/@src')
                 if not img_tag: continue
-                original_ps_url = img_tag[0]
+                original_ps_url = img_tag[0] # 작은 포스터 URL
+
                 title_link_tag = node.xpath('.//a[contains(@href, "/detail/=/cid=")]')
                 if not title_link_tag: continue
                 title_link_with_p = node.xpath('.//a[contains(@href, "/detail/=/cid=") and ./p[contains(@class, "hover:text-linkHover")]]')
+                # 제목 링크 우선순위: <p> 태그 포함 > 일반 링크
                 title_link_tag = title_link_with_p[0] if title_link_with_p else title_link_tag[0]
-                title_link_href = title_link_tag.attrib.get("href", "").lower()
+                title_link_href = title_link_tag.attrib.get("href", "").lower() # 제목 링크 (타입 판별 및 코드 추출 주 사용)
+
+                # 최종 사용할 href 결정 (제목 링크 우선)
                 href = title_link_href if title_link_href else img_link_href
-                if href:
-                    if "/digital/videoa/" in href: content_type = "videoa"
-                    elif "/mono/dvd/" in href: content_type = "dvd"
-                item.content_type = content_type
+
+                # --- ★★★ 블루레이 및 컨텐츠 타입 판별 로직 추가 ★★★ ---
+                is_bluray = False
+                # 블루레이 스팬 태그 확인 (텍스트 내용과 클래스 동시 확인)
+                bluray_span = node.xpath('.//span[contains(@class, "text-blue-600") and contains(text(), "Blu-ray")]')
+                if bluray_span:
+                    is_bluray = True
+                    content_type = 'bluray' # 블루레이로 타입 확정
+                    logger.debug("Blu-ray span detected.")
+
+                # 블루레이가 아니라면 기존 방식으로 판별
+                if not is_bluray and href:
+                    if "/digital/videoa/" in href:
+                        content_type = "videoa"
+                    elif "/mono/dvd/" in href: # DVD 경로 확인
+                        content_type = "dvd"
+                    # 다른 타입 판별 로직 추가 가능
+                # --- 타입 판별 로직 끝 ---
+
+                item.content_type = content_type # 판별된 타입 저장
+
+                # --- 제목 추출 ---
                 title_p_tag = title_link_tag.xpath('./p[contains(@class, "hover:text-linkHover")]')
-                if title_p_tag: item.title = title_p_tag[0].text_content().strip()
+                raw_title = title_p_tag[0].text_content().strip() if title_p_tag else "" # 원본 제목
+                item.title = raw_title # Entity에 원본 제목 우선 저장
+
+                # --- 이미지 URL 처리 ---
                 if not original_ps_url: continue
                 if original_ps_url.startswith("//"): original_ps_url = "https:" + original_ps_url
-                item.image_url = original_ps_url
+                item.image_url = original_ps_url # Entity에 이미지 URL 저장
+
+                # --- 매뉴얼 모드 이미지 처리 ---
                 if manual:
                     _image_mode = "1" if image_mode != "0" else image_mode
-                    try: item.image_url = SiteUtil.process_image_mode(_image_mode, original_ps_url, proxy_url=proxy_url)
+                    try:
+                        item.image_url = SiteUtil.process_image_mode(_image_mode, original_ps_url, proxy_url=proxy_url)
                     except Exception as e_img: logger.error(f"ImgProcErr:{e_img}")
+
+                # --- 코드 추출 ---
                 if not href: continue
                 match_cid = cls.PTN_SEARCH_CID.search(href)
-                if match_cid: item.code = cls.module_char + cls.site_char + match_cid.group("code")
-                else: continue
-                if any(i.get("code") == item.code for i in ret): continue
-                # --- 컨텐츠 타입 표시 추가 ---
+                if match_cid:
+                    item.code = cls.module_char + cls.site_char + match_cid.group("code")
+                else:
+                    logger.warning(f"Could not extract CID from href: {href}")
+                    continue # 코드 없으면 처리 불가
+
+                # --- 중복 코드 체크 ---
+                # code 비교는 여기서 수행 (타입별 중복 허용 안 함)
+                if any(i.get("code") == item.code for i in ret):
+                    logger.debug(f"Duplicate code found, skipping: {item.code}")
+                    continue
+
+                # --- 제목 접두사 추가 ---
                 type_prefix = ""
-                if content_type == 'dvd':
-                    type_prefix = "[DVD] "
-                elif content_type == 'videoa':
-                    type_prefix = "[DigitalVideo] "
-                # 제목 설정 시 prefix 추가
-                if not item.title or item.title == "Not Found":
-                    # 제목 없으면 품번 사용하고 prefix 추가
+                if content_type == 'dvd': type_prefix = "[DVD] "
+                elif content_type == 'videoa': type_prefix = "[DigitalVideo] "
+                elif content_type == 'bluray': type_prefix = "[Blu-ray] " # 블루레이 접두사
+
+                # 제목 최종 설정 (접두사 포함)
+                if not item.title or item.title == "Not Found": # 제목 없으면 품번으로
+                    # item.code가 여기서 필요하므로 위에서 먼저 설정됨
                     match_real_no_for_title = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
                     default_title = match_real_no_for_title.group("real").upper() + "-" + str(int(match_real_no_for_title.group("no"))).zfill(3) if match_real_no_for_title else item.code[2:].upper()
                     item.title = type_prefix + default_title
                 else:
-                    # 기존 제목에 prefix 추가
-                    item.title = type_prefix + item.title
+                    # 기존 제목에 접두사 추가
+                    # item.title = type_prefix + item.title # 이 라인은 이미 원본 제목이 저장되어 있으므로, 아래 ko 번역에서 처리하거나 별도 필드에 저장
+                    pass # 이미 item.title에는 원본 제목 저장됨
+
+                # --- 캐시 저장 (판별된 타입 포함) ---
                 if item.code and original_ps_url:
                     cls._ps_url_cache[item.code] = {'ps': original_ps_url, 'type': content_type}
                     logger.debug(f"Stored ps & type for {item.code} in cache: {content_type}")
-                if manual: item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
-                else: item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans) if do_trans and item.title else item.title
+
+                # --- 번역 (원본 제목 기준, 접두사 포함 X) ---
+                if manual:
+                    item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + type_prefix + item.title # 매뉴얼 모드 시 접두사 포함
+                else:
+                    # 번역 시에는 원본 제목(접두사 제외) 사용
+                    trans_title = SiteUtil.trans(item.title, do_trans=do_trans) if do_trans and item.title else item.title
+                    item.title_ko = type_prefix + trans_title # 번역된 제목에 접두사 추가
+
+                # --- 점수 계산 ---
                 match_real_no = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
                 item_ui_code_base = match_real_no.group("real") + match_real_no.group("no") if match_real_no else item.code[2:]
                 current_score = 0
+                # 검색 키워드와 품번 비교하여 점수 산정
                 if len(keyword_tmps) == 2:
                     if item_ui_code_base == dmm_keyword: current_score = 100
                     elif item_ui_code_base.replace("0", "") == dmm_keyword.replace("0", ""): current_score = 100
@@ -170,32 +234,63 @@ class SiteDmm:
                     elif keyword_tmps[0] in item.code and keyword_tmps[1] in item.code: current_score = score
                     elif keyword_tmps[0] in item.code or keyword_tmps[1] in item.code: current_score = 60
                     else: current_score = 20
-                else:
+                else: # 검색어가 하나일 때
                     if item_ui_code_base == dmm_keyword: current_score = 100
                     elif dmm_keyword in item_ui_code_base: current_score = score
                     else: current_score = 20
-                item.score = current_score
+                item.score = current_score # 계산된 점수 저장
+                # 점수 감소 로직 (100점 아니면 다음 아이템 기본 점수 감소)
                 if current_score < 100 and score > 20: score -= 5
+
+                # --- UI 코드 생성 ---
                 if match_real_no:
                     real = match_real_no.group("real").upper(); no = match_real_no.group("no")
                     try: item.ui_code = f"{real}-{str(int(no)).zfill(3)}"
-                    except ValueError: item.ui_code = f"{real}-{no}"
-                else:
+                    except ValueError: item.ui_code = f"{real}-{no}" # 숫자로 변환 안 되면 그대로 사용
+                else: # 정규식 매칭 안 될 경우 대비
                     tmp = item.code[2:].upper();
                     if tmp.startswith("H_"): tmp = tmp[2:]
-                    m = re.match(r"([a-zA-Z]+)(\d+.*)", tmp)
+                    m = re.match(r"([a-zA-Z]+)(\d+.*)", tmp) # 간단한 분리 시도
                     if m:
                         real = m.group(1); rest = m.group(2); num_m = re.match(r"(\d+)", rest)
                         item.ui_code = f"{real}-{str(int(num_m.group(1))).zfill(3)}" if num_m else f"{real}-{rest}"
-                    else: item.ui_code = tmp
-                logger.debug(f"Item found ({content_type}) - Score: {item.score}, Code: {item.code}, UI Code: {item.ui_code}, Title: {item.title_ko}")
-                ret.append(item.as_dict())
-            except Exception as e_inner: logger.exception(f"ItemProcErr:{e_inner}")
-        sorted_ret = sorted(ret, key=lambda k: k.get("score", 0), reverse=True)
+                    else: item.ui_code = tmp # 최후의 수단: 코드 그대로 사용
+                # --- 최종 결과 저장 ---
+                logger.debug(f"Item Processed: Type={content_type}, Score={item.score}, Code={item.code}, UI Code={item.ui_code}, Title(KO)={item.title_ko}")
+                ret.append(item.as_dict()) # 결과 리스트에 추가
+            except Exception as e_inner: logger.exception(f"아이템 처리 중 예외 발생: {e_inner}")
+
+        # --- ★★★ 결과 정렬 로직 (우선순위 적용) ★★★ ---
+        # 우선순위 정의: 숫자가 낮을수록 우선 (1: DVD, 2: videoa, 3: bluray)
+        type_priority = {
+            'dvd': 1,
+            'videoa': 2,
+            'bluray': 3,
+            'unknown': 99 # 기타는 맨 뒤로
+        }
+
+        # 1단계: 점수로 내림차순 정렬
+        ret_sorted_by_score = sorted(ret, key=lambda k: k.get("score", 0), reverse=True)
+        # 2단계: 점수가 같은 그룹 내에서 타입 우선순위(숫자가 낮은 것 우선)로 오름차순 재정렬
+        sorted_ret = sorted(
+            ret_sorted_by_score,
+            key=lambda k: type_priority.get(k.get('content_type', 'unknown'), 99)
+        )
+        logger.debug(f"정렬 후 결과 개수: {len(sorted_ret)}")
+        if sorted_ret: # 정렬된 결과가 있을 경우 상위 몇개 로그 출력
+            log_count = min(len(sorted_ret), 5) # 최대 5개
+            logger.debug(f"정렬된 상위 {log_count}개 결과:")
+            for idx, item_log in enumerate(sorted_ret[:log_count]):
+                logger.debug(f"  {idx+1}. Score={item_log.get('score')}, Type={item_log.get('content_type')}, Code={item_log.get('code')}, Title={item_log.get('title_ko')}")
+        # --- 정렬 로직 끝 ---
+
+        # --- 재시도 로직 ---
         if not sorted_ret and len(keyword_tmps) == 2 and len(keyword_tmps[1]) == 5:
-            new_title = keyword_tmps[0] + keyword_tmps[1].zfill(6)
-            logger.debug(f"Retrying with {new_title}")
+            new_title = keyword_tmps[0] + keyword_tmps[1].zfill(6) # 6자리로 재시도
+            logger.debug(f"결과 없음. 6자리 숫자로 재시도: {new_title}")
+            # 재귀 호출 시 manual 플래그 등 전달 확인
             return cls.__search(new_title, do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode, manual=manual)
+
         return sorted_ret
 
     @classmethod
