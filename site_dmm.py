@@ -642,6 +642,23 @@ class SiteDmm:
                             vr_player_html = SiteUtil.get_text(vr_player_page_url, proxy_url=proxy_url, headers=player_headers)
 
                             if vr_player_html:
+                                # --- ★★★ BODY 태그 내용 추출 및 로그 출력 ★★★ ---
+                                body_content = None
+                                # 대소문자 구분 없이 <body> 태그 사이 내용 추출 (정규식 사용)
+                                # re.DOTALL 플래그는 '.'이 개행 문자(\n)도 포함하도록 함
+                                body_match = re.search(r'<body.*?>(.*?)</body>', vr_player_html, re.IGNORECASE | re.DOTALL)
+                                if body_match:
+                                    body_content = body_match.group(1).strip() # 양쪽 공백 제거
+                                    log_max_len = 1500 # 로그 최대 길이 증가 (필요시 조절)
+                                    logger.debug(f"--- VR Player Page BODY Content (len={len(body_content)}) ---")
+                                    if len(body_content) > log_max_len:
+                                         logger.debug(body_content[:log_max_len // 2] + "\n...\n" + body_content[-log_max_len // 2:])
+                                    else:
+                                        logger.debug(body_content)
+                                    logger.debug("--- End of VR Player Page BODY Content ---")
+                                else:
+                                    logger.warning("Could not extract BODY content from VR player page HTML.")
+
                                 # 방법 1: 정규식 사용 (더 안정적일 수 있음)
                                 match_video_src = re.search(r'<video.*?src="([^"]+)"', vr_player_html, re.IGNORECASE)
                                 if match_video_src:
@@ -678,7 +695,6 @@ class SiteDmm:
 
                         else: # ★★★ 일반 Videoa 처리 (기존 AJAX 로직) ★★★
                             logger.debug("Using Videoa AJAX trailer logic (ajax-movie).")
-                            # ... (이전 답변의 Videoa AJAX 로직 그대로 사용) ...
                             ajax_url = py_urllib_parse.urljoin(cls.site_base_url, f"/digital/videoa/-/detail/ajax-movie/=/cid={cid_part}/")
                             ajax_headers = cls._get_request_headers(referer=detail_url); ajax_headers['Accept'] = 'text/html, */*; q=0.01'; ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
                             ajax_response = SiteUtil.get_response(ajax_url, proxy_url=proxy_url, headers=ajax_headers)
