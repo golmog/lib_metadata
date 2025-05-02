@@ -164,7 +164,7 @@ class SiteAvdbs:
                 variations.append(before_paren) # 2. 괄호 앞부분 추가
             if inside_paren and inside_paren not in variations:
                 variations.append(inside_paren) # 3. 괄호 안부분 추가
-        logger.debug(f"원본 이름 '{originalname}'에 대한 검색 변형 생성: {variations}")
+            logger.debug(f"원본 이름 '{originalname}'에 대한 검색 변형 생성: {variations}")
         return variations
 
     @staticmethod
