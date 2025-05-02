@@ -530,7 +530,12 @@ class SiteDmm:
 
                 # 3순위 (Fallback): PS 사용
                 if final_poster_url is None:
-                    if ps_valid:
+                    if pl_valid and is_pl_vertical:
+                        final_poster_url = original_pl_url
+                        final_poster_crop = None
+                        poster_source_log = "pl (vertical, Fallback)"
+                        logger.info("Fallback: Using vertical 'pl' as poster (comparison failed but PL is vertical).")
+                    elif ps_valid:
                         final_poster_url = current_ps_url; final_poster_crop = None; poster_source_log = "ps (Fallback)"; logger.info("Fallback: Using 'ps'.")
                     else: final_poster_url = ""; poster_source_log = "None"; logger.error("Fallback Failed: No valid poster (ps missing).")
                 logger.info(f"Final Poster Decision: URL='{final_poster_url}', Crop='{final_poster_crop}', Source='{poster_source_log}'")
