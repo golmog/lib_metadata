@@ -13,7 +13,6 @@ from .site_util import SiteUtil
 logger = P.logger
 
 class SiteDmm:
-    # ... (클래스 변수, 헤더, 정규식, 상태 변수 등은 이전 통합 버전과 동일하게 유지) ...
     site_name = "dmm"
     site_base_url = "https://www.dmm.co.jp"
     fanza_av_url = "https://video.dmm.co.jp/av/"
@@ -47,7 +46,6 @@ class SiteDmm:
 
     @classmethod
     def _ensure_age_verified(cls, proxy_url=None):
-        # (이전 통합 버전의 개선된 연령 확인 로직 그대로 사용)
         if not cls.age_verified or cls.last_proxy_used != proxy_url:
             logger.debug("Checking/Performing DMM age verification...")
             cls.last_proxy_used = proxy_url
@@ -80,10 +78,7 @@ class SiteDmm:
 
     @classmethod
     def __search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
-        # 연령 확인
         if not cls._ensure_age_verified(proxy_url=proxy_url): return []
-
-        # 키워드 정규화
         keyword = keyword.strip().lower()
         if keyword[-3:-1] == "cd": keyword = keyword[:-3]
         keyword = keyword.replace("-", " ")
@@ -92,7 +87,6 @@ class SiteDmm:
         else: dmm_keyword = keyword
         logger.debug("keyword [%s] -> [%s]", keyword, dmm_keyword)
 
-        # 검색 요청
         search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': dmm_keyword }
         search_url = f"{cls.site_base_url}/search/?{py_urllib_parse.urlencode(search_params)}"
         logger.info(f"Using search URL: {search_url}")
@@ -153,10 +147,8 @@ class SiteDmm:
                 if not is_bluray and href:
                     if "/digital/videoa/" in href:
                         content_type = "videoa"
-                    elif "/mono/dvd/" in href: # DVD 경로 확인
+                    elif "/mono/dvd/" in href:
                         content_type = "dvd"
-                    # 다른 타입 판별 로직 추가 가능
-                # --- 타입 판별 로직 끝 ---
 
                 item.content_type = content_type # 판별된 타입 저장
 
@@ -305,81 +297,92 @@ class SiteDmm:
     @classmethod
     def __img_urls(cls, tree, content_type='unknown'):
         logger.debug(f"Extracting raw image URLs for type: {content_type}")
-        # 반환 딕셔너리에 'specific_poster_candidate' 키 추가 및 초기화
         img_urls = {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidate': None}
         try:
-            if content_type == 'videoa' or content_type == 'vr': # VR도 videoa XPath 사용 가정
-                logger.debug(f"Extracting {content_type} URLs using videoa logic...")
-                pl_base_xpath = '//div[@id="sample-image-block"]'
-                all_a_tag_hrefs = tree.xpath(f'{pl_base_xpath}//a/@href')
+            # videoa, vr 은 동일 로직 사용
+            if content_type == 'videoa' or content_type == 'vr':
+                logger.debug(f"Extracting {content_type} URLs using videoa logic (href first)...")
+                sample_image_links = tree.xpath('//div[@id="sample-image-block"]//a[.//img]')
 
-                if not all_a_tag_hrefs:
-                    logger.warning("Could not find any 'a' tags with href inside div#sample-image-block.")
-                    # Fallback: img 태그라도 시도 (선택적)
-                    all_img_tags = tree.xpath(f'{pl_base_xpath}//img/@src')
+                if not sample_image_links:
+                    logger.warning("Could not find 'a' tags with 'img' inside sample-image-block.")
+                    all_img_tags = tree.xpath('//div[@id="sample-image-block"]//img/@src')
                     if not all_img_tags: return img_urls
-                    all_a_tag_hrefs = all_img_tags # img src를 href 대신 사용
+                    img_urls['pl'] = py_urllib_parse.urljoin(cls.site_base_url, all_img_tags[0].strip()) if all_img_tags else ""
+                    img_urls['arts'] = [py_urllib_parse.urljoin(cls.site_base_url, src.strip()) for src in all_img_tags[1:] if src.strip()]
+                    logger.warning("Using fallback: extracted only img src attributes.")
+                    return img_urls
 
                 processed_arts = []
                 pl_url = None
                 specific_poster_url = None
 
-                for idx, href in enumerate(all_a_tag_hrefs):
-                    href = href.strip()
-                    if not href: continue
-                    # href가 이미지 URL인지 간단히 확인 (확장자 등)
-                    if not re.search(r'\.(jpg|jpeg|png|webp)$', href, re.IGNORECASE):
-                        logger.debug(f"Skipping non-image href: {href}")
+                for idx, a_tag in enumerate(sample_image_links):
+                    final_image_url = None
+                    source_type = "unknown"
+                    href = a_tag.attrib.get("href", "").strip()
+                    is_href_image = bool(href and re.search(r'\.(jpg|jpeg|png|webp)$', href, re.IGNORECASE))
+
+                    if is_href_image:
+                        final_image_url = py_urllib_parse.urljoin(cls.site_base_url, href)
+                        source_type = "href"
+                    else:
+                        img_tag_src_list = a_tag.xpath('.//img/@src')
+                        if img_tag_src_list:
+                            src = img_tag_src_list[0].strip()
+                            is_src_image = bool(src and re.search(r'\.(jpg|jpeg|png|webp)$', src, re.IGNORECASE))
+                            if is_src_image:
+                                final_image_url = py_urllib_parse.urljoin(cls.site_base_url, src)
+                                source_type = "src"
+
+                    if not final_image_url:
+                        logger.warning(f"Sample image {idx}: Could not find valid URL in href or src.")
                         continue
 
-                    full_url = py_urllib_parse.urljoin(cls.site_base_url, href)
-                    filename = href.split('/')[-1].lower()
+                    filename = final_image_url.split('/')[-1].lower()
+                    logger.debug(f"Sample image {idx}: Found URL='{filename}' (from {source_type})")
 
-                    # --- 수정: pl 과 specific 후보를 href 기준으로 판단 ---
-                    # 첫 번째 이미지 링크가 pl 후보 (더 정확하게는 jp-0.jpg 또는 pl.jpg)
-                    # 파일명이 'pl.jpg' 이거나 'jp-0.jpg'(고화질) 이면 pl로 간주
-                    if pl_url is None and (filename.endswith("pl.jpg") or filename.endswith("jp-0.jpg")):
-                        pl_url = full_url
-                        logger.debug(f"Found potential 'pl' based on filename: {filename}")
-
-                    # 파일명이 숫자로 끝나는 고화질 이미지(예: jp-1.jpg)를 specific 후보로 지정
+                    is_current_pl = False
+                    is_current_specific = False
+                    if filename.endswith("pl.jpg") or filename.endswith("jp-0.jpg"):
+                        is_current_pl = True
                     match_specific = re.match(r".*jp-(\d+)\.jpg$", filename)
                     if specific_poster_url is None and match_specific:
-                        specific_poster_url = full_url
-                        logger.debug(f"Found potential specific poster candidate (from href): {filename}")
+                        is_current_specific = True
 
-                    processed_arts.append(full_url) # 모든 유효 이미지 링크는 arts 후보
-
-                # pl_url이 여전히 없으면 첫 번째 이미지를 pl로 간주 (Fallback)
-                if pl_url is None and processed_arts:
-                    pl_url = processed_arts[0]
-                    logger.warning(f"Could not find specific 'pl' filename, using first image link as pl: {pl_url.split('/')[-1]}")
-
+                    if is_current_pl:
+                        if pl_url is None: pl_url = final_image_url; logger.debug(f"  -> Assigned as 'pl'.")
+                        else: logger.warning(f"  -> Another 'pl' found, adding to arts: {filename}"); processed_arts.append(final_image_url)
+                    elif is_current_specific:
+                        if specific_poster_url is None: specific_poster_url = final_image_url; logger.debug(f"  -> Assigned as 'specific_poster_candidate'.")
+                        else: logger.debug(f"  -> Another 'specific' found, adding to arts: {filename}"); processed_arts.append(final_image_url)
+                    elif idx == 0 and pl_url is None:
+                        pl_url = final_image_url; logger.debug(f"  -> Assigned as 'pl' (Fallback - first image).")
+                    else:
+                        logger.debug(f"  -> Adding to potential arts."); processed_arts.append(final_image_url)
 
                 img_urls['pl'] = pl_url if pl_url else ""
                 img_urls['specific_poster_candidate'] = specific_poster_url if specific_poster_url else ""
 
-                # arts에서 pl 및 specific_poster 와 중복 제거
                 unique_arts = []
                 urls_to_exclude = {img_urls['pl'], img_urls['specific_poster_candidate']}
                 for art_url in processed_arts:
+                    # 중복 제거 및 None/빈문자열 제외
                     if art_url and art_url not in urls_to_exclude and art_url not in unique_arts:
                         unique_arts.append(art_url)
                 img_urls['arts'] = unique_arts
-                logger.debug(f"Found {len(img_urls['arts'])} unique arts links (from hrefs).")
+                logger.debug(f"Found {len(img_urls['arts'])} unique arts links.")
 
-            elif content_type == 'dvd':
-                # DVD 로직 (기존 v_old XPath 사용)
-                logger.debug("Extracting dvd URLs using v_old logic...")
+            elif content_type == 'dvd': # 블루레이도 이 로직 사용 (캐시에서 type 'dvd'로 받음)
+                logger.debug("Extracting dvd/bluray URLs using v_old logic...")
                 pl_xpath = '//div[@id="fn-sampleImage-imagebox"]/img/@src'
                 pl_tags = tree.xpath(pl_xpath)
                 raw_pl = pl_tags[0].strip() if pl_tags else ""
                 if raw_pl:
                     img_urls['pl'] = ("https:" + raw_pl) if not raw_pl.startswith("http") else raw_pl
-                    logger.debug(f"Found dvd pl using v_old XPath: {img_urls['pl']}")
-                else: logger.warning("Could not find dvd pl using v_old XPath: %s", pl_xpath)
-
-                img_urls['ps'] = "" # dvd는 ps가 상세페이지에 없음 (캐시 사용)
+                    logger.debug(f"Found dvd/br pl: {img_urls['pl']}")
+                else: logger.warning("Could not find dvd/br pl using XPath: %s", pl_xpath)
+                img_urls['ps'] = "" # ps는 캐시 사용
 
                 arts_xpath = '//li[contains(@class, "fn-sampleImage__zoom") and not(@data-slick-index="0")]//img'
                 arts_tags = tree.xpath(arts_xpath)
@@ -393,66 +396,60 @@ class SiteDmm:
                             processed_arts.append(src)
                     unique_arts = []; [unique_arts.append(x) for x in processed_arts if x not in unique_arts]
                     img_urls['arts'] = unique_arts
-                    logger.debug(f"Found {len(img_urls['arts'])} arts links for dvd using v_old XPath.")
-                else: logger.warning("Could not find dvd arts using v_old XPath: %s", arts_xpath)
-
-            else: logger.error(f"Unknown content type '{content_type}' in __img_urls")
+                    logger.debug(f"Found {len(img_urls['arts'])} arts links for dvd/br.")
+                else: logger.warning("Could not find dvd/br arts using XPath: %s", arts_xpath)
+            else:
+                logger.error(f"Unknown content type '{content_type}' for image extraction.")
 
         except Exception as e:
             logger.exception(f"Error extracting image URLs: {e}")
-            # 실패 시 기본 구조 반환
             img_urls = {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidate': None}
 
-        # 최종 추출된 URL 정보 로깅
         logger.debug(f"Extracted img_urls: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} specific_poster={bool(img_urls.get('specific_poster_candidate'))} arts={len(img_urls.get('arts',[]))}")
         return img_urls
+
 
     @classmethod
     def __info( cls, code, do_trans=True, proxy_url=None, image_mode="0", max_arts=10, use_extras=True, ps_to_poster=False, crop_mode=None):
         logger.info(f"Getting detail info for {code}")
         cached_data = cls._ps_url_cache.pop(code, {})
         ps_url_from_cache = cached_data.get('ps')
-        # --- 타입 결정: VR은 'vr', 블루레이는 'dvd'로 통일 ---
-        original_content_type = cached_data.get('type', 'unknown')
-        if original_content_type == 'bluray':
-            content_type = 'dvd' # 블루레이는 DVD 로직 사용
-            logger.debug("Treating 'bluray' as 'dvd' for info processing.")
-        # elif original_content_type == 'vr': # VR 타입 유지 가능 (선택)
-        #      content_type = 'vr'
-        else:
-            content_type = original_content_type # videoa, dvd, unknown 등
+        # 타입 결정: 캐시된 타입 사용 (bluray는 dvd로 처리됨)
+        content_type = cached_data.get('type', 'unknown')
+        original_search_content_type = content_type # 로깅/디버깅용 원본 타입 저장
 
-        if ps_url_from_cache: logger.debug(f"Using cached ps_url for {code}: {ps_url_from_cache}")
+        if ps_url_from_cache: logger.debug(f"Using cached ps_url: {ps_url_from_cache}")
         else: logger.warning(f"ps_url for {code} not found in cache.")
 
-        if not cls._ensure_age_verified(proxy_url=proxy_url): raise Exception(f"Age verification failed for info ({code}).")
+        if not cls._ensure_age_verified(proxy_url=proxy_url): raise Exception(f"Age verification failed for {code}.")
 
         cid_part = code[2:]
         detail_url = None
         is_vr_content = False # VR 플래그
 
-        # --- 상세 페이지 URL 생성 ---
-        if content_type == 'videoa' or content_type == 'vr': # VR 포함 videoa 경로 사용
+        # 상세 페이지 URL 생성
+        if content_type == 'videoa' or content_type == 'vr': # VR도 videoa 경로
             detail_url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={cid_part}/"
-        elif content_type == 'dvd': # 블루레이도 dvd 로직 사용하므로 이 경로
+        elif content_type == 'dvd': # bluray는 dvd로 처리
             detail_url = cls.site_base_url + f"/mono/dvd/-/detail/=/cid={cid_part}/"
         else: # 타입 불명 시 videoa 시도
-            logger.warning(f"Unknown type '{content_type}'. Trying 'videoa' path for {code}.")
+            logger.warning(f"Unknown type '{content_type}'. Trying 'videoa' path.")
             detail_url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={cid_part}/"
-            content_type = 'videoa' # 임시로 videoa 지정
+            content_type = 'videoa' # 임시 지정
 
-        logger.info(f"Accessing DMM detail page (Processing as: {content_type}): {detail_url}")
+        logger.info(f"Accessing DMM detail page (Processing as: {content_type}, Original search type: {original_search_content_type}): {detail_url}")
         referer_url = cls.fanza_av_url if content_type in ['videoa', 'vr'] else (cls.site_base_url + "/mono/dvd/")
         info_headers = cls._get_request_headers(referer=referer_url)
         tree = None
         try:
-            tree = SiteUtil.get_tree(detail_url, proxy_url=proxy_url, headers=info_headers)
-            if tree is None: raise Exception(f"SiteUtil.get_tree returned None for {detail_url}.")
+            # 상세 페이지 요청 (타임아웃 추가)
+            tree = SiteUtil.get_tree(detail_url, proxy_url=proxy_url, headers=info_headers, timeout=30)
+            if tree is None: raise Exception(f"get_tree returned None for {detail_url}.")
         except Exception as e: logger.exception(f"Failed get/process detail tree: {e}"); raise
 
         entity = EntityMovie(cls.site_name, code); entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
 
-        # --- 제목 파싱 및 VR 플래그 설정 ---
+        # 제목 파싱 및 VR 플래그 설정
         raw_title_text = ""
         try:
             title_node = tree.xpath('//h1[@id="title"]')
@@ -461,65 +458,81 @@ class SiteDmm:
                 if raw_title_text.startswith("【VR】"):
                     is_vr_content = True
                     logger.info(f"VR content detected for {code}.")
-                entity.tagline = raw_title_text # 원본 제목 (VR 접두사 포함) -> 이후 번역
+                entity.tagline = raw_title_text # 원본 제목 우선 저장 (번역은 나중에)
             else: logger.warning("Could not find h1#title.")
         except Exception as e_title_parse: logger.warning(f"Error parsing title: {e_title_parse}")
 
-        # ================================================
         # === 디지털 비디오 / VR 처리 (videoa, vr) ===
-        # ================================================
         if content_type == 'videoa' or content_type == 'vr':
             logger.debug(f"Processing as VIDEOA/VR type (is_vr={is_vr_content})...")
             try:
-                # --- 이미지 처리 (직접 비교 로직) ---
+                # --- 이미지 URL 추출 ---
                 raw_img_urls = cls.__img_urls(tree, content_type='videoa') # VR도 videoa XPath 사용
-                specific_poster_candidate = raw_img_urls.get('specific_poster_candidate')
                 original_pl_url = raw_img_urls.get('pl')
+                specific_poster_candidate = raw_img_urls.get('specific_poster_candidate')
                 original_arts = raw_img_urls.get('arts', [])
                 current_ps_url = ps_url_from_cache if ps_url_from_cache else ""
 
+                # --- 이미지 유효성 및 방향성 확인 ---
                 ps_valid = bool(current_ps_url)
-                pl_valid = bool(original_pl_url)
-                specific_poster_valid = bool(specific_poster_candidate)
+                pl_valid = False; is_pl_vertical = False; is_pl_landscape = False
+                specific_valid = False; is_specific_vertical = False; is_specific_landscape = False
 
+                if original_pl_url:
+                    try:
+                        im_pl = SiteUtil.imopen(original_pl_url, proxy_url=proxy_url)
+                        if im_pl: pl_valid = True; w, h = im_pl.size; is_pl_vertical = w < h; is_pl_landscape = w > h; logger.debug(f"'pl' valid. Size:({w}x{h}) Vert:{is_pl_vertical} Land:{is_pl_landscape}")
+                        else: logger.warning("Failed to open 'pl'.")
+                    except Exception as e_im: logger.warning(f"Error checking 'pl': {e_im}")
+                if specific_poster_candidate:
+                    try:
+                        im_spec = SiteUtil.imopen(specific_poster_candidate, proxy_url=proxy_url)
+                        if im_spec: specific_valid = True; w, h = im_spec.size; is_specific_vertical = w < h; is_specific_landscape = w > h; logger.debug(f"'specific' valid. Size:({w}x{h}) Vert:{is_specific_vertical} Land:{is_specific_landscape}")
+                        else: logger.warning("Failed to open 'specific'.")
+                    except Exception as e_im: logger.warning(f"Error checking 'specific': {e_im}")
+
+                # --- 최종 포스터 결정 로직 (PL -> Specific -> PS) ---
                 final_poster_url = None; final_poster_crop = None; poster_source_log = "Unknown"
 
-                # 1순위: ps vs pl (crop)
-                if ps_valid and pl_valid:
-                    crop_pos = SiteUtil.has_hq_poster(current_ps_url, original_pl_url, proxy_url=proxy_url)
-                    if crop_pos:
-                        final_poster_url = original_pl_url; final_poster_crop = crop_pos
-                        poster_source_log = f"pl (cropped '{crop_pos}')"; logger.info("Priority 1 Met: Using 'pl' with crop.")
-                    else: logger.debug("Priority 1 Check Failed: ps not similar crop of pl.")
-                else: logger.debug("Priority 1 Check Skipped: ps or pl invalid.")
+                # 1순위: PL 처리
+                if pl_valid and ps_valid:
+                    if is_pl_vertical:
+                        if SiteUtil.is_hq_poster(current_ps_url, original_pl_url, proxy_url=proxy_url):
+                            final_poster_url = original_pl_url; final_poster_crop = None; poster_source_log = "pl (vertical & similar to ps)"; logger.info("Priority 1a Met: Using vertical 'pl'.")
+                        else: logger.debug("Priority 1a Check Failed: vertical pl not similar.")
+                    elif is_pl_landscape:
+                        crop_pos = SiteUtil.has_hq_poster(current_ps_url, original_pl_url, proxy_url=proxy_url)
+                        if crop_pos:
+                            final_poster_url = original_pl_url; final_poster_crop = crop_pos; poster_source_log = f"pl (landscape, cropped '{crop_pos}')"; logger.info(f"Priority 1b Met: Using landscape 'pl' with crop.")
+                        else: logger.debug("Priority 1b Check Failed: ps not similar crop of landscape pl.")
+                    else: logger.debug("Priority 1 Skipped: 'pl' not clearly vertical or landscape.")
+                elif not pl_valid: logger.debug("Priority 1 Skipped: 'pl' invalid.")
+                elif not ps_valid: logger.debug("Priority 1 Skipped: 'ps' invalid.")
 
-                # 2순위: ps vs specific_poster
-                if final_poster_url is None and ps_valid and specific_poster_valid:
-                    if SiteUtil.is_hq_poster(current_ps_url, specific_poster_candidate, proxy_url=proxy_url):
-                        final_poster_url = specific_poster_candidate; final_poster_crop = None
-                        poster_source_log = "specific_poster_candidate"; logger.info("Priority 2 Met: Using specific poster.")
-                    else: logger.debug("Priority 2 Check Failed: ps not similar to specific.")
-                elif final_poster_url is None: logger.debug(f"Priority 2 Check Skipped: Poster found or URLs invalid (ps={ps_valid}, specific={specific_poster_valid}).")
+                # 2순위: Specific Poster 처리
+                if final_poster_url is None and specific_valid and ps_valid:
+                    if is_specific_vertical:
+                        if SiteUtil.is_hq_poster(current_ps_url, specific_poster_candidate, proxy_url=proxy_url):
+                            final_poster_url = specific_poster_candidate; final_poster_crop = None; poster_source_log = "specific_poster (vertical & similar to ps)"; logger.info("Priority 2a Met: Using vertical specific poster.")
+                        else: logger.debug("Priority 2a Check Failed: vertical specific not similar to ps.")
+                    elif is_specific_landscape: # specific도 가로일 경우 크롭 시도
+                        crop_pos = SiteUtil.has_hq_poster(current_ps_url, specific_poster_candidate, proxy_url=proxy_url)
+                        if crop_pos:
+                            final_poster_url = specific_poster_candidate; final_poster_crop = crop_pos; poster_source_log = f"specific_poster (landscape, cropped '{crop_pos}')"; logger.info(f"Priority 2b Met: Using landscape specific with crop.")
+                        else: logger.debug("Priority 2b Check Failed: ps not similar crop of landscape specific.")
+                    else: logger.debug("Priority 2 Skipped: 'specific_poster' not clearly vertical or landscape.")
+                elif final_poster_url is None: logger.debug(f"Priority 2 Check Skipped: Poster found or URLs invalid (specific={specific_valid}, ps={ps_valid}).")
 
-                # 3순위: ps fallback
+                # 3순위 (Fallback): PS 사용
                 if final_poster_url is None:
                     if ps_valid:
-                        final_poster_url = current_ps_url; final_poster_crop = None
-                        poster_source_log = "ps (Fallback)"; logger.info("Fallback: Using 'ps'.")
-                    elif pl_valid:
-                        final_poster_url = original_pl_url; poster_source_log = "pl (Last Resort Fallback)"
-                        logger.warning("Fallback: 'ps' missing, using 'pl'.")
-                    else: final_poster_url = ""; poster_source_log = "None"; logger.error("No valid poster image found.")
+                        final_poster_url = current_ps_url; final_poster_crop = None; poster_source_log = "ps (Fallback)"; logger.info("Fallback: Using 'ps'.")
+                    else: final_poster_url = ""; poster_source_log = "None"; logger.error("Fallback Failed: No valid poster (ps missing).")
                 logger.info(f"Final Poster Decision: URL='{final_poster_url}', Crop='{final_poster_crop}', Source='{poster_source_log}'")
 
-                # --- 썸네일 및 팬아트 생성 ---
+                # --- 최종 썸네일 및 팬아트 생성 ---
                 entity.thumb = []
-                final_landscape_url = None
-                if pl_valid: # Landscape는 pl이 가로일때만
-                    try:
-                        im_pl_check = SiteUtil.imopen(original_pl_url, proxy_url=proxy_url)
-                        if im_pl_check and im_pl_check.size[0] > im_pl_check.size[1]: final_landscape_url = original_pl_url
-                    except Exception as e_lcheck: logger.warning(f"Could not check pl orientation: {e_lcheck}")
+                final_landscape_url = original_pl_url if pl_valid and is_pl_landscape else None
                 if final_landscape_url and final_landscape_url != final_poster_url:
                     try:
                         processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_url, proxy_url=proxy_url)
@@ -530,7 +543,6 @@ class SiteDmm:
                         processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_url, proxy_url=proxy_url, crop_mode=final_poster_crop)
                         if processed_poster: entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
                     except Exception as e_proc_post: logger.error(f"Error processing poster: {e_proc_post}")
-                # 팬아트 처리
                 entity.fanart = []
                 processed_fanart_count = 0
                 urls_to_exclude_from_arts = {final_poster_url, final_landscape_url}
@@ -637,30 +649,20 @@ class SiteDmm:
                     trailer_title = entity.tagline if entity.tagline else raw_title_text if raw_title_text else code
                     try:
                         trailer_url = None
-
-                        if is_vr_content: # ★★★ VR 처리 (일반 GET + Regex/String 파싱) ★★★
-                            logger.debug("Using VR trailer logic (Get page content and parse JS variable).")
+                        if is_vr_content: # VR: JS 변수 파싱
+                            logger.debug("Using VR trailer logic (Parse JS variable).")
                             vr_player_page_url = f"{cls.site_base_url}/digital/-/vr-sample-player/=/cid={cid_part}/"
-                            logger.info(f"Accessing VR player page URL: {vr_player_page_url}")
-
                             player_headers = cls._get_request_headers(referer=detail_url)
                             vr_player_html = SiteUtil.get_text(vr_player_page_url, proxy_url=proxy_url, headers=player_headers)
-
                             if vr_player_html:
-                                # --- ★★★ JavaScript 변수 'sampleUrl' 추출 (정규식 사용) ★★★ ---
-                                # var sampleUrl = "..."; 형태를 찾음 (따옴표 종류 고려)
                                 match_js_var = re.search(r'var\s+sampleUrl\s*=\s*["\']([^"\']+)["\']', vr_player_html)
                                 if match_js_var:
                                     trailer_src = match_js_var.group(1)
-                                    # URL이 // 로 시작하면 https: 추가
                                     trailer_url = "https:" + trailer_src if trailer_src.startswith("//") else trailer_src
-                                    logger.debug(f"Extracted VR trailer URL from 'sampleUrl' JS variable: {trailer_url}")
-                                else:
-                                    logger.error("VR player page: Could not find 'sampleUrl' variable in JavaScript.")
-                            else:
-                                logger.error("Failed to get content from VR player page URL or content is empty.")
-
-                        else: # ★★★ 일반 Videoa 처리 (기존 AJAX 로직) ★★★
+                                    logger.debug(f"Extracted VR trailer URL from JS: {trailer_url}")
+                                else: logger.error("VR player page: Could not find 'sampleUrl' variable.")
+                            else: logger.error("Failed to get VR player page content.")
+                        else: # Videoa: AJAX 방식
                             logger.debug("Using Videoa AJAX trailer logic (ajax-movie).")
                             ajax_url = py_urllib_parse.urljoin(cls.site_base_url, f"/digital/videoa/-/detail/ajax-movie/=/cid={cid_part}/")
                             ajax_headers = cls._get_request_headers(referer=detail_url); ajax_headers['Accept'] = 'text/html, */*; q=0.01'; ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
@@ -684,14 +686,10 @@ class SiteDmm:
                                                     if bitrates and bitrates[0].get("src"): trailer_url = "https:" + bitrates[0]["src"] if bitrates[0]["src"].startswith("//") else bitrates[0]["src"]
                                                     if data.get("title") and data["title"].strip(): trailer_title = data["title"].strip()
                                                 except json.JSONDecodeError as je: logger.warning(f"Failed JSON decode: {je}")
-                                            else: logger.warning("Could not find JSON ends.")
-                                        else: logger.warning("'const args' not found.")
                                     else: logger.warning("Failed to get iframe content.")
                                 else: logger.warning("Iframe not found.")
                             else: logger.warning(f"Videoa AJAX failed. Status: {ajax_response.status_code if ajax_response else 'No Resp'}")
 
-
-                        # 최종 예고편 추가
                         if trailer_url:
                             final_trailer_title = SiteUtil.trans(trailer_title, do_trans=do_trans) if do_trans else trailer_title
                             entity.extras.append(EntityExtra("trailer", final_trailer_title, "mp4", trailer_url))
@@ -704,23 +702,31 @@ class SiteDmm:
             except Exception as e_parse_videoa_vr:
                 logger.exception(f"Error parsing VIDEOA/VR metadata: {e_parse_videoa_vr}")
 
-        elif content_type == 'dvd': # 블루레이는 여기서 처리 (content_type 'dvd'로 통일됨)
+        # === DVD / 블루레이 처리 (dvd, bluray) ===
+        elif content_type == 'dvd': # 블루레이는 type 'dvd'로 처리됨
             logger.debug(f"Processing as DVD/BLURAY type...")
             try:
                 # --- 이미지 처리 (기존 resolve_jav_imgs 사용) ---
-                # 블루레이도 DVD와 동일한 이미지 구조를 가진다고 가정
-                img_urls = cls.__img_urls(tree, content_type='dvd') # dvd XPath 사용
+                img_urls = cls.__img_urls(tree, content_type='dvd')
                 if ps_url_from_cache: img_urls['ps'] = ps_url_from_cache
                 elif not img_urls.get('ps') and img_urls.get('pl'): img_urls['ps'] = img_urls.get('pl')
-                elif not img_urls.get('ps') and not img_urls.get('pl'): logger.error("DVD/Blu-ray ps and pl URLs are missing.")
-
-                # DVD/Blu-ray는 resolve_jav_imgs 사용 유지 (필요시 위 로직처럼 변경 가능)
-                SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=None, proxy_url=proxy_url)
+                elif not img_urls.get('ps') and not img_urls.get('pl'): logger.error("DVD/BR ps and pl URLs missing.")
+                SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=False, crop_mode=None, proxy_url=proxy_url) # ps_to_poster=False 명시
                 entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
                 # 팬아트 처리
                 entity.fanart = []
                 resolved_arts = img_urls.get("arts", [])
                 processed_fanart_count = 0
+                urls_to_exclude_from_arts = {img_urls.get('poster'), img_urls.get('landscape')}
+                for art_url in resolved_arts:
+                    if processed_fanart_count >= max_arts: break
+                    if art_url and art_url not in urls_to_exclude_from_arts:
+                        try:
+                            processed_art = SiteUtil.process_image_mode(image_mode, art_url, proxy_url=proxy_url)
+                            if processed_art: entity.fanart.append(processed_art); processed_fanart_count += 1
+                        except Exception as e_fanart: logger.error(f"Error processing DVD/BR fanart {art_url}: {e_fanart}")
+                logger.debug(f"DVD/BR Final Thumb: {entity.thumb}, Fanart Count: {len(entity.fanart)}")
+                # --- 이미지 처리 끝 ---
 
                 # --- 메타데이터 파싱 (dvd XPath 사용) ---
                 if entity.tagline: entity.tagline = SiteUtil.trans(entity.tagline, do_trans=do_trans) # 번역
@@ -874,9 +880,8 @@ class SiteDmm:
             logger.error(f"Cannot parse info: Final content type '{content_type}' is unknown for {code}")
 
         # --- 공통 후처리 ---
-        # Tagline/Title 정리 (VR 접두사 유지됨)
         if not entity.tagline and entity.title: entity.tagline = entity.title
-        if not entity.title: # 제목 없으면 품번으로
+        if not entity.title:
             match_real_no = cls.PTN_SEARCH_REAL_NO.search(code[2:])
             final_ui_code = code[2:].upper()
             if match_real_no:
