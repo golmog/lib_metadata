@@ -672,28 +672,56 @@ class SiteDmm:
                             ajax_url = py_urllib_parse.urljoin(cls.site_base_url, f"/digital/videoa/-/detail/ajax-movie/=/cid={cid_part}/")
                             ajax_headers = cls._get_request_headers(referer=detail_url); ajax_headers['Accept'] = 'text/html, */*; q=0.01'; ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
                             ajax_response = SiteUtil.get_response(ajax_url, proxy_url=proxy_url, headers=ajax_headers)
+
                             if ajax_response and ajax_response.status_code == 200:
-                                iframe_tree = html.fromstring(ajax_response.text)
-                                iframe_srcs = iframe_tree.xpath("//iframe/@src")
-                                if iframe_srcs:
-                                    iframe_url = py_urllib_parse.urljoin(ajax_url, iframe_srcs[0])
-                                    iframe_headers = cls._get_request_headers(referer=ajax_url)
-                                    iframe_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=iframe_headers)
-                                    if iframe_text:
-                                        pos = iframe_text.find("const args = {")
-                                        if pos != -1:
-                                            json_start = iframe_text.find("{", pos); json_end = iframe_text.find("};", json_start)
-                                            if json_start != -1 and json_end != -1:
-                                                data_str = iframe_text[json_start : json_end+1]
-                                                try:
-                                                    data = json.loads(data_str)
-                                                    bitrates = sorted(data.get("bitrates",[]), key=lambda k: k.get("bitrate", 0), reverse=True)
-                                                    if bitrates and bitrates[0].get("src"): trailer_url = "https:" + bitrates[0]["src"] if bitrates[0]["src"].startswith("//") else bitrates[0]["src"]
-                                                    if data.get("title") and data["title"].strip(): trailer_title = data["title"].strip()
-                                                except json.JSONDecodeError as je: logger.warning(f"Failed JSON decode: {je}")
-                                    else: logger.warning("Failed to get iframe content.")
-                                else: logger.warning("Iframe not found.")
-                            else: logger.warning(f"Videoa AJAX failed. Status: {ajax_response.status_code if ajax_response else 'No Resp'}")
+                                ajax_html_text = ajax_response.text
+
+                                # --- ★★★ AJAX 응답 내용 비어있는지 확인 ★★★ ---
+                                if not ajax_html_text or not ajax_html_text.strip():
+                                    logger.warning("Videoa AJAX response text is empty. No trailer available.")
+                                else:
+                                    # --- 내용이 있을 때만 파싱 시도 ---
+                                    try:
+                                        # lxml 임포트 (메소드 상단 또는 클래스 레벨 가정)
+                                        if not html: raise ImportError("lxml not imported")
+
+                                        iframe_tree = html.fromstring(ajax_html_text)
+                                        iframe_srcs = iframe_tree.xpath("//iframe/@src")
+                                        if iframe_srcs:
+                                            iframe_url = py_urllib_parse.urljoin(ajax_url, iframe_srcs[0])
+                                            logger.debug(f"Found iframe, accessing player: {iframe_url}")
+                                            iframe_headers = cls._get_request_headers(referer=ajax_url)
+                                            iframe_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=iframe_headers)
+                                            if iframe_text:
+                                                pos = iframe_text.find("const args = {")
+                                                if pos != -1:
+                                                    # ... (const args JSON 파싱 로직) ...
+                                                    json_start = iframe_text.find("{", pos); json_end = iframe_text.find("};", json_start)
+                                                    if json_start != -1 and json_end != -1:
+                                                        data_str = iframe_text[json_start : json_end+1]
+                                                        try:
+                                                            data = json.loads(data_str)
+                                                            bitrates = sorted(data.get("bitrates",[]), key=lambda k: k.get("bitrate", 0), reverse=True)
+                                                            if bitrates and bitrates[0].get("src"):
+                                                                trailer_src = bitrates[0]["src"]
+                                                                trailer_url = "https:" + trailer_src if trailer_src.startswith("//") else trailer_src
+                                                                logger.debug(f"Extracted trailer URL from const args: {trailer_url}")
+                                                            else: logger.warning("'bitrates' data missing/empty.")
+                                                            if data.get("title") and data["title"].strip(): trailer_title = data["title"].strip()
+                                                        except json.JSONDecodeError as je: logger.warning(f"Failed JSON decode: {je}")
+                                                    else: logger.warning("Could not find JSON ends.")
+                                                else: logger.warning("'const args' not found.")
+                                            else: logger.warning("Failed to get iframe content.")
+                                        else: logger.warning("Iframe not found in AJAX response.")
+                                    # lxml 파싱 오류는 여기서 잡힘
+                                    except etree.ParserError as pe: # 구체적인 에러 타입 명시
+                                        logger.error(f"lxml parsing error for AJAX response: {pe}")
+                                        # 내용이 비어있을 때 외 다른 파싱 오류 처리
+                                    except ImportError: # lxml 임포트 실패 시
+                                        logger.error("lxml library is required but not available.")
+                                    except Exception as e_iframe_parse: # 기타 예외
+                                        logger.exception(f"Error parsing AJAX response or iframe content: {e_iframe_parse}")
+                            else: logger.warning(f"Videoa AJAX request failed. Status: {ajax_response.status_code if ajax_response else 'No Resp'}")
 
                         if trailer_url:
                             final_trailer_title = SiteUtil.trans(trailer_title, do_trans=do_trans) if do_trans else trailer_title
