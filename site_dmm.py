@@ -411,6 +411,11 @@ class SiteDmm:
 
     @classmethod
     def __info( cls, code, do_trans=True, proxy_url=None, image_mode="0", max_arts=10, use_extras=True, ps_to_poster=False, crop_mode=None):
+        try:
+            from lxml import html
+        except ImportError:
+            logger.error("lxml library is required for HTML parsing but not installed.")
+            html = None
         logger.info(f"Getting detail info for {code}")
         cached_data = cls._ps_url_cache.pop(code, {})
         ps_url_from_cache = cached_data.get('ps')
