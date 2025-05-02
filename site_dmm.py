@@ -311,43 +311,50 @@ class SiteDmm:
             if content_type == 'videoa' or content_type == 'vr': # VR도 videoa XPath 사용 가정
                 logger.debug(f"Extracting {content_type} URLs using videoa logic...")
                 pl_base_xpath = '//div[@id="sample-image-block"]'
-                # img 태그 자체를 가져와 src와 filename 확인
-                all_img_tags = tree.xpath(f'{pl_base_xpath}//img')
+                all_a_tag_hrefs = tree.xpath(f'{pl_base_xpath}//a/@href')
 
-                if not all_img_tags:
-                    logger.warning("Could not find any img tags inside div#sample-image-block.")
-                    return img_urls
+                if not all_a_tag_hrefs:
+                    logger.warning("Could not find any 'a' tags with href inside div#sample-image-block.")
+                    # Fallback: img 태그라도 시도 (선택적)
+                    all_img_tags = tree.xpath(f'{pl_base_xpath}//img/@src')
+                    if not all_img_tags: return img_urls
+                    all_a_tag_hrefs = all_img_tags # img src를 href 대신 사용
 
                 processed_arts = []
                 pl_url = None
-                specific_poster_url = None # *-1.jpg 등 특정 포스터 후보
+                specific_poster_url = None
 
-                for idx, img_tag in enumerate(all_img_tags):
-                    src = img_tag.attrib.get("src", "").strip()
-                    if not src: continue
-                    full_src = py_urllib_parse.urljoin(cls.site_base_url, src)
-                    filename = src.split('/')[-1].lower() # 파일명 (소문자 변환)
+                for idx, href in enumerate(all_a_tag_hrefs):
+                    href = href.strip()
+                    if not href: continue
+                    # href가 이미지 URL인지 간단히 확인 (확장자 등)
+                    if not re.search(r'\.(jpg|jpeg|png|webp)$', href, re.IGNORECASE):
+                        logger.debug(f"Skipping non-image href: {href}")
+                        continue
 
-                    # 첫 번째 이미지는 기본 pl 후보
-                    if idx == 0:
-                        pl_url = full_src
-                        logger.debug(f"Found potential pl (index 0): {filename}")
-                        # 첫번째가 pl.jpg 가 아닐 수도 있음
+                    full_url = py_urllib_parse.urljoin(cls.site_base_url, href)
+                    filename = href.split('/')[-1].lower()
 
-                    # 파일명이 'pl.jpg' 로 끝나면 pl_url 로 확정 (덮어쓰기 가능)
-                    if filename.endswith("pl.jpg"):
-                        pl_url = full_src
-                        logger.debug(f"Confirmed 'pl' based on filename: {filename}")
+                    # --- 수정: pl 과 specific 후보를 href 기준으로 판단 ---
+                    # 첫 번째 이미지 링크가 pl 후보 (더 정확하게는 jp-0.jpg 또는 pl.jpg)
+                    # 파일명이 'pl.jpg' 이거나 'jp-0.jpg'(고화질) 이면 pl로 간주
+                    if pl_url is None and (filename.endswith("pl.jpg") or filename.endswith("jp-0.jpg")):
+                        pl_url = full_url
+                        logger.debug(f"Found potential 'pl' based on filename: {filename}")
 
-                    # 파일명이 숫자로 끝나거나(예: -1.jpg, -01.jpg) 특정 패턴을 가질 때 specific 후보로 지정
-                    # 예시: '-'+숫자+'.jpg' 형태의 첫번째 이미지
-                    match_specific = re.match(r".*-(\d+)\.jpg$", filename)
+                    # 파일명이 숫자로 끝나는 고화질 이미지(예: jp-1.jpg)를 specific 후보로 지정
+                    match_specific = re.match(r".*jp-(\d+)\.jpg$", filename)
                     if specific_poster_url is None and match_specific:
-                        specific_poster_url = full_src
-                        logger.debug(f"Found potential specific poster candidate: {filename}")
+                        specific_poster_url = full_url
+                        logger.debug(f"Found potential specific poster candidate (from href): {filename}")
 
-                    # 모든 유효한 이미지는 arts 후보에 추가
-                    processed_arts.append(full_src)
+                    processed_arts.append(full_url) # 모든 유효 이미지 링크는 arts 후보
+
+                # pl_url이 여전히 없으면 첫 번째 이미지를 pl로 간주 (Fallback)
+                if pl_url is None and processed_arts:
+                    pl_url = processed_arts[0]
+                    logger.warning(f"Could not find specific 'pl' filename, using first image link as pl: {pl_url.split('/')[-1]}")
+
 
                 img_urls['pl'] = pl_url if pl_url else ""
                 img_urls['specific_poster_candidate'] = specific_poster_url if specific_poster_url else ""
@@ -359,7 +366,7 @@ class SiteDmm:
                     if art_url and art_url not in urls_to_exclude and art_url not in unique_arts:
                         unique_arts.append(art_url)
                 img_urls['arts'] = unique_arts
-                logger.debug(f"Found {len(img_urls['arts'])} unique arts links.")
+                logger.debug(f"Found {len(img_urls['arts'])} unique arts links (from hrefs).")
 
             elif content_type == 'dvd':
                 # DVD 로직 (기존 v_old XPath 사용)
