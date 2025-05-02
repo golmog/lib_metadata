@@ -6,7 +6,7 @@ from lxml import html, etree
 
 # lib_metadata 패키지 내 다른 모듈 import
 from .entity_av import EntityAVSearch
-from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings
+from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
 from .plugin import P
 from .site_util import SiteUtil
 
@@ -624,61 +624,88 @@ class SiteDmm:
                 else: logger.warning("Plot not found using videoa XPath.")
                 # --- 메타데이터 파싱 끝 ---
 
-                # --- 예고편 처리 (VR 분기 포함) ---
+                # --- 예고편 처리 (VR과 Videoa 분기) ---
                 entity.extras = []
                 if use_extras:
                     trailer_title = entity.tagline if entity.tagline else raw_title_text if raw_title_text else code
                     try:
                         trailer_url = None
-                        if is_vr_content: # ★★★ VR 예고편 처리 ★★★
-                            logger.debug("Using VR trailer logic.")
-                            vr_player_url = f"{cls.site_base_url}/digital/-/vr-sample-player/=/cid={cid_part}/"
-                            player_headers = cls._get_request_headers(referer=detail_url)
-                            vr_player_response = SiteUtil.get_response(vr_player_url, proxy_url=proxy_url, headers=player_headers)
+
+                        if is_vr_content: # ★★★ VR 처리 ★★★
+                            logger.debug("Using VR trailer logic (AJAX to vr-sample-player).")
+                            vr_player_ajax_url = f"{cls.site_base_url}/digital/-/vr-sample-player/=/cid={cid_part}/"
+                            logger.info(f"Requesting VR player AJAX: {vr_player_ajax_url}")
+                            # VR 플레이어 페이지는 AJAX로 호출해야 할 수 있음 (헤더 설정)
+                            ajax_headers = cls._get_request_headers(referer=detail_url)
+                            ajax_headers['Accept'] = 'text/html, */*; q=0.01' # AJAX 요청임을 명시
+                            ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
+
+                            # get_response 사용 (content를 파싱하기 위해)
+                            vr_player_response = SiteUtil.get_response(vr_player_ajax_url, proxy_url=proxy_url, headers=ajax_headers)
+
                             if vr_player_response and vr_player_response.status_code == 200:
-                                vr_tree = html.fromstring(vr_player_response.content)
-                                video_tags = vr_tree.xpath("//video/@src")
-                                if video_tags: trailer_url = "https:" + video_tags[0] if video_tags[0].startswith("//") else video_tags[0]
-                                else: logger.error("VR player: <video> tag or src not found.")
-                            else: logger.error(f"Failed VR player page. Status: {vr_player_response.status_code if vr_player_response else 'No Resp'}")
-                        else: # ★★★ 일반 Videoa 예고편 처리 ★★★
-                            logger.debug("Using Videoa AJAX trailer logic.")
+                                # 응답 content를 직접 파싱 (인코딩 문제 방지)
+                                vr_player_content = vr_player_response.content
+                                if vr_player_content:
+                                    vr_tree = html.fromstring(vr_player_content) # lxml.html 사용
+                                    video_tags = vr_tree.xpath("//video/@src")
+                                    if video_tags:
+                                        trailer_src = video_tags[0]
+                                        trailer_url = "https:" + trailer_src if trailer_src.startswith("//") else trailer_src
+                                        logger.debug(f"Extracted VR trailer URL from <video> tag: {trailer_url}")
+                                    else: logger.error("VR player AJAX response: <video> tag or src not found.")
+                                else: logger.error("VR player AJAX response content is empty.")
+                            else: logger.error(f"Failed VR player AJAX request. Status: {vr_player_response.status_code if vr_player_response else 'No Resp'}")
+
+                        else: # ★★★ 일반 Videoa 처리 (기존 AJAX 로직) ★★★
+                            logger.debug("Using Videoa AJAX trailer logic (ajax-movie).")
                             ajax_url = py_urllib_parse.urljoin(cls.site_base_url, f"/digital/videoa/-/detail/ajax-movie/=/cid={cid_part}/")
-                            ajax_headers = cls._get_request_headers(referer=detail_url); ajax_headers['Accept'] = 'text/html, */*; q=0.01'; ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
+                            ajax_headers = cls._get_request_headers(referer=detail_url)
+                            ajax_headers['Accept'] = 'text/html, */*; q=0.01'
+                            ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
+                            logger.debug(f"Requesting trailer AJAX: {ajax_url}")
                             ajax_response = SiteUtil.get_response(ajax_url, proxy_url=proxy_url, headers=ajax_headers)
+
                             if ajax_response and ajax_response.status_code == 200:
                                 ajax_html_text = ajax_response.text
-                                try: from lxml import html
-                                except ImportError: logger.error("lxml required."); raise
                                 iframe_tree = html.fromstring(ajax_html_text)
                                 iframe_srcs = iframe_tree.xpath("//iframe/@src")
                                 if iframe_srcs:
                                     iframe_url = py_urllib_parse.urljoin(ajax_url, iframe_srcs[0])
+                                    logger.debug(f"Found iframe, accessing player: {iframe_url}")
                                     iframe_headers = cls._get_request_headers(referer=ajax_url)
                                     iframe_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=iframe_headers)
                                     if iframe_text:
                                         pos = iframe_text.find("const args = {")
                                         if pos != -1:
+                                            # ... (const args JSON 파싱 로직 동일) ...
                                             json_start = iframe_text.find("{", pos); json_end = iframe_text.find("};", json_start)
                                             if json_start != -1 and json_end != -1:
                                                 data_str = iframe_text[json_start : json_end+1]
                                                 try:
                                                     data = json.loads(data_str)
                                                     bitrates = sorted(data.get("bitrates",[]), key=lambda k: k.get("bitrate", 0), reverse=True)
-                                                    if bitrates and bitrates[0].get("src"): trailer_url = "https:" + bitrates[0]["src"] if bitrates[0]["src"].startswith("//") else bitrates[0]["src"]
+                                                    if bitrates and bitrates[0].get("src"):
+                                                        trailer_src = bitrates[0]["src"]
+                                                        trailer_url = "https:" + trailer_src if trailer_src.startswith("//") else trailer_src
+                                                        logger.debug(f"Extracted trailer URL from const args: {trailer_url}")
+                                                    else: logger.warning("'bitrates' data missing/empty.")
                                                     if data.get("title") and data["title"].strip(): trailer_title = data["title"].strip()
-                                                except json.JSONDecodeError as je: logger.warning(f"Failed 'const args' JSON decode: {je}")
-                                        else: logger.warning("Could not find JSON ends in iframe content.")
+                                                except json.JSONDecodeError as je: logger.warning(f"Failed JSON decode: {je}")
+                                            else: logger.warning("Could not find JSON ends.")
+                                        else: logger.warning("'const args' not found.")
                                     else: logger.warning("Failed to get iframe content.")
                                 else: logger.warning("Iframe not found in AJAX response.")
-                            else: logger.warning(f"AJAX request failed. Status: {ajax_response.status_code if ajax_response else 'No Resp'}")
+                            else: logger.warning(f"Videoa AJAX request failed. Status: {ajax_response.status_code if ajax_response else 'No Resp'}")
 
+                        # 최종 예고편 추가
                         if trailer_url:
                             final_trailer_title = SiteUtil.trans(trailer_title, do_trans=do_trans) if do_trans else trailer_title
                             entity.extras.append(EntityExtra("trailer", final_trailer_title, "mp4", trailer_url))
-                            logger.info(f"Trailer added. Title: {final_trailer_title}")
-                        else: logger.warning("Failed to extract trailer URL.")
-                    except Exception as extra_e: logger.exception(f"Error processing trailer: {extra_e}")
+                            logger.info(f"Trailer added successfully. Title: {final_trailer_title}")
+                        else: logger.warning("Failed to extract final trailer URL.")
+                    except Exception as extra_e:
+                        logger.exception(f"Error processing trailer: {extra_e}")
                 # --- 예고편 처리 끝 ---
             except Exception as e_parse_videoa_vr:
                 logger.exception(f"Error parsing VIDEOA/VR metadata: {e_parse_videoa_vr}")
