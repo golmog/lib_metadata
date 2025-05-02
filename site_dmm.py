@@ -304,69 +304,54 @@ class SiteDmm:
 
     @classmethod
     def __img_urls(cls, tree, content_type='unknown'):
-        # (이전 통합 버전의 URL 추출 로직 그대로 사용 - 각 타입별 XPath 적용됨)
         logger.debug(f"Extracting raw image URLs for type: {content_type}")
-        img_urls = {'ps': "", 'pl': "", 'arts': []}
+        img_urls = {'ps': "", 'pl': "", 'arts': [], 'potential_poster': None} # 'potential_poster' 키 추가
         try:
             if content_type == 'videoa':
                 logger.debug("Extracting videoa URLs...")
+                pl_base_xpath = '//div[@id="sample-image-block"]'
+                all_img_tags = tree.xpath(f'{pl_base_xpath}//img') # img 태그 자체를 가져옴
+
+                if not all_img_tags:
+                    logger.warning("Could not find any img tags inside div#sample-image-block.")
+                    return img_urls # 이미지 없으면 빈 결과 반환
+
+                # --- 이미지 태그 순회하며 URL 및 타입 분류 ---
+                processed_arts = []
                 pl_url = None
-                pl_base_xpath = '//div[@id="sample-image-block"]' # 기준점 XPath
+                potential_poster_url = None # *-1.jpg 후보 저장
 
-                # 1. 첫 번째 img 태그의 src를 pl로 사용
-                first_img_xpath = f'{pl_base_xpath}//img[1]/@src' # 첫 번째 img 태그의 src
-                first_img_tags = tree.xpath(first_img_xpath)
-                if first_img_tags:
-                    first_img_src = first_img_tags[0].strip()
-                    if first_img_src:
-                        pl_url = py_urllib_parse.urljoin(cls.site_base_url, first_img_src)
-                        img_urls['pl'] = pl_url
-                        logger.debug(f"Found videoa pl from first img/@src: {pl_url}")
-                    else:
-                        logger.warning("First img/@src is empty.")
-                else:
-                    logger.warning("Could not find the first img tag inside div#sample-image-block.")
-                    # 필요시 다른 fallback 로직 추가 가능 (예: sample-video div 확인)
+                for idx, img_tag in enumerate(all_img_tags):
+                    src = img_tag.attrib.get("src", "").strip()
+                    if not src: continue
+                    full_src = py_urllib_parse.urljoin(cls.site_base_url, src)
+                    filename = src.split('/')[-1] # 파일명 추출
 
-                # 2. 모든 img 태그의 src를 arts로 사용
-                all_imgs_xpath = f'{pl_base_xpath}//img/@src' # 모든 img 태그의 src
-                all_img_tags = tree.xpath(all_imgs_xpath)
-                if all_img_tags:
-                    processed_arts = []
-                    pl_url_to_exclude = img_urls.get('pl') # pl로 확정된 URL
+                    if idx == 0: # 첫 번째 이미지는 기본 pl 후보
+                        pl_url = full_src
+                        logger.debug(f"Found potential videoa pl (index 0): {pl_url}")
+                        # 첫 번째 이미지가 *-1.jpg 인 경우도 있으므로 아래 조건에서 체크
 
-                    for src in all_img_tags:
-                        current_src = src.strip()
-                        if not current_src: continue # 빈 src는 제외
+                    # *-1.jpg 파일명을 가진 첫 번째 이미지를 potential_poster 후보로 저장
+                    # (기존 pl_url 이 *-1.jpg 일 수도 있고, 두 번째 이미지가 *-1.jpg 일 수도 있음)
+                    if potential_poster_url is None and filename.endswith("-1.jpg"):
+                        potential_poster_url = full_src
+                        logger.debug(f"Found potential poster candidate (*-1.jpg): {potential_poster_url}")
 
-                        full_current_src = py_urllib_parse.urljoin(cls.site_base_url, current_src)
+                    # 모든 유효한 이미지는 arts 후보에 추가 (나중에 pl, potential_poster 제외)
+                    processed_arts.append(full_src)
 
-                        # pl과 동일한 이미지는 arts에서 제외
-                        if pl_url_to_exclude and full_current_src == pl_url_to_exclude:
-                            logger.debug(f"Skipping art identical to pl: {current_src}")
-                            continue
+                img_urls['pl'] = pl_url if pl_url else "" # 최종 pl 할당
+                img_urls['potential_poster'] = potential_poster_url if potential_poster_url else "" # 최종 후보 할당
 
-                        processed_arts.append(full_current_src)
-
-                    unique_arts = []; [unique_arts.append(x) for x in processed_arts if x not in unique_arts]
-                    img_urls['arts'] = unique_arts
-                    logger.debug(f"Found {len(img_urls['arts'])} potential arts links (from img src) for videoa (excluding pl if identical).")
-                else:
-                    logger.warning("Could not find any img tags inside div#sample-image-block for arts.")
-
-                arts_xpath_main = '//div[@id="sample-image-block"]//a/@href'
-                arts_xpath_alt = '//a[contains(@id, "sample-image")]/@href'
-                arts_tags = tree.xpath(arts_xpath_main) or tree.xpath(arts_xpath_alt)
-                if arts_tags:
-                    processed_arts = []
-                    for href in arts_tags:
-                        if href and href.strip():
-                            full_href = py_urllib_parse.urljoin(cls.site_base_url, href)
-                            processed_arts.append(full_href)
-                    unique_arts = []; [unique_arts.append(x) for x in processed_arts if x not in unique_arts]
-                    img_urls['arts'] = unique_arts
-                    # videoa는 pl을 위에서 찾았으므로, 여기서 arts[0]으로 덮어쓰지 않음
-                else: logger.warning("Arts block not found for videoa using known XPaths.")
+                # arts에서 pl 및 potential_poster 와 중복 제거
+                unique_arts = []
+                urls_to_exclude = {img_urls['pl'], img_urls['potential_poster']}
+                for art_url in processed_arts:
+                    if art_url not in urls_to_exclude and art_url not in unique_arts:
+                        unique_arts.append(art_url)
+                img_urls['arts'] = unique_arts
+                logger.debug(f"Found {len(img_urls['arts'])} unique arts links for videoa.")
 
             elif content_type == 'dvd':
                 logger.debug("Extracting dvd URLs using v_old logic...")
@@ -413,6 +398,8 @@ class SiteDmm:
 
         cid_part = code[2:]
         detail_url = None
+        is_vr_content = False
+
         if content_type == 'videoa': detail_url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={cid_part}/"
         elif content_type == 'dvd': detail_url = cls.site_base_url + f"/mono/dvd/-/detail/=/cid={cid_part}/"
         else:
@@ -431,69 +418,106 @@ class SiteDmm:
 
         entity = EntityMovie(cls.site_name, code); entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
 
+        raw_title_text = ""
+        try:
+            title_node = tree.xpath('//h1[@id="title"]')
+            if title_node:
+                raw_title_text = title_node[0].text_content().strip()
+                if raw_title_text.startswith("【VR】"):
+                    is_vr_content = True
+                    content_type = 'vr'
+                    logger.info(f"VR content detected for {code}.")
+            else: logger.warning("Could not find h1#title for VR check.")
+        except Exception as e_title_parse: logger.warning(f"Error parsing title for VR check: {e_title_parse}")
+
         # --- 타입별 분기 시작 ---
-        if content_type == 'videoa':
+        if content_type == 'videoa' or (content_type == 'vr'):
             logger.debug("Processing type 'videoa'...")
             try:
-                # --- videoa 원시 이미지 URL 추출 ---
-                raw_img_urls = cls.__img_urls(tree, content_type='videoa')
+                raw_img_urls = cls.__img_urls(tree, content_type='videoa') # VR도 videoa XPath 사용 가정
                 original_pl_url = raw_img_urls.get('pl')
+                potential_poster_candidate = raw_img_urls.get('potential_poster') # *-1.jpg 후보
 
-                # --- 원본 pl 이미지 방향 미리 확인 ---
-                is_pl_vertical = False
-                is_pl_landscape = False # 가로 여부 변수 추가
-                pl_width = 0; pl_height = 0 # 크기 저장 변수
-                if original_pl_url:
+                # --- 원본 pl 방향 및 potential_poster 유효성 확인 ---
+                is_pl_vertical = False; is_pl_landscape = False
+                is_potential_poster_vertical = False
+                pl_width = 0; pl_height = 0
+
+                if original_pl_url: # pl 방향 확인
                     try:
-                        logger.debug(f"Checking orientation for videoa pl: {original_pl_url}")
-                        im = SiteUtil.imopen(original_pl_url, proxy_url=proxy_url)
-                        if im:
-                            pl_width, pl_height = im.size
+                        im_pl = SiteUtil.imopen(original_pl_url, proxy_url=proxy_url)
+                        if im_pl:
+                            pl_width, pl_height = im_pl.size
                             if pl_width < pl_height: is_pl_vertical = True
-                            elif pl_width > pl_height: is_pl_landscape = True # 가로 조건 추가
-                            logger.debug(f"Original videoa 'pl' image ({pl_width}x{pl_height}) - Vertical: {is_pl_vertical}, Landscape: {is_pl_landscape}")
-                        else: logger.warning("Could not open videoa pl image to check orientation.")
-                    except Exception as e_imopen: logger.warning(f"Could not determine videoa pl orientation: {e_imopen}")
-                # --- 방향 확인 끝 ---
+                            elif pl_width > pl_height: is_pl_landscape = True
+                            logger.debug(f"Original 'pl' ({pl_width}x{pl_height}) - Vertical: {is_pl_vertical}, Landscape: {is_pl_landscape}")
+                        else: logger.warning("Could not open 'pl' image.")
+                    except Exception as e_imopen_pl: logger.warning(f"Could not determine 'pl' orientation: {e_imopen_pl}")
 
-                # --- videoa 이미지 처리 시작 ---
+                if potential_poster_candidate: # potential_poster 방향 확인
+                    try:
+                        im_potential = SiteUtil.imopen(potential_poster_candidate, proxy_url=proxy_url)
+                        if im_potential:
+                            pot_w, pot_h = im_potential.size
+                            if pot_w < pot_h: is_potential_poster_vertical = True
+                            logger.debug(f"Potential poster candidate '{potential_poster_candidate.split('/')[-1]}' ({pot_w}x{pot_h}) - Vertical: {is_potential_poster_vertical}")
+                        else: logger.warning("Could not open potential poster candidate image.")
+                    except Exception as e_imopen_pot: logger.warning(f"Could not determine potential poster orientation: {e_imopen_pot}")
+
+                # --- 이미지 처리 시작 ---
                 img_urls = raw_img_urls.copy()
-                if ps_url_from_cache: img_urls['ps'] = ps_url_from_cache
-                elif not img_urls['ps'] and img_urls['pl']: img_urls['ps'] = img_urls['pl']
-                elif not img_urls['ps'] and not img_urls['pl']: logger.error("Videoa ps and pl URLs are missing.")
+                if ps_url_from_cache: img_urls['ps'] = ps_url_from_cache # ps는 캐시 우선
+                elif not img_urls.get('ps') and img_urls.get('pl'): img_urls['ps'] = img_urls.get('pl') # fallback
+                elif not img_urls.get('ps') and not img_urls.get('pl'): logger.error("ps and pl URLs are missing.")
+                current_ps_url = img_urls.get('ps') # 비교용
 
-                current_ps_url = img_urls.get('ps') # 비교용 ps URL
+                # --- ★★★ resolve_jav_imgs 호출 전 포스터 우선순위 조정 ★★★ ---
+                preferred_poster = None
+                if is_pl_landscape and potential_poster_candidate and is_potential_poster_vertical:
+                    # 조건: pl은 가로인데, *-1.jpg 형태의 세로 이미지가 있다면 그것을 우선 사용
+                    logger.info("Prioritizing vertical potential poster (*-1.jpg) over landscape 'pl'.")
+                    preferred_poster = potential_poster_candidate
+                    # 이 경우 pl은 landscape로 그대로 두거나, potential_poster를 pl로 사용할 수도 있음
+                    # 여기서는 pl은 원본(가로) 유지하고, preferred_poster만 설정
 
-                logger.debug(f"[Videoa] Image URLs before resolve: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} arts={len(img_urls.get('arts',[]))}")
+                # resolve_jav_imgs 호출
+                logger.debug(f"Image URLs before resolve: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} arts={len(img_urls.get('arts',[]))}")
+                # preferred_poster 정보를 resolve_jav_imgs에 전달하거나, 호출 후 덮어쓰기
+                # 여기서는 호출 후 덮어쓰는 방식 선택
                 SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
-                logger.debug(f"[Videoa] Image URLs *after* resolve: poster={bool(img_urls.get('poster'))} crop={img_urls.get('poster_crop')} landscape={bool(img_urls.get('landscape'))}")
+                logger.debug(f"Image URLs *after* resolve: poster={bool(img_urls.get('poster'))} crop={img_urls.get('poster_crop')} landscape={bool(img_urls.get('landscape'))}")
 
-                # --- !!! 후처리 로직 강화 !!! ---
+                # --- ★★★ resolve_jav_imgs 결과 후처리 (우선순위 및 기존 로직 통합) ★★★ ---
                 resolved_poster_url = img_urls.get('poster')
-                resolved_crop_mode = img_urls.get('poster_crop') # crop 모드 확인
+                resolved_crop_mode = img_urls.get('poster_crop')
+                override_applied = False
 
-                override_applied = False # 후처리 적용 여부 플래그
+                # 조건 0: 위에서 결정된 preferred_poster가 있다면 우선 적용
+                if preferred_poster and resolved_poster_url != preferred_poster:
+                    logger.info("Override 0: Applying preferred poster (*-1.jpg).")
+                    img_urls['poster'] = preferred_poster
+                    img_urls['poster_crop'] = None # *-1.jpg는 crop 불필요
+                    if img_urls.get('landscape') == preferred_poster: img_urls['landscape'] = "" # landscape와 중복 방지
+                    override_applied = True
 
-                # 조건 1: SiteUtil이 ps로 fallback했는데, 원본 pl이 세로였다면 원본 pl 사용
+                # 조건 1 (기존 로직): ps fallback + pl 세로 -> pl 복원
                 if not override_applied and is_pl_vertical and current_ps_url and resolved_poster_url == current_ps_url and original_pl_url:
                     logger.info("Override 1: SiteUtil fallback to 'ps', but original 'pl' was vertical. Using original 'pl' as poster.")
                     img_urls['poster'] = original_pl_url
                     img_urls['poster_crop'] = None
-                    if img_urls.get('landscape') == original_pl_url: img_urls['landscape'] = "" # 세로 pl은 landscape 아님
+                    if img_urls.get('landscape') == original_pl_url: img_urls['landscape'] = ""
                     override_applied = True
 
-                # 조건 2: SiteUtil이 원본 pl을 포스터로 선택했지만, crop 안 했고 & 원본 pl이 가로였다면 -> ps로 강제 fallback
+                # 조건 2 (기존 로직): pl 선택 + crop 없음 + pl 가로 -> ps fallback
                 if not override_applied and is_pl_landscape and resolved_poster_url == original_pl_url and resolved_crop_mode is None and current_ps_url:
-                    # ps가 있어야 fallback 가능
                     logger.info("Override 2: SiteUtil chose landscape 'pl' as poster without cropping. Falling back to 'ps'.")
                     img_urls['poster'] = current_ps_url
-                    img_urls['poster_crop'] = None # ps는 crop 없음
-                    # landscape는 원래 pl 유지 (SiteUtil 결정 존중 또는 원본 pl 강제 지정 가능)
-                    # img_urls['landscape'] = original_pl_url # 명시적으로 설정
+                    img_urls['poster_crop'] = None
+                    # landscape는 원본 pl 유지
                     override_applied = True
 
                 if override_applied:
-                     logger.debug(f"[Videoa] Image URLs *after* override: poster={bool(img_urls.get('poster'))} crop={img_urls.get('poster_crop')} landscape={bool(img_urls.get('landscape'))}")
+                     logger.debug(f"Image URLs *after* override: poster={bool(img_urls.get('poster'))} crop={img_urls.get('poster_crop')} landscape={bool(img_urls.get('landscape'))}")
                 # --- 후처리 끝 ---
 
                 # --- 최종 이미지 처리 및 할당 ---
@@ -510,14 +534,12 @@ class SiteDmm:
                 logger.debug(f"[Videoa] Final Thumb: {entity.thumb}, Fanart Count: {len(entity.fanart)}")
 
                 # --- videoa 메타데이터 파싱 (v_new 로직) ---
-                # 제목/Tagline
-                title_node = tree.xpath('//h1[@id="title"]')
-                if title_node:
-                    h1_text = title_node[0].text_content().strip()
-                    prefix_tags = title_node[0].xpath('./span[@class="red"]/text()')
-                    title_cleaned = h1_text.replace(prefix_tags[0].strip(), "").strip() if prefix_tags else h1_text
+                if raw_title_text:
+                    title_cleaned = raw_title_text
                     entity.tagline = SiteUtil.trans(title_cleaned, do_trans=do_trans)
-                else: logger.warning("[Videoa] Tagline (h1#title) not found.")
+                    logger.debug(f"Set tagline (trans={do_trans}): {entity.tagline}")
+                else: logger.warning("[Videoa/VR] Tagline (h1#title) not found or empty.")
+
                 # 정보 테이블 파싱 (XPath 검증 필요)
                 info_table_xpath = '//table[contains(@class, "mg-b20")]//tr'
                 tags = tree.xpath(info_table_xpath)
@@ -591,13 +613,41 @@ class SiteDmm:
                     plot_text = "\n".join([p.strip() for p in plot_nodes if p.strip()]).split("※")[0].strip()
                     if plot_text: entity.plot = SiteUtil.trans(plot_text, do_trans=do_trans)
                 else: logger.warning(f"[Videoa] Plot not found using XPath: {plot_xpath}")
-                # 예고편 처리 (v_new AJAX 방식)
+                # 예고편 처리
                 entity.extras = []
                 if use_extras:
-                    logger.debug(f"[Videoa] Attempting trailer AJAX/Iframe for {code}")
+                    logger.debug(f"[{content_type.upper()}] Attempting trailer for {code}")
                     try:
-                        trailer_url = None; trailer_title = entity.title if entity.title and entity.title != code[2:].upper() else code
-                        ajax_url = py_urllib_parse.urljoin(cls.site_base_url, f"/digital/videoa/-/detail/ajax-movie/=/cid={code[2:]}/")
+                        trailer_url = None
+                        trailer_title = ""
+                        if entity.tagline:
+                            trailer_title = entity.tagline
+                        elif raw_title_text:
+                            trailer_title = raw_title_text
+                        else:
+                            trailer_title = code
+
+                        if is_vr_content: # VR 처리
+                            logger.debug("Using VR trailer logic.")
+                            vr_player_url = f"{cls.site_base_url}/digital/-/vr-sample-player/=/cid={cid_part}/"
+                            logger.info(f"Accessing VR player page: {vr_player_url}")
+                            player_headers = cls._get_request_headers(referer=detail_url)
+                            # VR 플레이어는 text가 아닌 content로 받아야 할 수도 있음 (인코딩 문제 방지)
+                            vr_player_response = SiteUtil.get_response(vr_player_url, proxy_url=proxy_url, headers=player_headers)
+                            if vr_player_response and vr_player_response.status_code == 200:
+                                vr_tree = html.fromstring(vr_player_response.content) # content 사용
+                                video_tags = vr_tree.xpath("//video/@src")
+                                if video_tags:
+                                    trailer_src = video_tags[0]
+                                    trailer_url = "https:" + trailer_src if trailer_src.startswith("//") else trailer_src
+                                    logger.debug(f"Extracted VR trailer URL from <video> tag: {trailer_url}")
+                                else: logger.error("VR player page loaded, but <video> tag or src not found.")
+                            else: logger.error(f"Failed to load VR player page. Status: {vr_player_response.status_code if vr_player_response else 'No Resp'}")
+
+                        else: # videoa 처리
+                            logger.debug("Using Videoa AJAX trailer logic.")
+                            ajax_url = py_urllib_parse.urljoin(cls.site_base_url, f"/digital/videoa/-/detail/ajax-movie/=/cid={cid_part}/")
+
                         ajax_headers = cls._get_request_headers(referer=detail_url); ajax_headers['Accept'] = 'text/html, */*; q=0.01'; ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
                         ajax_response = SiteUtil.get_response(ajax_url, proxy_url=proxy_url, headers=ajax_headers)
                         if not (ajax_response and ajax_response.status_code == 200): raise Exception(f"AJAX request failed (Status: {ajax_response.status_code if ajax_response else 'No Resp'})")
@@ -635,11 +685,13 @@ class SiteDmm:
                                         if data.get("title"): trailer_title = data.get("title").strip()
                                 except json.JSONDecodeError as je: logger.warning(f"Failed to decode 'const args' JSON: {je}")
                         if trailer_url:
-                            entity.extras.append(EntityExtra("trailer", SiteUtil.trans(trailer_title, do_trans=do_trans), "mp4", trailer_url))
-                            logger.info(f"[Videoa] Trailer added successfully for {code}")
-                        else: logger.error(f"[Videoa] Failed to extract trailer URL for {code}.")
-                    except Exception as extra_e: # ImportError 포함 모든 예외 처리
-                        logger.exception(f"Error processing trailer for videoa {code}: {extra_e}")
+                            final_trailer_title = SiteUtil.trans(trailer_title, do_trans=do_trans) if do_trans else trailer_title
+                            entity.extras.append(EntityExtra("trailer", final_trailer_title, "mp4", trailer_url))
+                            logger.info(f"[{content_type.upper()}] Trailer added successfully for {code}. Title: {final_trailer_title}")
+                        else: logger.warning(f"[{content_type.upper()}] Failed to extract trailer URL for {code}.")
+
+                    except Exception as extra_e:
+                        logger.exception(f"Error processing trailer for {content_type} {code}: {extra_e}")
 
             except Exception as e_parse_videoa:
                 logger.exception(f"Error parsing videoa metadata: {e_parse_videoa}")

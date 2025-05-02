@@ -469,7 +469,7 @@ class SiteUtil:
 
                 # --- 1차 시도: average_hash ---
                 logger.debug("has_hq_poster: Performing primary check using average_hash.")
-                ahash_threshold = 15 # average_hash 임계값
+                ahash_threshold = 10 # average_hash 임계값
                 for pos in positions:
                     try:
                         cropped_im = cls.imcrop(im_lg_obj, position=pos)
@@ -488,7 +488,7 @@ class SiteUtil:
                 # --- 2차 시도: phash (1차 실패 시) ---
                 if found_pos is None:
                     logger.debug("has_hq_poster: Primary check (ahash) failed. Performing secondary check using phash.")
-                    phash_threshold = 15 # phash 임계값 (ahash와 동일하게 시작, 조정 가능)
+                    phash_threshold = 10 # phash 임계값 (ahash와 동일하게 시작, 조정 가능)
                     for pos in positions:
                         try:
                             cropped_im = cls.imcrop(im_lg_obj, position=pos)
