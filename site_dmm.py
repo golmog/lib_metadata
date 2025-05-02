@@ -305,64 +305,75 @@ class SiteDmm:
     @classmethod
     def __img_urls(cls, tree, content_type='unknown'):
         logger.debug(f"Extracting raw image URLs for type: {content_type}")
-        img_urls = {'ps': "", 'pl': "", 'arts': [], 'potential_poster': None} # 'potential_poster' 키 추가
+        # 반환 딕셔너리에 'specific_poster_candidate' 키 추가 및 초기화
+        img_urls = {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidate': None}
         try:
-            if content_type == 'videoa':
-                logger.debug("Extracting videoa URLs...")
+            if content_type == 'videoa' or content_type == 'vr': # VR도 videoa XPath 사용 가정
+                logger.debug(f"Extracting {content_type} URLs using videoa logic...")
                 pl_base_xpath = '//div[@id="sample-image-block"]'
-                all_img_tags = tree.xpath(f'{pl_base_xpath}//img') # img 태그 자체를 가져옴
+                # img 태그 자체를 가져와 src와 filename 확인
+                all_img_tags = tree.xpath(f'{pl_base_xpath}//img')
 
                 if not all_img_tags:
                     logger.warning("Could not find any img tags inside div#sample-image-block.")
-                    return img_urls # 이미지 없으면 빈 결과 반환
+                    return img_urls
 
-                # --- 이미지 태그 순회하며 URL 및 타입 분류 ---
                 processed_arts = []
                 pl_url = None
-                potential_poster_url = None # *-1.jpg 후보 저장
+                specific_poster_url = None # *-1.jpg 등 특정 포스터 후보
 
                 for idx, img_tag in enumerate(all_img_tags):
                     src = img_tag.attrib.get("src", "").strip()
                     if not src: continue
                     full_src = py_urllib_parse.urljoin(cls.site_base_url, src)
-                    filename = src.split('/')[-1] # 파일명 추출
+                    filename = src.split('/')[-1].lower() # 파일명 (소문자 변환)
 
-                    if idx == 0: # 첫 번째 이미지는 기본 pl 후보
+                    # 첫 번째 이미지는 기본 pl 후보
+                    if idx == 0:
                         pl_url = full_src
-                        logger.debug(f"Found potential videoa pl (index 0): {pl_url}")
-                        # 첫 번째 이미지가 *-1.jpg 인 경우도 있으므로 아래 조건에서 체크
+                        logger.debug(f"Found potential pl (index 0): {filename}")
+                        # 첫번째가 pl.jpg 가 아닐 수도 있음
 
-                    # *-1.jpg 파일명을 가진 첫 번째 이미지를 potential_poster 후보로 저장
-                    # (기존 pl_url 이 *-1.jpg 일 수도 있고, 두 번째 이미지가 *-1.jpg 일 수도 있음)
-                    if potential_poster_url is None and filename.endswith("-1.jpg"):
-                        potential_poster_url = full_src
-                        logger.debug(f"Found potential poster candidate (*-1.jpg): {potential_poster_url}")
+                    # 파일명이 'pl.jpg' 로 끝나면 pl_url 로 확정 (덮어쓰기 가능)
+                    if filename.endswith("pl.jpg"):
+                        pl_url = full_src
+                        logger.debug(f"Confirmed 'pl' based on filename: {filename}")
 
-                    # 모든 유효한 이미지는 arts 후보에 추가 (나중에 pl, potential_poster 제외)
+                    # 파일명이 숫자로 끝나거나(예: -1.jpg, -01.jpg) 특정 패턴을 가질 때 specific 후보로 지정
+                    # 예시: '-'+숫자+'.jpg' 형태의 첫번째 이미지
+                    match_specific = re.match(r".*-(\d+)\.jpg$", filename)
+                    if specific_poster_url is None and match_specific:
+                        specific_poster_url = full_src
+                        logger.debug(f"Found potential specific poster candidate: {filename}")
+
+                    # 모든 유효한 이미지는 arts 후보에 추가
                     processed_arts.append(full_src)
 
-                img_urls['pl'] = pl_url if pl_url else "" # 최종 pl 할당
-                img_urls['potential_poster'] = potential_poster_url if potential_poster_url else "" # 최종 후보 할당
+                img_urls['pl'] = pl_url if pl_url else ""
+                img_urls['specific_poster_candidate'] = specific_poster_url if specific_poster_url else ""
 
-                # arts에서 pl 및 potential_poster 와 중복 제거
+                # arts에서 pl 및 specific_poster 와 중복 제거
                 unique_arts = []
-                urls_to_exclude = {img_urls['pl'], img_urls['potential_poster']}
+                urls_to_exclude = {img_urls['pl'], img_urls['specific_poster_candidate']}
                 for art_url in processed_arts:
-                    if art_url not in urls_to_exclude and art_url not in unique_arts:
+                    if art_url and art_url not in urls_to_exclude and art_url not in unique_arts:
                         unique_arts.append(art_url)
                 img_urls['arts'] = unique_arts
-                logger.debug(f"Found {len(img_urls['arts'])} unique arts links for videoa.")
+                logger.debug(f"Found {len(img_urls['arts'])} unique arts links.")
 
             elif content_type == 'dvd':
+                # DVD 로직 (기존 v_old XPath 사용)
                 logger.debug("Extracting dvd URLs using v_old logic...")
                 pl_xpath = '//div[@id="fn-sampleImage-imagebox"]/img/@src'
                 pl_tags = tree.xpath(pl_xpath)
-                raw_pl = pl_tags[0] if pl_tags else ""
+                raw_pl = pl_tags[0].strip() if pl_tags else ""
                 if raw_pl:
                     img_urls['pl'] = ("https:" + raw_pl) if not raw_pl.startswith("http") else raw_pl
                     logger.debug(f"Found dvd pl using v_old XPath: {img_urls['pl']}")
                 else: logger.warning("Could not find dvd pl using v_old XPath: %s", pl_xpath)
-                img_urls['ps'] = "" # ps는 캐시에서 처리
+
+                img_urls['ps'] = "" # dvd는 ps가 상세페이지에 없음 (캐시 사용)
+
                 arts_xpath = '//li[contains(@class, "fn-sampleImage__zoom") and not(@data-slick-index="0")]//img'
                 arts_tags = tree.xpath(arts_xpath)
                 if arts_tags:
@@ -370,6 +381,7 @@ class SiteDmm:
                     for tag in arts_tags:
                         src = tag.attrib.get("src") or tag.attrib.get("data-lazy")
                         if src:
+                            src = src.strip()
                             if not src.startswith("http"): src = "https:" + src
                             processed_arts.append(src)
                     unique_arts = []; [unique_arts.append(x) for x in processed_arts if x not in unique_arts]
@@ -378,10 +390,14 @@ class SiteDmm:
                 else: logger.warning("Could not find dvd arts using v_old XPath: %s", arts_xpath)
 
             else: logger.error(f"Unknown content type '{content_type}' in __img_urls")
+
         except Exception as e:
             logger.exception(f"Error extracting image URLs: {e}")
-            img_urls = {'ps': "", 'pl': "", 'arts': []}
-        logger.debug(f"Extracted img_urls: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} arts={len(img_urls.get('arts',[]))}")
+            # 실패 시 기본 구조 반환
+            img_urls = {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidate': None}
+
+        # 최종 추출된 URL 정보 로깅
+        logger.debug(f"Extracted img_urls: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} specific_poster={bool(img_urls.get('specific_poster_candidate'))} arts={len(img_urls.get('arts',[]))}")
         return img_urls
 
     @classmethod
@@ -389,26 +405,37 @@ class SiteDmm:
         logger.info(f"Getting detail info for {code}")
         cached_data = cls._ps_url_cache.pop(code, {})
         ps_url_from_cache = cached_data.get('ps')
-        content_type = cached_data.get('type', 'unknown')
+        # --- 타입 결정: VR은 'vr', 블루레이는 'dvd'로 통일 ---
+        original_content_type = cached_data.get('type', 'unknown')
+        if original_content_type == 'bluray':
+            content_type = 'dvd' # 블루레이는 DVD 로직 사용
+            logger.debug("Treating 'bluray' as 'dvd' for info processing.")
+        # elif original_content_type == 'vr': # VR 타입 유지 가능 (선택)
+        #      content_type = 'vr'
+        else:
+            content_type = original_content_type # videoa, dvd, unknown 등
+
         if ps_url_from_cache: logger.debug(f"Using cached ps_url for {code}: {ps_url_from_cache}")
         else: logger.warning(f"ps_url for {code} not found in cache.")
-        logger.debug(f"Determined content type: {content_type}")
 
         if not cls._ensure_age_verified(proxy_url=proxy_url): raise Exception(f"Age verification failed for info ({code}).")
 
         cid_part = code[2:]
         detail_url = None
-        is_vr_content = False
+        is_vr_content = False # VR 플래그
 
-        if content_type == 'videoa': detail_url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={cid_part}/"
-        elif content_type == 'dvd': detail_url = cls.site_base_url + f"/mono/dvd/-/detail/=/cid={cid_part}/"
-        else:
+        # --- 상세 페이지 URL 생성 ---
+        if content_type == 'videoa' or content_type == 'vr': # VR 포함 videoa 경로 사용
+            detail_url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={cid_part}/"
+        elif content_type == 'dvd': # 블루레이도 dvd 로직 사용하므로 이 경로
+            detail_url = cls.site_base_url + f"/mono/dvd/-/detail/=/cid={cid_part}/"
+        else: # 타입 불명 시 videoa 시도
             logger.warning(f"Unknown type '{content_type}'. Trying 'videoa' path for {code}.")
             detail_url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={cid_part}/"
-            content_type = 'videoa'
+            content_type = 'videoa' # 임시로 videoa 지정
 
-        logger.info(f"Accessing DMM detail page ({content_type}): {detail_url}")
-        referer_url = cls.fanza_av_url if content_type == 'videoa' else (cls.site_base_url + "/mono/dvd/")
+        logger.info(f"Accessing DMM detail page (Processing as: {content_type}): {detail_url}")
+        referer_url = cls.fanza_av_url if content_type in ['videoa', 'vr'] else (cls.site_base_url + "/mono/dvd/")
         info_headers = cls._get_request_headers(referer=referer_url)
         tree = None
         try:
@@ -418,6 +445,7 @@ class SiteDmm:
 
         entity = EntityMovie(cls.site_name, code); entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
 
+        # --- 제목 파싱 및 VR 플래그 설정 ---
         raw_title_text = ""
         try:
             title_node = tree.xpath('//h1[@id="title"]')
@@ -425,422 +453,349 @@ class SiteDmm:
                 raw_title_text = title_node[0].text_content().strip()
                 if raw_title_text.startswith("【VR】"):
                     is_vr_content = True
-                    content_type = 'vr'
                     logger.info(f"VR content detected for {code}.")
-            else: logger.warning("Could not find h1#title for VR check.")
-        except Exception as e_title_parse: logger.warning(f"Error parsing title for VR check: {e_title_parse}")
+                entity.tagline = raw_title_text # 원본 제목 (VR 접두사 포함) -> 이후 번역
+            else: logger.warning("Could not find h1#title.")
+        except Exception as e_title_parse: logger.warning(f"Error parsing title: {e_title_parse}")
 
-        # --- 타입별 분기 시작 ---
-        if content_type == 'videoa' or (content_type == 'vr'):
-            logger.debug("Processing type 'videoa'...")
+        # ================================================
+        # === 디지털 비디오 / VR 처리 (videoa, vr) ===
+        # ================================================
+        if content_type == 'videoa' or content_type == 'vr':
+            logger.debug(f"Processing as VIDEOA/VR type (is_vr={is_vr_content})...")
             try:
-                raw_img_urls = cls.__img_urls(tree, content_type='videoa') # VR도 videoa XPath 사용 가정
+                # --- 이미지 처리 (직접 비교 로직) ---
+                raw_img_urls = cls.__img_urls(tree, content_type='videoa') # VR도 videoa XPath 사용
+                specific_poster_candidate = raw_img_urls.get('specific_poster_candidate')
                 original_pl_url = raw_img_urls.get('pl')
-                potential_poster_candidate = raw_img_urls.get('potential_poster') # *-1.jpg 후보
+                original_arts = raw_img_urls.get('arts', [])
+                current_ps_url = ps_url_from_cache if ps_url_from_cache else ""
 
-                # --- 원본 pl 방향 및 potential_poster 유효성 확인 ---
-                is_pl_vertical = False; is_pl_landscape = False
-                is_potential_poster_vertical = False
-                pl_width = 0; pl_height = 0
+                ps_valid = bool(current_ps_url)
+                pl_valid = bool(original_pl_url)
+                specific_poster_valid = bool(specific_poster_candidate)
 
-                if original_pl_url: # pl 방향 확인
+                final_poster_url = None; final_poster_crop = None; poster_source_log = "Unknown"
+
+                # 1순위: ps vs pl (crop)
+                if ps_valid and pl_valid:
+                    crop_pos = SiteUtil.has_hq_poster(current_ps_url, original_pl_url, proxy_url=proxy_url)
+                    if crop_pos:
+                        final_poster_url = original_pl_url; final_poster_crop = crop_pos
+                        poster_source_log = f"pl (cropped '{crop_pos}')"; logger.info("Priority 1 Met: Using 'pl' with crop.")
+                    else: logger.debug("Priority 1 Check Failed: ps not similar crop of pl.")
+                else: logger.debug("Priority 1 Check Skipped: ps or pl invalid.")
+
+                # 2순위: ps vs specific_poster
+                if final_poster_url is None and ps_valid and specific_poster_valid:
+                    if SiteUtil.is_hq_poster(current_ps_url, specific_poster_candidate, proxy_url=proxy_url):
+                        final_poster_url = specific_poster_candidate; final_poster_crop = None
+                        poster_source_log = "specific_poster_candidate"; logger.info("Priority 2 Met: Using specific poster.")
+                    else: logger.debug("Priority 2 Check Failed: ps not similar to specific.")
+                elif final_poster_url is None: logger.debug(f"Priority 2 Check Skipped: Poster found or URLs invalid (ps={ps_valid}, specific={specific_poster_valid}).")
+
+                # 3순위: ps fallback
+                if final_poster_url is None:
+                    if ps_valid:
+                        final_poster_url = current_ps_url; final_poster_crop = None
+                        poster_source_log = "ps (Fallback)"; logger.info("Fallback: Using 'ps'.")
+                    elif pl_valid:
+                        final_poster_url = original_pl_url; poster_source_log = "pl (Last Resort Fallback)"
+                        logger.warning("Fallback: 'ps' missing, using 'pl'.")
+                    else: final_poster_url = ""; poster_source_log = "None"; logger.error("No valid poster image found.")
+                logger.info(f"Final Poster Decision: URL='{final_poster_url}', Crop='{final_poster_crop}', Source='{poster_source_log}'")
+
+                # --- 썸네일 및 팬아트 생성 ---
+                entity.thumb = []
+                final_landscape_url = None
+                if pl_valid: # Landscape는 pl이 가로일때만
                     try:
-                        im_pl = SiteUtil.imopen(original_pl_url, proxy_url=proxy_url)
-                        if im_pl:
-                            pl_width, pl_height = im_pl.size
-                            if pl_width < pl_height: is_pl_vertical = True
-                            elif pl_width > pl_height: is_pl_landscape = True
-                            logger.debug(f"Original 'pl' ({pl_width}x{pl_height}) - Vertical: {is_pl_vertical}, Landscape: {is_pl_landscape}")
-                        else: logger.warning("Could not open 'pl' image.")
-                    except Exception as e_imopen_pl: logger.warning(f"Could not determine 'pl' orientation: {e_imopen_pl}")
-
-                if potential_poster_candidate: # potential_poster 방향 확인
+                        im_pl_check = SiteUtil.imopen(original_pl_url, proxy_url=proxy_url)
+                        if im_pl_check and im_pl_check.size[0] > im_pl_check.size[1]: final_landscape_url = original_pl_url
+                    except Exception as e_lcheck: logger.warning(f"Could not check pl orientation: {e_lcheck}")
+                if final_landscape_url and final_landscape_url != final_poster_url:
                     try:
-                        im_potential = SiteUtil.imopen(potential_poster_candidate, proxy_url=proxy_url)
-                        if im_potential:
-                            pot_w, pot_h = im_potential.size
-                            if pot_w < pot_h: is_potential_poster_vertical = True
-                            logger.debug(f"Potential poster candidate '{potential_poster_candidate.split('/')[-1]}' ({pot_w}x{pot_h}) - Vertical: {is_potential_poster_vertical}")
-                        else: logger.warning("Could not open potential poster candidate image.")
-                    except Exception as e_imopen_pot: logger.warning(f"Could not determine potential poster orientation: {e_imopen_pot}")
-
-                # --- 이미지 처리 시작 ---
-                img_urls = raw_img_urls.copy()
-                if ps_url_from_cache: img_urls['ps'] = ps_url_from_cache # ps는 캐시 우선
-                elif not img_urls.get('ps') and img_urls.get('pl'): img_urls['ps'] = img_urls.get('pl') # fallback
-                elif not img_urls.get('ps') and not img_urls.get('pl'): logger.error("ps and pl URLs are missing.")
-                current_ps_url = img_urls.get('ps') # 비교용
-
-                # --- ★★★ resolve_jav_imgs 호출 전 포스터 우선순위 조정 ★★★ ---
-                preferred_poster = None
-                if is_pl_landscape and potential_poster_candidate and is_potential_poster_vertical:
-                    # 조건: pl은 가로인데, *-1.jpg 형태의 세로 이미지가 있다면 그것을 우선 사용
-                    logger.info("Prioritizing vertical potential poster (*-1.jpg) over landscape 'pl'.")
-                    preferred_poster = potential_poster_candidate
-                    # 이 경우 pl은 landscape로 그대로 두거나, potential_poster를 pl로 사용할 수도 있음
-                    # 여기서는 pl은 원본(가로) 유지하고, preferred_poster만 설정
-
-                # resolve_jav_imgs 호출
-                logger.debug(f"Image URLs before resolve: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} arts={len(img_urls.get('arts',[]))}")
-                # preferred_poster 정보를 resolve_jav_imgs에 전달하거나, 호출 후 덮어쓰기
-                # 여기서는 호출 후 덮어쓰는 방식 선택
-                SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
-                logger.debug(f"Image URLs *after* resolve: poster={bool(img_urls.get('poster'))} crop={img_urls.get('poster_crop')} landscape={bool(img_urls.get('landscape'))}")
-
-                # --- ★★★ resolve_jav_imgs 결과 후처리 (우선순위 및 기존 로직 통합) ★★★ ---
-                resolved_poster_url = img_urls.get('poster')
-                resolved_crop_mode = img_urls.get('poster_crop')
-                override_applied = False
-
-                # 조건 0: 위에서 결정된 preferred_poster가 있다면 우선 적용
-                if preferred_poster and resolved_poster_url != preferred_poster:
-                    logger.info("Override 0: Applying preferred poster (*-1.jpg).")
-                    img_urls['poster'] = preferred_poster
-                    img_urls['poster_crop'] = None # *-1.jpg는 crop 불필요
-                    if img_urls.get('landscape') == preferred_poster: img_urls['landscape'] = "" # landscape와 중복 방지
-                    override_applied = True
-
-                # 조건 1 (기존 로직): ps fallback + pl 세로 -> pl 복원
-                if not override_applied and is_pl_vertical and current_ps_url and resolved_poster_url == current_ps_url and original_pl_url:
-                    logger.info("Override 1: SiteUtil fallback to 'ps', but original 'pl' was vertical. Using original 'pl' as poster.")
-                    img_urls['poster'] = original_pl_url
-                    img_urls['poster_crop'] = None
-                    if img_urls.get('landscape') == original_pl_url: img_urls['landscape'] = ""
-                    override_applied = True
-
-                # 조건 2 (기존 로직): pl 선택 + crop 없음 + pl 가로 -> ps fallback
-                if not override_applied and is_pl_landscape and resolved_poster_url == original_pl_url and resolved_crop_mode is None and current_ps_url:
-                    logger.info("Override 2: SiteUtil chose landscape 'pl' as poster without cropping. Falling back to 'ps'.")
-                    img_urls['poster'] = current_ps_url
-                    img_urls['poster_crop'] = None
-                    # landscape는 원본 pl 유지
-                    override_applied = True
-
-                if override_applied:
-                     logger.debug(f"Image URLs *after* override: poster={bool(img_urls.get('poster'))} crop={img_urls.get('poster_crop')} landscape={bool(img_urls.get('landscape'))}")
-                # --- 후처리 끝 ---
-
-                # --- 최종 이미지 처리 및 할당 ---
-                entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
+                        processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_url, proxy_url=proxy_url)
+                        if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
+                    except Exception as e_proc_land: logger.error(f"Error processing landscape: {e_proc_land}")
+                if final_poster_url:
+                    try:
+                        processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_url, proxy_url=proxy_url, crop_mode=final_poster_crop)
+                        if processed_poster: entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
+                    except Exception as e_proc_post: logger.error(f"Error processing poster: {e_proc_post}")
+                # 팬아트 처리
                 entity.fanart = []
-                resolved_arts = img_urls.get("arts", [])
                 processed_fanart_count = 0
-                for href in resolved_arts:
+                urls_to_exclude_from_arts = {final_poster_url, final_landscape_url}
+                for art_url in original_arts:
                     if processed_fanart_count >= max_arts: break
-                    try:
-                        fanart_url = SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url)
-                        if fanart_url: entity.fanart.append(fanart_url); processed_fanart_count += 1
-                    except Exception as e_fanart: logger.error(f"Error processing videoa fanart image {href}: {e_fanart}")
-                logger.debug(f"[Videoa] Final Thumb: {entity.thumb}, Fanart Count: {len(entity.fanart)}")
+                    if art_url and art_url not in urls_to_exclude_from_arts:
+                        try:
+                            processed_art = SiteUtil.process_image_mode(image_mode, art_url, proxy_url=proxy_url)
+                            if processed_art: entity.fanart.append(processed_art); processed_fanart_count += 1
+                        except Exception as e_fanart: logger.error(f"Error processing fanart {art_url}: {e_fanart}")
+                logger.debug(f"Final Thumb: {entity.thumb}, Fanart Count: {len(entity.fanart)}")
+                # --- 이미지 처리 끝 ---
 
-                # --- videoa 메타데이터 파싱 (v_new 로직) ---
-                if raw_title_text:
-                    title_cleaned = raw_title_text
-                    entity.tagline = SiteUtil.trans(title_cleaned, do_trans=do_trans)
-                    logger.debug(f"Set tagline (trans={do_trans}): {entity.tagline}")
-                else: logger.warning("[Videoa/VR] Tagline (h1#title) not found or empty.")
-
-                # 정보 테이블 파싱 (XPath 검증 필요)
+                # --- 메타데이터 파싱 (videoa XPath 사용) ---
+                if entity.tagline: entity.tagline = SiteUtil.trans(entity.tagline, do_trans=do_trans) # 번역
                 info_table_xpath = '//table[contains(@class, "mg-b20")]//tr'
                 tags = tree.xpath(info_table_xpath)
                 premiered_shouhin = None; premiered_haishin = None
-                for tag in tags: # (v_new videoa 파싱 로직)
-                    key_node = tag.xpath('./td[@class="nw"]/text()'); value_node = tag.xpath('./td[not(@class="nw")]')
-                    if not key_node or not value_node: continue
-                    key = key_node[0].strip().replace("：", ""); value_td = value_node[0]; value_text_all = value_td.text_content().strip()
+                for tag in tags:
+                    key_node = tag.xpath('./td[@class="nw"]/text()')
+                    value_node_list = tag.xpath('./td[not(@class="nw")]')
+                    if not key_node or not value_node_list: continue
+                    key = key_node[0].strip().replace("：", "")
+                    value_node = value_node_list[0]; value_text_all = value_node.text_content().strip()
                     if value_text_all == "----" or not value_text_all: continue
-                    if key == "配信開始日": premiered_haishin = value_text_all.replace("/", "-")
-                    elif key == "商品発売日": premiered_shouhin = value_text_all.replace("/", "-")
-                    elif key == "収録時間": m=re.search(r"(\d+)",value_text_all); entity.runtime = int(m.group(1)) if m else None
-                    elif key == "出演者": # (배우 처리)
-                        actors = [a.strip() for a in value_td.xpath('.//a/text()') if a.strip()]
+                    # 파싱 로직 (이전 답변 내용 참고 - videoa 부분)
+                    if "配信開始日" in key: premiered_haishin = value_text_all.replace("/", "-")
+                    elif "商品発売日" in key: premiered_shouhin = value_text_all.replace("/", "-")
+                    elif "収録時間" in key: m=re.search(r"(\d+)",value_text_all); entity.runtime = int(m.group(1)) if m else None
+                    elif "出演者" in key: # ... 배우 ...
+                        actors = [a.strip() for a in value_node.xpath('.//a/text()') if a.strip()]
                         if actors: entity.actor = [EntityActor(name) for name in actors]
                         elif value_text_all != '----': entity.actor = [EntityActor(n.strip()) for n in value_text_all.split('/') if n.strip()]
-                        else: entity.actor = []
-                    elif key == "監督": # (감독 처리)
-                        directors = [a.strip() for a in value_td.xpath('.//a/text()') if a.strip()]
+                    elif "監督" in key: # ... 감독 ...
+                        directors = [a.strip() for a in value_node.xpath('.//a/text()') if a.strip()]
                         entity.director = directors[0] if directors else (value_text_all if value_text_all != '----' else None)
-                    elif key == "シリーズ": # (시리즈 처리)
+                    elif "シリーズ" in key: # ... 시리즈 ...
                         if entity.tag is None: entity.tag = []
-                        series = [a.strip() for a in value_td.xpath('.//a/text()') if a.strip()]
+                        series = [a.strip() for a in value_node.xpath('.//a/text()') if a.strip()]
                         s_name = series[0] if series else (value_text_all if value_text_all != '----' else None)
-                        if s_name: entity.tag.append(SiteUtil.trans(s_name, do_trans=do_trans))
-                    elif key == "メーカー": # (제작사 처리)
+                        if s_name and SiteUtil.trans(s_name, do_trans=do_trans) not in entity.tag: entity.tag.append(SiteUtil.trans(s_name, do_trans=do_trans))
+                    elif "メーカー" in key: # ... 제작사 ...
                         if entity.studio is None:
-                            makers = [a.strip() for a in value_td.xpath('.//a/text()') if a.strip()]
+                            makers = [a.strip() for a in value_node.xpath('.//a/text()') if a.strip()]
                             m_name = makers[0] if makers else (value_text_all if value_text_all != '----' else None)
                             if m_name: entity.studio = SiteUtil.trans(m_name, do_trans=do_trans)
-                    elif key == "レーベル": # (레이블 -> 스튜디오 처리)
-                        labels = [a.strip() for a in value_td.xpath('.//a/text()') if a.strip()]
+                    elif "レーベル" in key: # ... 레이블 ...
+                        labels = [a.strip() for a in value_node.xpath('.//a/text()') if a.strip()]
                         l_name = labels[0] if labels else (value_text_all if value_text_all != '----' else None)
                         if l_name:
                             if do_trans: entity.studio = SiteUtil.av_studio.get(l_name, SiteUtil.trans(l_name))
                             else: entity.studio = l_name
-                    elif key == "ジャンル": # (장르 처리)
+                    elif "ジャンル" in key: # ... 장르 ...
                         entity.genre = []
-                        for genre_ja in value_td.xpath('.//a/text()'):
-                            genre_ja = genre_ja.strip()
+                        for genre_ja in value_node.xpath('.//a/text()'):
+                            genre_ja = genre_ja.strip(); # ... (장르 처리) ...
                             if not genre_ja or "％OFF" in genre_ja or genre_ja in SiteUtil.av_genre_ignore_ja: continue
                             if genre_ja in SiteUtil.av_genre: entity.genre.append(SiteUtil.av_genre[genre_ja])
                             else:
                                 genre_ko = SiteUtil.trans(genre_ja, do_trans=do_trans).replace(" ", "")
                                 if genre_ko not in SiteUtil.av_genre_ignore_ko: entity.genre.append(genre_ko)
-                    elif key == "品番": # (품번 -> 태그 처리)
-                        match_real = cls.PTN_SEARCH_REAL_NO.match(value_text_all)
+                    elif "品番" in key: # ... 품번 ...
+                        # 품번 처리 로직 (제목 설정은 나중에)
+                        value = value_text_all; match_id = cls.PTN_ID.search(value); id_before = None
+                        if match_id: id_before = match_id.group(0); value = value.lower().replace(id_before, "zzid")
+                        match_real = cls.PTN_SEARCH_REAL_NO.match(value); formatted_code = value_text_all.upper()
                         if match_real:
                             label = match_real.group("real").upper()
+                            if id_before is not None: label = label.replace("ZZID", id_before.upper())
+                            formatted_code = label + "-" + str(int(match_real.group("no"))).zfill(3)
                             if entity.tag is None: entity.tag = []
                             if label not in entity.tag: entity.tag.append(label)
-                    elif key == "平均評価": # (평점 처리 - v_new 방식 사용)
-                        rating_img = value_td.xpath('.//img/@src')
+                        entity.title = entity.originaltitle = entity.sorttitle = formatted_code # 임시 설정
+                    elif "平均評価" in key: # ... 평점 ...
+                        rating_img = value_node.xpath('.//img/@src')# ... (평점 처리) ...
                         if rating_img:
-                            match_rate = cls.PTN_RATING.search(rating_img[0]) # v_old 패턴 시도
+                            match_rate = cls.PTN_RATING.search(rating_img[0])
                             if match_rate:
                                 rate_str = match_rate.group("rating").replace("_",".")
                                 try:
-                                    rate_val = float(rate_str); rate_val /= 10.0 # 5점 만점 변환
+                                    rate_val = float(rate_str) / 10.0
                                     if 0 <= rate_val <= 5:
                                         img_url = "https:" + rating_img[0] if rating_img[0].startswith("//") else rating_img[0]
-                                        entity.ratings = [EntityRatings(rate_val, max=5, name="dmm", image_url=img_url)]
-                                except ValueError: logger.warning(f"Rating conv err (videoa): {rate_str}")
+                                        if not entity.ratings: entity.ratings = [EntityRatings(rate_val, max=5, name="dmm", image_url=img_url)]
+                                        else: entity.ratings[0].value = rate_val; entity.ratings[0].image_url = img_url
+                                except ValueError: logger.warning(f"Rating conversion error: {rate_str}")
+
                 final_premiered = premiered_shouhin or premiered_haishin
-                if final_premiered: entity.premiered = final_premiered; entity.year = int(final_premiered[:4]) if final_premiered else None
-                else: logger.warning("[Videoa] Premiered date not found."); entity.premiered = None; entity.year = None
-                # 줄거리 파싱 (XPath 검증 필요)
+                if final_premiered: entity.premiered = final_premiered; entity.year = int(final_premiered[:4]) if final_premiered and len(final_premiered) >= 4 else None
+                else: logger.warning("Premiered date not found."); entity.premiered = None; entity.year = None
+
+                # 줄거리 파싱 (videoa XPath 사용)
                 plot_xpath = '//div[@class="mg-b20 lh4"]/text()'
                 plot_nodes = tree.xpath(plot_xpath)
                 if plot_nodes:
                     plot_text = "\n".join([p.strip() for p in plot_nodes if p.strip()]).split("※")[0].strip()
                     if plot_text: entity.plot = SiteUtil.trans(plot_text, do_trans=do_trans)
-                else: logger.warning(f"[Videoa] Plot not found using XPath: {plot_xpath}")
-                # 예고편 처리
+                else: logger.warning("Plot not found using videoa XPath.")
+                # --- 메타데이터 파싱 끝 ---
+
+                # --- 예고편 처리 (VR 분기 포함) ---
                 entity.extras = []
                 if use_extras:
-                    logger.debug(f"[{content_type.upper()}] Attempting trailer for {code}")
+                    trailer_title = entity.tagline if entity.tagline else raw_title_text if raw_title_text else code
                     try:
                         trailer_url = None
-                        trailer_title = ""
-                        if entity.tagline:
-                            trailer_title = entity.tagline
-                        elif raw_title_text:
-                            trailer_title = raw_title_text
-                        else:
-                            trailer_title = code
-
-                        if is_vr_content: # VR 처리
+                        if is_vr_content: # ★★★ VR 예고편 처리 ★★★
                             logger.debug("Using VR trailer logic.")
                             vr_player_url = f"{cls.site_base_url}/digital/-/vr-sample-player/=/cid={cid_part}/"
-                            logger.info(f"Accessing VR player page: {vr_player_url}")
                             player_headers = cls._get_request_headers(referer=detail_url)
-                            # VR 플레이어는 text가 아닌 content로 받아야 할 수도 있음 (인코딩 문제 방지)
                             vr_player_response = SiteUtil.get_response(vr_player_url, proxy_url=proxy_url, headers=player_headers)
                             if vr_player_response and vr_player_response.status_code == 200:
-                                vr_tree = html.fromstring(vr_player_response.content) # content 사용
+                                vr_tree = html.fromstring(vr_player_response.content)
                                 video_tags = vr_tree.xpath("//video/@src")
-                                if video_tags:
-                                    trailer_src = video_tags[0]
-                                    trailer_url = "https:" + trailer_src if trailer_src.startswith("//") else trailer_src
-                                    logger.debug(f"Extracted VR trailer URL from <video> tag: {trailer_url}")
-                                else: logger.error("VR player page loaded, but <video> tag or src not found.")
-                            else: logger.error(f"Failed to load VR player page. Status: {vr_player_response.status_code if vr_player_response else 'No Resp'}")
-
-                        else: # videoa 처리
+                                if video_tags: trailer_url = "https:" + video_tags[0] if video_tags[0].startswith("//") else video_tags[0]
+                                else: logger.error("VR player: <video> tag or src not found.")
+                            else: logger.error(f"Failed VR player page. Status: {vr_player_response.status_code if vr_player_response else 'No Resp'}")
+                        else: # ★★★ 일반 Videoa 예고편 처리 ★★★
                             logger.debug("Using Videoa AJAX trailer logic.")
                             ajax_url = py_urllib_parse.urljoin(cls.site_base_url, f"/digital/videoa/-/detail/ajax-movie/=/cid={cid_part}/")
+                            ajax_headers = cls._get_request_headers(referer=detail_url); ajax_headers['Accept'] = 'text/html, */*; q=0.01'; ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
+                            ajax_response = SiteUtil.get_response(ajax_url, proxy_url=proxy_url, headers=ajax_headers)
+                            if ajax_response and ajax_response.status_code == 200:
+                                ajax_html_text = ajax_response.text
+                                try: from lxml import html
+                                except ImportError: logger.error("lxml required."); raise
+                                iframe_tree = html.fromstring(ajax_html_text)
+                                iframe_srcs = iframe_tree.xpath("//iframe/@src")
+                                if iframe_srcs:
+                                    iframe_url = py_urllib_parse.urljoin(ajax_url, iframe_srcs[0])
+                                    iframe_headers = cls._get_request_headers(referer=ajax_url)
+                                    iframe_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=iframe_headers)
+                                    if iframe_text:
+                                        pos = iframe_text.find("const args = {")
+                                        if pos != -1:
+                                            json_start = iframe_text.find("{", pos); json_end = iframe_text.find("};", json_start)
+                                            if json_start != -1 and json_end != -1:
+                                                data_str = iframe_text[json_start : json_end+1]
+                                                try:
+                                                    data = json.loads(data_str)
+                                                    bitrates = sorted(data.get("bitrates",[]), key=lambda k: k.get("bitrate", 0), reverse=True)
+                                                    if bitrates and bitrates[0].get("src"): trailer_url = "https:" + bitrates[0]["src"] if bitrates[0]["src"].startswith("//") else bitrates[0]["src"]
+                                                    if data.get("title") and data["title"].strip(): trailer_title = data["title"].strip()
+                                                except json.JSONDecodeError as je: logger.warning(f"Failed 'const args' JSON decode: {je}")
+                                        else: logger.warning("Could not find JSON ends in iframe content.")
+                                    else: logger.warning("Failed to get iframe content.")
+                                else: logger.warning("Iframe not found in AJAX response.")
+                            else: logger.warning(f"AJAX request failed. Status: {ajax_response.status_code if ajax_response else 'No Resp'}")
 
-                        ajax_headers = cls._get_request_headers(referer=detail_url); ajax_headers['Accept'] = 'text/html, */*; q=0.01'; ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
-                        ajax_response = SiteUtil.get_response(ajax_url, proxy_url=proxy_url, headers=ajax_headers)
-                        if not (ajax_response and ajax_response.status_code == 200): raise Exception(f"AJAX request failed (Status: {ajax_response.status_code if ajax_response else 'No Resp'})")
-
-                        ajax_html_text = ajax_response.text
-
-                        # --- lxml.html 임포트 확인 및 사용 ---
-                        try:
-                            from lxml import html # 사용 직전에 명시적 임포트
-                        except ImportError:
-                            logger.error("lxml library is required for AJAX trailer parsing but not installed.")
-                            raise # 상위 except에서 잡도록 함
-
-                        iframe_tree = html.fromstring(ajax_html_text) # 이제 html은 확실히 lxml.html 모듈
-                        # --- 임포트 확인 끝 ---
-
-                        iframe_srcs = iframe_tree.xpath("//iframe/@src")
-                        if not iframe_srcs: raise Exception("Iframe not found")
-
-                        iframe_url = py_urllib_parse.urljoin(ajax_url, iframe_srcs[0]); player_headers = cls._get_request_headers(referer=ajax_url)
-                        player_response_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=player_headers)
-                        if not player_response_text: raise Exception("Failed to get player page content")
-
-                        pos = player_response_text.find("const args = {");
-                        if pos != -1:
-                            json_start = player_response_text.find("{", pos); json_end = player_response_text.find("};", json_start)
-                            if json_start != -1 and json_end != -1:
-                                data_str = player_response_text[json_start : json_end+1]
-                                try:
-                                    data = json.loads(data_str)
-                                    bitrates = sorted(data.get("bitrates",[]), key=lambda k: k.get("bitrate", 0), reverse=True)
-                                    if bitrates and bitrates[0].get("src"):
-                                        trailer_src = bitrates[0]["src"]
-                                        trailer_url = "https:" + trailer_src if trailer_src.startswith("//") else trailer_src
-                                        if data.get("title"): trailer_title = data.get("title").strip()
-                                except json.JSONDecodeError as je: logger.warning(f"Failed to decode 'const args' JSON: {je}")
                         if trailer_url:
                             final_trailer_title = SiteUtil.trans(trailer_title, do_trans=do_trans) if do_trans else trailer_title
                             entity.extras.append(EntityExtra("trailer", final_trailer_title, "mp4", trailer_url))
-                            logger.info(f"[{content_type.upper()}] Trailer added successfully for {code}. Title: {final_trailer_title}")
-                        else: logger.warning(f"[{content_type.upper()}] Failed to extract trailer URL for {code}.")
+                            logger.info(f"Trailer added. Title: {final_trailer_title}")
+                        else: logger.warning("Failed to extract trailer URL.")
+                    except Exception as extra_e: logger.exception(f"Error processing trailer: {extra_e}")
+                # --- 예고편 처리 끝 ---
+            except Exception as e_parse_videoa_vr:
+                logger.exception(f"Error parsing VIDEOA/VR metadata: {e_parse_videoa_vr}")
 
-                    except Exception as extra_e:
-                        logger.exception(f"Error processing trailer for {content_type} {code}: {extra_e}")
-
-            except Exception as e_parse_videoa:
-                logger.exception(f"Error parsing videoa metadata: {e_parse_videoa}")
-
-
-        elif content_type == 'dvd':
-            logger.debug("Processing type 'dvd'...")
+        elif content_type == 'dvd': # 블루레이는 여기서 처리 (content_type 'dvd'로 통일됨)
+            logger.debug(f"Processing as DVD/BLURAY type...")
             try:
-                # --- dvd 이미지 처리 ---
-                img_urls = cls.__img_urls(tree, content_type='dvd') # dvd용 URL 추출
+                # --- 이미지 처리 (기존 resolve_jav_imgs 사용) ---
+                # 블루레이도 DVD와 동일한 이미지 구조를 가진다고 가정
+                img_urls = cls.__img_urls(tree, content_type='dvd') # dvd XPath 사용
                 if ps_url_from_cache: img_urls['ps'] = ps_url_from_cache
-                elif not img_urls['ps'] and img_urls['pl']: img_urls['ps'] = img_urls['pl'] # ps fallback
-                elif not img_urls['ps'] and not img_urls['pl']: logger.error("DVD ps and pl URLs are missing.")
+                elif not img_urls.get('ps') and img_urls.get('pl'): img_urls['ps'] = img_urls.get('pl')
+                elif not img_urls.get('ps') and not img_urls.get('pl'): logger.error("DVD/Blu-ray ps and pl URLs are missing.")
 
-                logger.debug(f"[DVD] Image URLs before resolve: ps={bool(img_urls.get('ps'))} pl={bool(img_urls.get('pl'))} arts={len(img_urls.get('arts',[]))}")
-                SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=crop_mode, proxy_url=proxy_url)
+                # DVD/Blu-ray는 resolve_jav_imgs 사용 유지 (필요시 위 로직처럼 변경 가능)
+                SiteUtil.resolve_jav_imgs(img_urls, ps_to_poster=ps_to_poster, crop_mode=None, proxy_url=proxy_url)
                 entity.thumb = SiteUtil.process_jav_imgs(image_mode, img_urls, proxy_url=proxy_url)
+                # 팬아트 처리
                 entity.fanart = []
                 resolved_arts = img_urls.get("arts", [])
                 processed_fanart_count = 0
-                for href in resolved_arts:
-                    if processed_fanart_count >= max_arts: break
-                    try:
-                        fanart_url = SiteUtil.process_image_mode(image_mode, href, proxy_url=proxy_url)
-                        if fanart_url: entity.fanart.append(fanart_url); processed_fanart_count += 1
-                    except Exception as e_fanart: logger.error(f"Error processing dvd fanart image {href}: {e_fanart}")
-                logger.debug(f"[DVD] Final Thumb: {entity.thumb}, Fanart Count: {len(entity.fanart)}")
 
-                # --- dvd 메타데이터 파싱 (v_old 로직) ---
-                # Tagline / Title
-                title_xpath = '//h1[@id="title"]'
-                title_tags = tree.xpath(title_xpath)
-                if title_tags:
-                    h1_full_text = title_tags[0].text_content().strip()
-                    span_text_nodes = title_tags[0].xpath('./span[contains(@class, "txt_before-sale")]/text()')
-                    span_text = "".join(span_text_nodes).strip()
-                    title_text = h1_full_text.replace(span_text, "").strip() if span_text else h1_full_text
-                    if title_text: entity.tagline = SiteUtil.trans(title_text, do_trans=do_trans).replace("[배달 전용]", "").replace("[특가]", "").strip()
-                else: logger.warning("[DVD] h1#title tag not found (v_old).")
-                # 정보 테이블 파싱
+                # --- 메타데이터 파싱 (dvd XPath 사용) ---
+                if entity.tagline: entity.tagline = SiteUtil.trans(entity.tagline, do_trans=do_trans) # 번역
                 info_table_xpath = '//div[@class="wrapper-product"]//table//tr'
                 tags = tree.xpath(info_table_xpath)
                 premiered_shouhin = None; premiered_hatsubai = None; premiered_haishin = None
-                for tag in tags: # (v_old DVD 파싱 로직)
+                for tag in tags:
                     td_tags = tag.xpath(".//td")
-                    if td_tags and len(td_tags)==2 and "平均評価：" in td_tags[0].text_content(): # 평점 처리
-                        rating_img_tags = td_tags[1].xpath('.//img/@src')
+                    if len(td_tags) != 2: continue
+                    # 평점 행 처리 (dvd 방식)
+                    if "평균평가" in td_tags[0].text_content():
+                        rating_img_tags = td_tags[1].xpath('.//img/@src') # ... (dvd 평점 처리) ...
                         if rating_img_tags:
                             match_rating = cls.PTN_RATING.search(rating_img_tags[0])
                             if match_rating:
                                 rating_value_str = match_rating.group("rating").replace("_", ".")
                                 try:
-                                    rating_value = float(rating_value_str) / 10.0 # 10 나누기
+                                    rating_value = float(rating_value_str) / 10.0
                                     if 0 <= rating_value <= 5:
                                         rating_img_url = "https:" + rating_img_tags[0] if not rating_img_tags[0].startswith("http") else rating_img_tags[0]
                                         if not entity.ratings: entity.ratings = [EntityRatings(rating_value, max=5, name="dmm", image_url=rating_img_url)]
                                         else: entity.ratings[0].value = rating_value; entity.ratings[0].image_url = rating_img_url
-                                except ValueError: logger.warning(f"Could not convert rating value: {rating_value_str} (v_old)")
-                        continue
-                    if len(td_tags) != 2: continue # 일반 행
-                    key = td_tags[0].text_content().strip(); value_node = td_tags[1]; value_text_all = value_node.text_content().strip()
+                                except ValueError: logger.warning(f"Could not convert rating (dvd): {rating_value_str}")
+                        continue # 평점 행 다음으로
+
+                    key = td_tags[0].text_content().strip().replace("：", "")
+                    value_node = td_tags[1]; value_text_all = value_node.text_content().strip()
                     if value_text_all == "----" or not value_text_all: continue
-                    if key == "商品発売日：": premiered_shouhin = value_text_all.replace("/", "-")
-                    elif key == "発売日：": premiered_hatsubai = value_text_all.replace("/", "-")
-                    elif key == "配信開始日：": premiered_haishin = value_text_all.replace("/", "-")
-                    elif key == "収録時間：": # (시간)
+                    # 파싱 로직 (dvd 부분 참고)
+                    if "商品発売日" in key: premiered_shouhin = value_text_all.replace("/", "-")
+                    elif "発売日" in key: premiered_hatsubai = value_text_all.replace("/", "-")
+                    elif "配信開始日" in key: premiered_haishin = value_text_all.replace("/", "-")
+                    elif "収録時間" in key: # ... 시간 ...
                         match_runtime = re.search(r"(\d+)", value_text_all)
                         if match_runtime: entity.runtime = int(match_runtime.group(1))
-                    elif key == "出演者：": # (배우)
+                    elif "出演者" in key: # ... 배우 ...
                         entity.actor = []
                         for a_tag in value_node.xpath(".//a"):
                             actor_name = a_tag.text_content().strip()
                             if actor_name and actor_name != "▼すべて表示する": entity.actor.append(EntityActor(actor_name))
-                    elif key == "監督：": # (감독)
+                    elif "監督" in key: # ... 감독 ...
                         a_tags = value_node.xpath(".//a"); entity.director = a_tags[0].text_content().strip() if a_tags else value_text_all
-                    elif key == "シリーズ：": # (시리즈)
+                    elif "シリーズ" in key: # ... 시리즈 ...
                         if entity.tag is None: entity.tag = []
                         a_tags = value_node.xpath(".//a"); series_name = a_tags[0].text_content().strip() if a_tags else value_text_all
-                        if series_name: entity.tag.append(SiteUtil.trans(series_name, do_trans=do_trans))
-                    elif key == "メーカー：": # (제작사)
+                        if series_name and SiteUtil.trans(series_name, do_trans=do_trans) not in entity.tag: entity.tag.append(SiteUtil.trans(series_name, do_trans=do_trans))
+                    elif "メーカー" in key: # ... 제작사 ...
                         if entity.studio is None:
                             a_tags = value_node.xpath(".//a"); studio_name = a_tags[0].text_content().strip() if a_tags else value_text_all
                             entity.studio = SiteUtil.trans(studio_name, do_trans=do_trans)
-                    elif key == "レーベル：": # (레이블)
+                    elif "レーベル" in key: # ... 레이블 ...
                         a_tags = value_node.xpath(".//a"); studio_name = a_tags[0].text_content().strip() if a_tags else value_text_all
                         if do_trans: entity.studio = SiteUtil.av_studio.get(studio_name, SiteUtil.trans(studio_name))
                         else: entity.studio = studio_name
-                    elif key == "ジャンル：": # (장르)
+                    elif "ジャンル" in key: # ... 장르 ...
                         entity.genre = []
                         for tag_a in value_node.xpath(".//a"):
-                            genre_ja = tag_a.text_content().strip()
+                            genre_ja = tag_a.text_content().strip(); # ... (dvd 장르 처리) ...
                             if "％OFF" in genre_ja or not genre_ja or genre_ja in SiteUtil.av_genre_ignore_ja: continue
                             if genre_ja in SiteUtil.av_genre: entity.genre.append(SiteUtil.av_genre[genre_ja])
                             else:
                                 genre_ko = SiteUtil.trans(genre_ja, do_trans=do_trans).replace(" ", "")
                                 if genre_ko not in SiteUtil.av_genre_ignore_ko: entity.genre.append(genre_ko)
-                    elif key == "品番：": # (품번 -> 제목)
+                    elif "品番" in key: # ... 품번 ...
+                        # 품번 처리 로직 (dvd 방식)
                         value = value_text_all; match_id = cls.PTN_ID.search(value); id_before = None
                         if match_id: id_before = match_id.group(0); value = value.lower().replace(id_before, "zzid")
-                        match_real = cls.PTN_SEARCH_REAL_NO.match(value); formatted_title = value_text_all.upper()
+                        match_real = cls.PTN_SEARCH_REAL_NO.match(value); formatted_code = value_text_all.upper()
                         if match_real:
                             label = match_real.group("real").upper()
                             if id_before is not None: label = label.replace("ZZID", id_before.upper())
-                            formatted_title = label + "-" + str(int(match_real.group("no"))).zfill(3)
+                            formatted_code = label + "-" + str(int(match_real.group("no"))).zfill(3)
                             if entity.tag is None: entity.tag = []
                             if label not in entity.tag: entity.tag.append(label)
-                        entity.title = entity.originaltitle = entity.sorttitle = formatted_title
-                        if entity.tagline is None: entity.tagline = entity.title # Tagline fallback
-                # 최종 날짜
+                        entity.title = entity.originaltitle = entity.sorttitle = formatted_code # 임시 설정
+
                 final_premiered = premiered_shouhin or premiered_hatsubai or premiered_haishin
-                if final_premiered:
-                    entity.premiered = final_premiered
-                    try: entity.year = int(final_premiered[:4])
-                    except ValueError: logger.warning(f"[DVD] Could not parse year: {final_premiered}"); entity.year = None
-                else: logger.warning("[DVD] No premiered date found."); entity.premiered = None; entity.year = None
-                # 줄거리
+                if final_premiered: entity.premiered = final_premiered; entity.year = int(final_premiered[:4]) if final_premiered and len(final_premiered) >= 4 else None
+                else: logger.warning("DVD/BR Premiered date not found."); entity.premiered = None; entity.year = None
+
+                # 줄거리 파싱 (dvd XPath 사용)
                 plot_xpath = '//div[@class="mg-b20 lh4"]/p[@class="mg-b20"]/text()'
                 plot_tags = tree.xpath(plot_xpath)
                 if plot_tags:
                     plot_text = "\n".join([p.strip() for p in plot_tags if p.strip()]).split("※")[0].strip()
                     entity.plot = SiteUtil.trans(plot_text, do_trans=do_trans)
-                else: logger.warning("[DVD] Plot not found.")
-                # 리뷰 섹션 평점/투표수
-                review_section_xpath = '//div[@id="review_anchor"]'
-                review_sections = tree.xpath(review_section_xpath)
-                if review_sections:
-                    review_section = review_sections[0]
-                    try:
-                        avg_rating_tags = review_section.xpath('.//div[@class="dcd-review__points"]/p[@class="dcd-review__average"]/strong/text()')
-                        if avg_rating_tags:
-                            avg_rating_str = avg_rating_tags[0].strip(); avg_rating_value = float(avg_rating_str)
-                            if 0 <= avg_rating_value <= 5:
-                                if entity.ratings: entity.ratings[0].value = avg_rating_value
-                                else: entity.ratings = [EntityRatings(avg_rating_value, max=5, name="dmm")]
-                                logger.debug(f"[DVD] Updated rating value from review: {avg_rating_value}")
-                        votes_tags = review_section.xpath('.//div[@class="dcd-review__points"]/p[@class="dcd-review__evaluates"]/strong/text()')
-                        if votes_tags:
-                            votes_str = votes_tags[0].strip(); match_votes = re.search(r"(\d+)", votes_str)
-                            if match_votes:
-                                votes_value = int(match_votes.group(1))
-                                if entity.ratings: entity.ratings[0].votes = votes_value; logger.debug(f"[DVD] Updated rating votes from review: {votes_value}")
-                    except Exception as rating_update_e: logger.exception(f"Error updating rating details from review (v_old): {rating_update_e}")
-                else: logger.warning("[DVD] Review section not found.")
-                # 예고편 (v_old 로직)
+                else: logger.warning("DVD/BR Plot not found.")
+                # --- 메타데이터 파싱 끝 ---
+
+                # --- DVD/블루레이 예고편 처리 ---
                 entity.extras = []
-                if use_extras: # (AJAX / onclick 로직)
-                    logger.debug(f"[DVD] Attempting trailer for {code}")
-                    try: # (예고편 처리 로직 v_old 것 그대로 삽입)
-                        trailer_url = None; trailer_title_from_data = None
+                if use_extras:
+                    logger.debug("Attempting DVD/Blu-ray trailer...")
+                    try:
+                        trailer_url = None; trailer_title = entity.tagline if entity.tagline else raw_title_text if raw_title_text else code
+                        # AJAX 시도
                         ajax_url_xpath = '//a[@id="sample-video1"]/@data-video-url'
                         ajax_url_tags = tree.xpath(ajax_url_xpath)
                         if ajax_url_tags:
@@ -848,27 +803,31 @@ class SiteDmm:
                             try:
                                 ajax_headers = cls._get_request_headers(referer=detail_url); ajax_headers['X-Requested-With'] = 'XMLHttpRequest'
                                 ajax_response_text = SiteUtil.get_text(ajax_full_url, proxy_url=proxy_url, headers=ajax_headers)
-                                try: from lxml import html
-                                except ImportError: logger.error("lxml library required."); raise
-                                ajax_tree = html.fromstring(ajax_response_text); iframe_srcs = ajax_tree.xpath("//iframe/@src")
-                                if iframe_srcs:
-                                    iframe_url = py_urllib_parse.urljoin(ajax_full_url, iframe_srcs[0]); iframe_headers = cls._get_request_headers(referer=ajax_full_url)
-                                    iframe_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=iframe_headers)
-                                    pos = iframe_text.find("const args = {")
-                                    if pos != -1:
-                                        json_start = iframe_text.find("{", pos); json_end = iframe_text.find("};", json_start)
-                                        if json_start != -1 and json_end != -1:
-                                            data_str = iframe_text[json_start : json_end+1]
-                                            try:
-                                                data = json.loads(data_str)
-                                                data["bitrates"] = sorted(data.get("bitrates",[]), key=lambda k: k.get("bitrate", 0), reverse=True)
-                                                if data.get("bitrates") and data["bitrates"][0].get("src"):
-                                                    trailer_src = data["bitrates"][0]["src"]
-                                                    trailer_url = "https:" + trailer_src if not trailer_src.startswith("http") else trailer_src
-                                                    trailer_title_from_data = data.get("title")
-                                            except json.JSONDecodeError as je: logger.warning(f"Failed to decode JSON from iframe (v_old): {je}")
-                            except Exception as ajax_e: logger.exception(f"Error during trailer AJAX request (v_old): {ajax_e}")
-                        if not trailer_url: # onclick fallback
+                                if ajax_response_text:
+                                    try: from lxml import html
+                                    except ImportError: logger.error("lxml required."); raise
+                                    ajax_tree = html.fromstring(ajax_response_text); iframe_srcs = ajax_tree.xpath("//iframe/@src")
+                                    if iframe_srcs:
+                                        iframe_url = py_urllib_parse.urljoin(ajax_full_url, iframe_srcs[0])
+                                        iframe_headers = cls._get_request_headers(referer=ajax_full_url)
+                                        iframe_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=iframe_headers)
+                                        if iframe_text:
+                                            pos = iframe_text.find("const args = {")
+                                            if pos != -1:
+                                                json_start = iframe_text.find("{", pos); json_end = iframe_text.find("};", json_start)
+                                                if json_start != -1 and json_end != -1:
+                                                    data_str = iframe_text[json_start : json_end+1]
+                                                    try:
+                                                        data = json.loads(data_str)
+                                                        bitrates = sorted(data.get("bitrates",[]), key=lambda k: k.get("bitrate", 0), reverse=True)
+                                                        if bitrates and bitrates[0].get("src"): trailer_url = "https:" + bitrates[0]["src"] if not bitrates[0]["src"].startswith("http") else bitrates[0]["src"]
+                                                        if data.get("title") and data["title"].strip(): trailer_title = data["title"].strip()
+                                                    except json.JSONDecodeError as je: logger.warning(f"Failed JSON decode (dvd ajax): {je}")
+                                else: logger.warning("AJAX iframe content missing or invalid.")
+                            except Exception as ajax_e: logger.exception(f"Error during DVD/BR trailer AJAX: {ajax_e}")
+
+                        # Onclick Fallback
+                        if not trailer_url:
                             onclick_xpath = '//a[@id="sample-video1"]/@onclick'
                             onclick_tags = tree.xpath(onclick_xpath)
                             if onclick_tags:
@@ -878,27 +837,25 @@ class SiteDmm:
                                     try:
                                         video_data = json.loads(video_data_str.replace('\\"', '"'))
                                         if video_data.get("video_url"): trailer_url = video_data["video_url"]
-                                    except Exception as json_e: logger.warning(f"Failed to parse JSON from onclick (v_old fallback): {json_e}")
+                                    except Exception as json_e: logger.warning(f"Failed JSON parse (dvd onclick): {json_e}")
+
                         if trailer_url:
-                            if trailer_title_from_data and trailer_title_from_data.strip(): trailer_title_to_use = trailer_title_from_data.strip()
-                            elif entity.title: trailer_title_to_use = entity.title
-                            else: trailer_title_to_use = "Trailer"
-                            entity.extras.append(EntityExtra("trailer", SiteUtil.trans(trailer_title_to_use, do_trans=do_trans), "mp4", trailer_url))
-                            logger.info(f"[DVD] Trailer added successfully for {code}")
-                        else: logger.warning(f"[DVD] No trailer URL found for {code}.")
-                    except Exception as extra_e: logger.exception(f"미리보기 처리 중 예외 (v_old): {extra_e}")
+                            final_trailer_title = SiteUtil.trans(trailer_title, do_trans=do_trans) if do_trans else trailer_title
+                            entity.extras.append(EntityExtra("trailer", final_trailer_title, "mp4", trailer_url))
+                            logger.info(f"DVD/BR Trailer added. Title: {final_trailer_title}")
+                        else: logger.warning("DVD/BR Trailer URL not found.")
+                    except Exception as extra_e: logger.exception(f"Error processing DVD/BR trailer: {extra_e}")
+                # --- 예고편 처리 끝 ---
+            except Exception as e_parse_dvd_br:
+                logger.exception(f"Error parsing DVD/Blu-ray metadata: {e_parse_dvd_br}")
 
-            except Exception as e_parse_dvd:
-                logger.exception(f"Error parsing dvd metadata (v_old logic block): {e_parse_dvd}")
-
-        else: # 타입 불명
-            logger.error(f"Cannot parse info: Unknown content type '{content_type}' for {code}")
-            # 타입 불명 시에도 entity 객체는 반환됨 (기본 정보만 포함)
+        else:
+            logger.error(f"Cannot parse info: Final content type '{content_type}' is unknown for {code}")
 
         # --- 공통 후처리 ---
-        # 최종 제목/태그라인 정리 (선택적)
-        if not entity.tagline and entity.title: entity.tagline = entity.title # 태그라인 없으면 제목으로
-        if not entity.title: # 제목이 아예 없으면 코드로
+        # Tagline/Title 정리 (VR 접두사 유지됨)
+        if not entity.tagline and entity.title: entity.tagline = entity.title
+        if not entity.title: # 제목 없으면 품번으로
             match_real_no = cls.PTN_SEARCH_REAL_NO.search(code[2:])
             final_ui_code = code[2:].upper()
             if match_real_no:
@@ -910,6 +867,7 @@ class SiteDmm:
 
         logger.debug(f"Final Parsed Entity: Title='{entity.title}', Tagline='{entity.tagline}', Thumb={len(entity.thumb) if entity.thumb else 0}, Fanart={len(entity.fanart)}, Actors={len(entity.actor) if entity.actor else 0}")
         return entity
+    # --- __info 메소드 끝 ---
 
     @classmethod
     def info(cls, code, **kwargs):
