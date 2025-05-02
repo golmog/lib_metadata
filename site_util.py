@@ -394,43 +394,71 @@ class SiteUtil:
 
     @classmethod
     def is_hq_poster(cls, im_sm, im_lg, proxy_url=None):
+        logger.debug(f"--- is_hq_poster called ---")
+        logger.debug(f"  Small Image URL: {im_sm}")
+        logger.debug(f"  Large Image URL: {im_lg}")
         try:
-            # --- imopen 호출 전에 URL 유효성 검사 ---
             if not im_sm or not isinstance(im_sm, str) or not im_lg or not isinstance(im_lg, str):
-                logger.debug("is_hq_poster: Invalid or empty URL provided.")
-                return False # 유효하지 않은 URL 입력 시 False 반환
+                logger.debug("  Result: False (Invalid or empty URL)")
+                return False
 
             im_sm_obj = cls.imopen(im_sm, proxy_url=proxy_url)
             im_lg_obj = cls.imopen(im_lg, proxy_url=proxy_url)
 
-            # --- imopen 결과 확인 ---
             if im_sm_obj is None or im_lg_obj is None:
-                logger.debug("is_hq_poster: Failed to open one or both images.")
+                logger.debug("  Result: False (Failed to open one or both images)")
                 return False
+            logger.debug("  Images opened successfully.")
 
             try:
                 from imagehash import dhash as hfun
-                ws, hs = im_sm_obj.size
-                wl, hl = im_lg_obj.size
-                if ws > wl or hs > hl: return False
-                if abs(ws / hs - wl / hl) > 0.1: return False
+                from imagehash import phash # phash도 미리 임포트
 
-                hdis = hfun(im_sm_obj) - hfun(im_lg_obj)
-                if hdis >= 14: return False
-                if hdis <= 6: return True
+                ws, hs = im_sm_obj.size; wl, hl = im_lg_obj.size
+                logger.debug(f"  Sizes: Small=({ws}x{hs}), Large=({wl}x{hl})")
+                if ws > wl or hs > hl:
+                    logger.debug("  Result: False (Small image larger than large image)")
+                    return False
 
-                from imagehash import phash
-                hdis += phash(im_sm_obj) - phash(im_lg_obj)
-                return hdis < 20
+                ratio_sm = ws / hs if hs != 0 else 0
+                ratio_lg = wl / hl if hl != 0 else 0
+                ratio_diff = abs(ratio_sm - ratio_lg)
+                logger.debug(f"  Aspect Ratios: Small={ratio_sm:.3f}, Large={ratio_lg:.3f}, Diff={ratio_diff:.3f}")
+                if ratio_diff > 0.1:
+                    logger.debug("  Result: False (Aspect ratio difference > 0.1)")
+                    return False
+
+                # dhash 비교
+                dhash_sm = hfun(im_sm_obj); dhash_lg = hfun(im_lg_obj)
+                hdis_d = dhash_sm - dhash_lg
+                logger.debug(f"  dhash distance: {hdis_d}")
+                if hdis_d >= 14:
+                    logger.debug("  Result: False (dhash distance >= 14)")
+                    return False
+                if hdis_d <= 6:
+                    logger.debug("  Result: True (dhash distance <= 6)")
+                    return True
+
+                # phash 추가 비교
+                phash_sm = phash(im_sm_obj); phash_lg = phash(im_lg_obj)
+                hdis_p = phash_sm - phash_lg
+                hdis_sum = hdis_d + hdis_p # 합산 거리
+                logger.debug(f"  phash distance: {hdis_p}, Combined distance (d+p): {hdis_sum}")
+                result = hdis_sum < 20
+                logger.debug(f"  Result: {result} (Combined distance < 20)")
+                return result
+
             except ImportError:
-                logger.warning("ImageHash library not found, cannot perform is_hq_poster check.")
+                logger.warning("  Result: False (ImageHash library not found)")
                 return False
             except Exception as hash_e:
-                logger.exception(f"Error during image hash comparison in is_hq_poster: {hash_e}")
+                logger.exception(f"  Result: False (Error during image hash comparison: {hash_e})")
                 return False
         except Exception as e:
-            logger.exception(f"고화질 포스터 확인 중 예외: {e}")
+            logger.exception(f"  Result: False (Error in is_hq_poster: {e})")
             return False
+        finally:
+            logger.debug(f"--- is_hq_poster finished ---")
 
     @classmethod
     def has_hq_poster(cls, im_sm, im_lg, proxy_url=None):
