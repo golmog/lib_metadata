@@ -632,66 +632,26 @@ class SiteDmm:
                         trailer_url = None
 
                         if is_vr_content: # ★★★ VR 처리 (일반 GET + Regex/String 파싱) ★★★
-                            logger.debug("Using VR trailer logic (Direct GET to vr-sample-player page).")
+                            logger.debug("Using VR trailer logic (Get page content and parse JS variable).")
                             vr_player_page_url = f"{cls.site_base_url}/digital/-/vr-sample-player/=/cid={cid_part}/"
                             logger.info(f"Accessing VR player page URL: {vr_player_page_url}")
 
-                            # 일반 GET 요청 헤더 사용 (AJAX 아님)
                             player_headers = cls._get_request_headers(referer=detail_url)
-                            # get_text 사용 (HTML 문자열 가져오기)
                             vr_player_html = SiteUtil.get_text(vr_player_page_url, proxy_url=proxy_url, headers=player_headers)
 
                             if vr_player_html:
-                                # --- ★★★ BODY 태그 내용 추출 및 로그 출력 ★★★ ---
-                                body_content = None
-                                # 대소문자 구분 없이 <body> 태그 사이 내용 추출 (정규식 사용)
-                                # re.DOTALL 플래그는 '.'이 개행 문자(\n)도 포함하도록 함
-                                body_match = re.search(r'<body.*?>(.*?)</body>', vr_player_html, re.IGNORECASE | re.DOTALL)
-                                if body_match:
-                                    body_content = body_match.group(1).strip() # 양쪽 공백 제거
-                                    log_max_len = 1500 # 로그 최대 길이 증가 (필요시 조절)
-                                    logger.debug(f"--- VR Player Page BODY Content (len={len(body_content)}) ---")
-                                    if len(body_content) > log_max_len:
-                                         logger.debug(body_content[:log_max_len // 2] + "\n...\n" + body_content[-log_max_len // 2:])
-                                    else:
-                                        logger.debug(body_content)
-                                    logger.debug("--- End of VR Player Page BODY Content ---")
-                                else:
-                                    logger.warning("Could not extract BODY content from VR player page HTML.")
-
-                                # 방법 1: 정규식 사용 (더 안정적일 수 있음)
-                                match_video_src = re.search(r'<video.*?src="([^"]+)"', vr_player_html, re.IGNORECASE)
-                                if match_video_src:
-                                    trailer_src = match_video_src.group(1)
+                                # --- ★★★ JavaScript 변수 'sampleUrl' 추출 (정규식 사용) ★★★ ---
+                                # var sampleUrl = "..."; 형태를 찾음 (따옴표 종류 고려)
+                                match_js_var = re.search(r'var\s+sampleUrl\s*=\s*["\']([^"\']+)["\']', vr_player_html)
+                                if match_js_var:
+                                    trailer_src = match_js_var.group(1)
+                                    # URL이 // 로 시작하면 https: 추가
                                     trailer_url = "https:" + trailer_src if trailer_src.startswith("//") else trailer_src
-                                    logger.debug(f"Extracted VR trailer URL using Regex: {trailer_url}")
+                                    logger.debug(f"Extracted VR trailer URL from 'sampleUrl' JS variable: {trailer_url}")
                                 else:
-                                    # 방법 2: 문자열 검색 (간단하지만 덜 견고함)
-                                    src_start_tag = '<video playsinline="playsinline"' # 또는 더 간단히 '<video '
-                                    src_attr_start = 'src="'
-                                    src_attr_end = '"'
-                                    start_idx = vr_player_html.find(src_start_tag)
-                                    if start_idx != -1:
-                                        src_idx = vr_player_html.find(src_attr_start, start_idx)
-                                        if src_idx != -1:
-                                            src_idx += len(src_attr_start)
-                                            end_idx = vr_player_html.find(src_attr_end, src_idx)
-                                            if end_idx != -1:
-                                                trailer_src = vr_player_html[src_idx:end_idx]
-                                                trailer_url = "https:" + trailer_src if trailer_src.startswith("//") else trailer_src
-                                                logger.debug(f"Extracted VR trailer URL using String search: {trailer_url}")
-                                            else: logger.error("VR player page: Could not find end quote for video src.")
-                                        else: logger.error("VR player page: Could not find 'src=\"' attribute in video tag.")
-                                    else: logger.error("VR player page: Could not find '<video ...>' tag.")
-                                    # lxml 파싱 재시도 (선택적)
-                                    # if not trailer_url:
-                                    #     try:
-                                    #         vr_tree = html.fromstring(vr_player_html)
-                                    #         video_tags = vr_tree.xpath("//video/@src")
-                                    #         if video_tags: trailer_url = ...
-                                    #     except Exception as e_lxml: logger.error(f"lxml parsing failed for VR player page: {e_lxml}")
-
-                            else: logger.error("Failed to get content from VR player page URL.")
+                                    logger.error("VR player page: Could not find 'sampleUrl' variable in JavaScript.")
+                            else:
+                                logger.error("Failed to get content from VR player page URL or content is empty.")
 
                         else: # ★★★ 일반 Videoa 처리 (기존 AJAX 로직) ★★★
                             logger.debug("Using Videoa AJAX trailer logic (ajax-movie).")
