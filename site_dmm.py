@@ -522,6 +522,7 @@ class SiteDmm:
                 pl_url = None; arts = []; final_poster_url = None; final_poster_crop = None
                 pl_valid = False; is_pl_vertical = False; is_pl_landscape = False
                 specific_valid = False; is_specific_vertical = False
+                ps_valid = bool(ps_url)
 
                 try:
                     raw_img_urls = cls.__img_urls(tree, content_type='videoa')
@@ -658,11 +659,10 @@ class SiteDmm:
                 if use_image_server and image_mode == '4' and image_server_url and image_server_local_path and ui_code_for_image:
                     logger.info(f"Saving images to Image Server for {ui_code_for_image} (Videoa/VR)...")
                     # PS 저장
-                    if ps_url:
-                        SiteUtil.save_image_to_server_path(ps_url, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
-                    # PL 저장 (랜드스케이프 썸네일 생성 포함)
+                    if ps_url: SiteUtil.save_image_to_server_path(ps_url, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
+                    # PL 저장 및 Landscape 썸네일 생성
                     if pl_url:
-                        pl_relative_path = SiteUtil.save_image_to_server_path(pl_url, 'pl', ...)
+                        pl_relative_path = SiteUtil.save_image_to_server_path(pl_url, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
                         if pl_relative_path:
                             landscape_server_url = f"{image_server_url}/{pl_relative_path}"
                             entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_server_url))
@@ -674,7 +674,6 @@ class SiteDmm:
                             poster_server_url = f"{image_server_url}/{p_relative_path}"
                             entity.thumb.append(EntityThumb(aspect="poster", value=poster_server_url))
                             logger.info(f"Image Server: Poster thumb generated: {poster_server_url}")
-                        else: logger.error(f"Image Server: Poster (p) save failed for {ui_code_for_image}.")
                     # Arts 저장 및 팬아트 생성
                     processed_fanart_count = 0
                     urls_to_exclude_from_arts = {final_poster_url, pl_url}
@@ -684,9 +683,8 @@ class SiteDmm:
                             art_relative_path = SiteUtil.save_image_to_server_path(art_url, 'art', image_server_local_path, image_path_segment, ui_code_for_image, art_index=idx + 1, proxy_url=proxy_url)
                             if art_relative_path:
                                 fanart_server_url = f"{image_server_url}/{art_relative_path}"
-                                entity.fanart.append(fanart_server_url)
-                                processed_fanart_count += 1
-                    logger.info(f"Image Server: Processed {processed_fanart_count} fanarts for {ui_code_for_image}.")
+                                entity.fanart.append(fanart_server_url); processed_fanart_count += 1
+                    logger.info(f"Image Server: Processed {processed_fanart_count} fanarts...")
 
                 elif not (use_image_server and image_mode == '4'): # 일반 모드 (Videoa/VR)
                     logger.info("Using Normal Image Processing Mode (Videoa/VR)...")
@@ -884,16 +882,14 @@ class SiteDmm:
                 if use_image_server and image_mode == '4' and image_server_url and image_server_local_path and ui_code_for_image:
                     logger.info(f"Saving images to Image Server for {ui_code_for_image} (DVD/BR)...")
                     # PS 저장
-                    if ps_url:
-                        SiteUtil.save_image_to_server_path(ps_url, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
-                    # PL 저장 (랜드스케이프 썸네일 생성 포함)
+                    if ps_url: SiteUtil.save_image_to_server_path(ps_url, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
+                    # PL 저장 및 Landscape 썸네일 생성
                     if pl_url:
                         pl_relative_path = SiteUtil.save_image_to_server_path(pl_url, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
                         if pl_relative_path:
                             landscape_server_url = f"{image_server_url}/{pl_relative_path}"
                             entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_server_url))
                             logger.info(f"Image Server: Landscape thumb generated (from PL): {landscape_server_url}")
-                        else: logger.warning(f"Image Server: PL save failed for {ui_code_for_image}.")
                     # 최종 Poster (p) 저장 및 썸네일 생성
                     if final_poster_url:
                         p_relative_path = SiteUtil.save_image_to_server_path(final_poster_url, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop)
@@ -901,7 +897,6 @@ class SiteDmm:
                             poster_server_url = f"{image_server_url}/{p_relative_path}"
                             entity.thumb.append(EntityThumb(aspect="poster", value=poster_server_url))
                             logger.info(f"Image Server: Poster thumb generated: {poster_server_url}")
-                        else: logger.error(f"Image Server: Poster (p) save failed for {ui_code_for_image}.")
                     # Arts 저장 및 팬아트 생성
                     processed_fanart_count = 0
                     urls_to_exclude_from_arts = {final_poster_url, pl_url}
@@ -911,9 +906,8 @@ class SiteDmm:
                             art_relative_path = SiteUtil.save_image_to_server_path(art_url, 'art', image_server_local_path, image_path_segment, ui_code_for_image, art_index=idx + 1, proxy_url=proxy_url)
                             if art_relative_path:
                                 fanart_server_url = f"{image_server_url}/{art_relative_path}"
-                                entity.fanart.append(fanart_server_url)
-                                processed_fanart_count += 1
-                    logger.info(f"Image Server: Processed {processed_fanart_count} fanarts for {ui_code_for_image}.")
+                                entity.fanart.append(fanart_server_url); processed_fanart_count += 1
+                    logger.info(f"Image Server: Processed {processed_fanart_count} fanarts...")
 
                 elif not (use_image_server and image_mode == '4'): # 일반 모드 (DVD/BR)
                     logger.info("Using Normal Image Processing Mode (DVD/BR)...")
@@ -995,7 +989,8 @@ class SiteDmm:
         fanart_len = len(entity.fanart) if isinstance(entity.fanart, list) else 0
         actor_len = len(entity.actor) if isinstance(entity.actor, list) else 0
         extras_len = len(entity.extras) if isinstance(entity.extras, list) else 0
-        logger.debug(f"Final Parsed Entity: Title='{entity.title}', Tagline='{entity.tagline}', UI Code='{entity.ui_code}', Premiered='{entity.premiered}', Thumb={thumb_len}, Fanart={fanart_len}, Actors={actor_len}, Extras={extras_len}")
+        final_ui_code_log = getattr(entity, 'ui_code', 'N/A') # ui_code 없으면 N/A
+        logger.debug(f"Final Parsed Entity: Title='{entity.title}', Tagline='{entity.tagline}', UI Code='{final_ui_code_log}', Premiered='{entity.premiered}', Thumb={thumb_len}, Fanart={fanart_len}, Actors={actor_len}, Extras={extras_len}")
         return entity
     # --- __info 메소드 끝 ---
 
