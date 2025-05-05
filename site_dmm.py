@@ -519,11 +519,9 @@ class SiteDmm:
 
                 # 이미지 URL 추출 (Videoa/VR)
                 ps_url = ps_url_from_cache
-                pl_url = None
-                arts = []
-                final_poster_url = None
-                final_poster_crop = None
-                final_landscape_url = None # Videoa/VR용 최종 랜드스케이프 URL
+                pl_url = None; arts = []; final_poster_url = None; final_poster_crop = None
+                pl_valid = False; is_pl_vertical = False; is_pl_landscape = False
+                specific_valid = False; is_specific_vertical = False
 
                 try:
                     raw_img_urls = cls.__img_urls(tree, content_type='videoa')
@@ -531,45 +529,40 @@ class SiteDmm:
                     specific_poster_candidate = raw_img_urls.get('specific_poster_candidate')
                     arts = raw_img_urls.get('arts', [])
 
-                    # 최종 포스터 결정 로직 (Videoa/VR)
-                    ps_valid = bool(ps_url); pl_valid = False; is_pl_vertical = False; is_pl_landscape = False
-                    specific_valid = False; is_specific_vertical = False; is_specific_landscape = False
                     if pl_url:
                         try:
                             im_pl = SiteUtil.imopen(pl_url, proxy_url=proxy_url)
                             if im_pl: pl_valid = True; w, h = im_pl.size; is_pl_vertical = w < h; is_pl_landscape = w > h
-                        except Exception: pass # 오류 무시
+                        except Exception: pass
+
                     if specific_poster_candidate:
-                        try:
+                        try: # specific 후보 유효성 및 세로 여부만 체크
                             im_spec = SiteUtil.imopen(specific_poster_candidate, proxy_url=proxy_url)
-                            if im_spec: specific_valid = True; w, h = im_spec.size; is_specific_vertical = w < h; is_specific_landscape = w > h
-                        except Exception: pass # 오류 무시
+                            if im_spec: specific_valid = True; w, h = im_spec.size; is_specific_vertical = w < h
+                        except Exception: pass
 
                     # 1순위: PL 처리
                     if pl_valid and ps_valid:
+                        # <<< 수정: is_hq_poster / has_hq_poster 호출 유지 >>>
                         if is_pl_vertical and SiteUtil.is_hq_poster(ps_url, pl_url, proxy_url=proxy_url):
                             final_poster_url = pl_url; final_poster_crop = None
                         elif is_pl_landscape:
-                            final_landscape_url = pl_url # 가로면 일단 랜드스케이프
                             crop_pos = SiteUtil.has_hq_poster(ps_url, pl_url, proxy_url=proxy_url)
                             if crop_pos: final_poster_url = pl_url; final_poster_crop = crop_pos
                     # 2순위: Specific 처리
-                    elif final_poster_url is None and specific_valid and ps_valid:
+                    if final_poster_url is None and specific_valid and ps_valid:
                         if is_specific_vertical and SiteUtil.is_hq_poster(ps_url, specific_poster_candidate, proxy_url=proxy_url):
                             final_poster_url = specific_poster_candidate; final_poster_crop = None
-                        elif is_specific_landscape:
-                            crop_pos = SiteUtil.has_hq_poster(ps_url, specific_poster_candidate, proxy_url=proxy_url)
-                            if crop_pos: final_poster_url = specific_poster_candidate; final_poster_crop = crop_pos
+                        else: # specific이 가로여도 크롭 시도
+                            crop_pos_spec = SiteUtil.has_hq_poster(ps_url, specific_poster_candidate, proxy_url=proxy_url)
+                            if crop_pos_spec: final_poster_url = specific_poster_candidate; final_poster_crop = crop_pos_spec
                     # 3순위: Fallback
                     if final_poster_url is None:
-                        if pl_valid and is_pl_vertical: final_poster_url = pl_url; final_poster_crop = None
-                        elif ps_valid: final_poster_url = ps_url; final_poster_crop = None
+                        if ps_valid: final_poster_url = ps_url; final_poster_crop = None
                         else: final_poster_url = None
-                    # 랜드스케이프 확정 (포스터로 쓰인 PL 제외)
-                    if final_landscape_url == final_poster_url and final_poster_url is not None: final_landscape_url = None
-                    logger.info(f"Final Image Decision (Videoa/VR): Poster='{final_poster_url}'(Crop:{final_poster_crop}), Landscape='{final_landscape_url}'")
-                except Exception as e_img_det: logger.exception(f"Videoa/VR: Error determining final images: {e_img_det}")
 
+                    logger.info(f"Final Image Decision (Videoa/VR): Poster='{final_poster_url}'(Crop:{final_poster_crop}), Landscape will use PL ('{pl_url}') if available.")
+                except Exception as e_img_det: logger.exception(f"Videoa/VR: Error determining final images: {e_img_det}")
 
                 # 메타데이터 파싱 (Videoa/VR)
                 info_table_xpath = '//table[contains(@class, "mg-b20")]//tr'
@@ -669,16 +662,11 @@ class SiteDmm:
                         SiteUtil.save_image_to_server_path(ps_url, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
                     # PL 저장 (랜드스케이프 썸네일 생성 포함)
                     if pl_url:
-                        pl_relative_path = SiteUtil.save_image_to_server_path(pl_url, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
+                        pl_relative_path = SiteUtil.save_image_to_server_path(pl_url, 'pl', ...)
                         if pl_relative_path:
-                            # PL이 최종 랜드스케이프로 결정된 경우에만 썸네일 추가
-                            if pl_url == final_landscape_url:
-                                landscape_server_url = f"{image_server_url}/{pl_relative_path}"
-                                entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_server_url))
-                                logger.info(f"Image Server: Landscape thumb generated (from PL): {landscape_server_url}")
-                            else:
-                                logger.debug("Image Server: PL saved, but not used as final landscape.")
-                        else: logger.warning(f"Image Server: PL save failed for {ui_code_for_image}.")
+                            landscape_server_url = f"{image_server_url}/{pl_relative_path}"
+                            entity.thumb.append(EntityThumb(aspect="landscape", value=landscape_server_url))
+                            logger.info(f"Image Server: Landscape thumb generated (from PL): {landscape_server_url}")
                     # 최종 Poster (p) 저장 및 썸네일 생성
                     if final_poster_url:
                         p_relative_path = SiteUtil.save_image_to_server_path(final_poster_url, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop)
@@ -689,7 +677,7 @@ class SiteDmm:
                         else: logger.error(f"Image Server: Poster (p) save failed for {ui_code_for_image}.")
                     # Arts 저장 및 팬아트 생성
                     processed_fanart_count = 0
-                    urls_to_exclude_from_arts = {final_poster_url, final_landscape_url} # 최종 결정된 URL 제외
+                    urls_to_exclude_from_arts = {final_poster_url, pl_url}
                     for idx, art_url in enumerate(arts):
                         if processed_fanart_count >= max_arts: break
                         if art_url and art_url not in urls_to_exclude_from_arts:
@@ -702,14 +690,17 @@ class SiteDmm:
 
                 elif not (use_image_server and image_mode == '4'): # 일반 모드 (Videoa/VR)
                     logger.info("Using Normal Image Processing Mode (Videoa/VR)...")
-                    if final_landscape_url:
-                        processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_url, proxy_url=proxy_url)
-                        if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
+
+                    if pl_url and pl_url != final_poster_url: # PL이 있고 포스터로 안 쓰였으면
+                        try:
+                            processed_landscape = SiteUtil.process_image_mode(image_mode, pl_url, proxy_url=proxy_url)
+                            if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
+                        except Exception as e_proc_land: logger.error(f"Error processing landscape (normal): {e_proc_land}")
                     if final_poster_url:
                         processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_url, proxy_url=proxy_url, crop_mode=final_poster_crop)
                         if processed_poster: entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
                     processed_fanart_count = 0
-                    urls_to_exclude_from_arts = {final_poster_url, final_landscape_url}
+                    urls_to_exclude_from_arts = {final_poster_url, pl_url}
                     for art_url in arts:
                         if processed_fanart_count >= max_arts: break
                         if art_url and art_url not in urls_to_exclude_from_arts:
@@ -913,7 +904,7 @@ class SiteDmm:
                         else: logger.error(f"Image Server: Poster (p) save failed for {ui_code_for_image}.")
                     # Arts 저장 및 팬아트 생성
                     processed_fanart_count = 0
-                    urls_to_exclude_from_arts = {final_poster_url, pl_url} # 아트에서 포스터와 PL 제외
+                    urls_to_exclude_from_arts = {final_poster_url, pl_url}
                     for idx, art_url in enumerate(arts):
                         if processed_fanart_count >= max_arts: break
                         if art_url and art_url not in urls_to_exclude_from_arts:
