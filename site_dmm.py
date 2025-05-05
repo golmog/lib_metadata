@@ -186,7 +186,7 @@ class SiteDmm:
                 # --- 제목 접두사 추가 ---
                 type_prefix = ""
                 if content_type == 'dvd': type_prefix = "[DVD] "
-                elif content_type == 'videoa': type_prefix = "[DigitalVideo] "
+                elif content_type == 'videoa': type_prefix = "[VideoA] "
                 elif content_type == 'bluray': type_prefix = "[Blu-ray] " # 블루레이 접두사
 
                 # 제목 최종 설정 (접두사 포함)
