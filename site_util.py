@@ -212,13 +212,15 @@ class SiteUtil:
             ret = Util.make_apikey(tmp)
         elif image_mode == "3":  # 고정 디스코드 URL.
             ret = cls.discord_proxy_image(image_url, proxy_url=proxy_url, crop_mode=crop_mode)
-        elif image_mode == "4":  # landscape to poster
-            # logger.debug(image_url)
-            ret = "{ddns}/metadata/normal/image_process.jpg?mode=landscape_to_poster&url=" + py_urllib.quote_plus(
-                image_url
-            )
-            ret = ret.format(ddns=SystemModelSetting.get("ddns"))
-            # ret = Util.make_apikey(tmp)
+        # elif image_mode == "4":  # landscape to poster (사용 중지됨)
+        #     # logger.debug(image_url)
+        #     # ret = "{ddns}/metadata/normal/image_process.jpg?mode=landscape_to_poster&url=" + py_urllib.quote_plus(
+        #     #     image_url
+        #     # )
+        #     # ret = ret.format(ddns=SystemModelSetting.get("ddns"))
+        #     # ret = Util.make_apikey(tmp)
+        #     logger.warning("Image Mode 4 (landscape_to_poster) is deprecated and ignored.")
+        #     # 이미지 서버 모드(4)는 이 함수에서 처리하지 않음. 호출하는 쪽에서 분기.
         elif image_mode == "5":  # 로컬에 포스터를 만들고
             # image_url : 디스코드에 올라간 표지 url 임.
             im = cls.imopen(image_url, proxy_url=proxy_url)
@@ -233,6 +235,124 @@ class SiteUtil:
             # logger.debug('poster_url : %s', poster_url)
             ret = cls.discord_proxy_image_localfile(filepath)
         return ret
+
+    @classmethod
+    def save_image_to_server_path(cls, image_url: str, image_type: str, base_path: str, path_segment: str, ui_code: str, art_index: int = None, proxy_url: str = None, crop_mode: str = None):
+        """
+        이미지를 다운로드하여 지정된 로컬 경로에 저장하고, 웹 서버 접근용 상대 경로를 반환합니다.
+
+        :param image_url: 다운로드할 원본 이미지 URL
+        :param image_type: 이미지 종류 ('ps', 'pl', 'p', 'art')
+        :param base_path: 로컬 저장 기본 경로 (설정값: jav_censored_image_server_local_path)
+        :param path_segment: 하위 경로 세그먼트 (예: 'jav/cen')
+        :param ui_code: 파일명 생성에 사용될 코드 (예: 'ABP-123')
+        :param art_index: 이미지 타입이 'art'일 경우 파일명에 사용될 인덱스
+        :param proxy_url: 이미지 다운로드 시 사용할 프록시 URL
+        :param crop_mode: 이미지 타입이 'p'일 경우 적용할 크롭 모드 ('l', 'r', 'c')
+        :return: 저장 성공 시 상대 경로 (예: 'jav/cen/A/ABP/abp-123_p.jpg'), 실패 시 None
+        """
+        if not all([image_url, image_type, base_path, path_segment, ui_code]):
+            logger.warning("save_image_to_server_path: 필수 인자 누락.")
+            return None
+        if image_type not in ['ps', 'pl', 'p', 'art']:
+            logger.warning(f"save_image_to_server_path: 유효하지 않은 image_type: {image_type}")
+            return None
+        if image_type == 'art' and art_index is None:
+            logger.warning("save_image_to_server_path: image_type='art'일 때 art_index 필요.")
+            return None
+
+        try:
+            # 1. 경로 및 파일명 생성 준비
+            ui_code_parts = ui_code.split('-')
+            if not ui_code_parts:
+                logger.error(f"save_image_to_server_path: 유효하지 않은 ui_code 형식: {ui_code}")
+                return None
+            label = ui_code_parts[0].upper()
+            first_char = label[0] if label[0].isalpha() else '09'
+
+            # 2. 이미지 다운로드 및 정보 확인
+            im = cls.imopen(image_url, proxy_url=proxy_url)
+            if im is None:
+                logger.warning(f"save_image_to_server_path: 이미지 열기 실패: {image_url}")
+                return None
+
+            # 3. 확장자 결정 및 허용 여부 확인
+            original_format = im.format
+            if not original_format: # PIL에서 format을 못 읽는 경우 대비 (거의 없음)
+                ext_match = re.search(r'\.(jpg|jpeg|png|webp|gif)(\?|$)', image_url.lower())
+                if ext_match: original_format = ext_match.group(1).upper()
+                else: original_format = "JPEG" # 기본값 JPEG
+                logger.debug(f"PIL format missing, deduced format: {original_format} from URL: {image_url}")
+
+            ext = original_format.lower()
+            if ext == 'jpeg': ext = 'jpg' # jpeg는 jpg로 통일
+
+            allowed_exts = ['jpg', 'png', 'webp']
+            if ext not in allowed_exts:
+                logger.warning(f"save_image_to_server_path: 지원하지 않는 이미지 포맷: {ext} ({image_url})")
+                return None # gif 등 처리 안 함
+
+            # 4. 최종 저장 경로 및 파일명 결정
+            save_dir = os.path.join(base_path, path_segment, first_char, label)
+            if image_type == 'art':
+                filename = f"{ui_code.lower()}_art_{art_index}.{ext}"
+            else:
+                filename = f"{ui_code.lower()}_{image_type}.{ext}"
+            save_filepath = os.path.join(save_dir, filename)
+
+            # 5. 파일 존재 여부 확인 (존재 시 패스)
+            if os.path.exists(save_filepath):
+                logger.debug(f"save_image_to_server_path: 파일 이미 존재함: {save_filepath}")
+                # 이미 존재해도 상대 경로는 반환해야 함
+                relative_path = os.path.join(path_segment, first_char, label, filename).replace("\\", "/")
+                return relative_path
+
+            # 6. 디렉토리 생성
+            os.makedirs(save_dir, exist_ok=True)
+
+            # 7. 이미지 크롭 (필요 시)
+            if image_type == 'p' and crop_mode in ['l', 'r', 'c']:
+                logger.debug(f"save_image_to_server_path: 이미지 크롭 적용 (type='p', mode='{crop_mode}')")
+                im = cls.imcrop(im, position=crop_mode)
+                if im is None: # 크롭 실패 시
+                    logger.error(f"save_image_to_server_path: 크롭 실패: {image_url}")
+                    return None
+
+            # 8. 이미지 저장
+            logger.debug(f"save_image_to_server_path: 저장 시도: {save_filepath}")
+            # Pillow는 기본적으로 원본 포맷 유지 시도. PNG에 quality 지정 시 오류 발생 가능.
+            save_kwargs = {'quality': 95} if ext == 'jpg' or ext == 'webp' else {}
+            try:
+                im.save(save_filepath, **save_kwargs)
+            except OSError as e: # PNG에 quality 지정 등
+                logger.warning(f"save_image_to_server_path: 저장 중 OS 오류 발생 (포맷 변환 시도): {e}")
+                try:
+                    # RGB 변환 후 JPEG로 저장 시도
+                    im = im.convert("RGB")
+                    ext = 'jpg' # 확장자 변경
+                    filename = f"{ui_code.lower()}_{image_type}.{ext}" if image_type != 'art' else f"{ui_code.lower()}_art_{art_index}.{ext}"
+                    save_filepath = os.path.join(save_dir, filename)
+                    if os.path.exists(save_filepath): # 변환 후 파일명도 체크
+                        logger.debug(f"save_image_to_server_path: 변환된 파일 이미 존재함: {save_filepath}")
+                        relative_path = os.path.join(path_segment, first_char, label, filename).replace("\\", "/")
+                        return relative_path
+                    im.save(save_filepath, quality=95)
+                    logger.info(f"save_image_to_server_path: 원본 포맷 저장 실패, JPEG 변환 저장 성공: {save_filepath}")
+                except Exception as e_save_retry:
+                    logger.exception(f"save_image_to_server_path: JPEG 변환 저장 재시도 실패: {e_save_retry}")
+                    return None
+            except Exception as e_save:
+                logger.exception(f"save_image_to_server_path: 이미지 저장 실패: {e_save}")
+                return None
+
+            # 9. 성공 시 상대 경로 반환
+            relative_path = os.path.join(path_segment, first_char, label, filename).replace("\\", "/")
+            logger.info(f"save_image_to_server_path: 저장 성공: {relative_path}")
+            return relative_path
+
+        except Exception as e:
+            logger.exception(f"save_image_to_server_path: 처리 중 예외 발생: {e}")
+            return None
 
     @classmethod
     def __shiroutoname_info(cls, keyword):
