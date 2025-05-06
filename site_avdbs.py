@@ -5,7 +5,7 @@ import json
 import os
 import sqlite3
 import re
-from urllib.parse import urljoin # urljoin 추가
+from urllib.parse import urljoin
 
 # lib_metadata 공용 요소들
 from .plugin import P
@@ -39,9 +39,6 @@ class SiteAvdbs:
         logger.info(f"WEB Fallback: Avdbs.com 에서 '{originalname}' 정보 직접 검색 시작.")
         proxy_url = kwargs.get('proxy_url')
         image_mode = kwargs.get('image_mode', '0')
-        use_image_transform = kwargs.get('use_image_transform', False)
-        image_transform_source = kwargs.get('image_transform_source', '')
-        image_transform_target = kwargs.get('image_transform_target', '')
 
         with requests.Session() as s:
             enhanced_headers = {
@@ -99,12 +96,7 @@ class SiteAvdbs:
                             img_url_raw = img_tag[0].strip()
                             if not img_url_raw.startswith('http'): img_url_raw = urljoin(SiteAvdbs.base_url, img_url_raw)
 
-                            final_thumb_url = img_url_raw
-                            if use_image_transform and image_transform_source and final_thumb_url.startswith(image_transform_source):
-                                final_thumb_url = final_thumb_url.replace(image_transform_source, image_transform_target, 1)
-                                logger.debug(f"WEB: Image URL transformed: {final_thumb_url}")
-
-                            processed_thumb = SiteUtil.process_image_mode(image_mode, final_thumb_url, proxy_url=proxy_url)
+                            processed_thumb = SiteUtil.process_image_mode(image_mode, img_url_raw, proxy_url=proxy_url)
 
                             return {"name": name_ko_raw, "name2": name_en_raw, "site": "avdbs_web", "thumb": processed_thumb}
                     except Exception as e_item: logger.exception(f"WEB: Error processing item at index {idx}: {e_item}")
@@ -115,20 +107,41 @@ class SiteAvdbs:
 
 
     @staticmethod
-    def _parse_and_match_other_names(other_names_str, originalname):
-        """actor_onm 필드를 파싱하여 originalname과 정확히 일치하는지 확인"""
-        if not other_names_str or not originalname: return False
-        for name_part in other_names_str.split(','):
-            name_part = name_part.strip()
-            if not name_part: continue
-            match_bracket = re.search(r'\(([^)]+)\)', name_part)
-            if match_bracket:
-                names_in_bracket_str = match_bracket.group(1).strip()
-                japanese_names_in_bracket = [name.strip() for name in names_in_bracket_str.split('/') if name.strip()]
-                for jp_name in japanese_names_in_bracket:
-                    if jp_name == originalname: return True
-            name_part_without_bracket = re.sub(r'\s*\(.*\)', '', name_part).strip()
-            if name_part_without_bracket == originalname: return True
+    def _parse_and_match_other_names(other_names_str, target_jp_name):
+        """
+        actor_onm 문자열에서 다양한 패턴의 이름을 파싱하여
+        target_jp_name (검색 대상 일본어 이름)과 정확히 일치하는지 확인.
+        """
+        if not other_names_str or not target_jp_name:
+            return False
+
+        name_chunks = [chunk.strip() for chunk in other_names_str.split(',') if chunk.strip()]
+
+        for chunk in name_chunks:
+            match_paren = re.match(r'^(.*?)\s*[（\(]([^）\)]+)[）\)]\s*$', chunk)
+            match_paren_only = re.match(r'^\s*[（\(]([^）\)]+)[）\)]\s*$', chunk)
+            
+            japanese_name_candidates = []
+
+            if match_paren:
+                inside_paren_content = match_paren.group(2).strip()
+                japanese_name_candidates.extend(
+                    [name.strip() for name in inside_paren_content.split('/') if name.strip()]
+                )
+            elif match_paren_only:
+                inside_paren_content = match_paren_only.group(1).strip()
+                japanese_name_candidates.extend(
+                    [name.strip() for name in inside_paren_content.split('/') if name.strip()]
+                )
+            else: # 괄호 없는 경우
+                japanese_name_candidates.extend(
+                    [name.strip() for name in chunk.split('/') if name.strip()]
+                )
+
+            for jp_candidate in japanese_name_candidates:
+                if jp_candidate == target_jp_name:
+                    logger.debug(f"정확한 일본어 이름 매칭: '{target_jp_name}' 발견 in chunk '{chunk}' as '{jp_candidate}'")
+                    return True
         return False
 
     @staticmethod
@@ -159,12 +172,10 @@ class SiteAvdbs:
         local_db_path = kwargs.get('local_db_path') if use_local_db else None
         proxy_url = kwargs.get('proxy_url')
         image_mode = kwargs.get('image_mode', '0')
-        use_image_transform = kwargs.get('use_image_transform', False)
-        image_transform_source = kwargs.get('image_transform_source', '') if use_image_transform else ''
-        image_transform_target = kwargs.get('image_transform_target', '') if use_image_transform else ''
         db_image_base_url = kwargs.get('db_image_base_url', '')
+        site_name_for_db = kwargs.get('site_name_for_db_query', SiteAvdbs.site_name)
 
-        logger.info(f"배우 정보 검색 시작: '{original_input_name}' (DB:{use_local_db}, Transform:{use_image_transform})")
+        logger.info(f"배우 정보 검색 시작: '{original_input_name}' (DB:{use_local_db}, SiteForDB:{site_name_for_db}, Prefix:'{db_image_base_url}')")
 
         name_variations_to_search = SiteAvdbs._parse_name_variations(original_input_name)
         final_info = None
@@ -177,44 +188,47 @@ class SiteAvdbs:
                 conn = sqlite3.connect(db_uri, uri=True, timeout=10)
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
-                logger.debug(f"로컬 DB 연결 성공: {local_db_path}")
+                logger.debug(f"로컬 배우DB 연결 성공: {local_db_path}")
 
                 for current_search_name in name_variations_to_search:
-                    logger.debug(f"DB 검색 시도: '{current_search_name}'")
+                    logger.debug(f"DB 검색 시도: '{current_search_name}' (Site: {site_name_for_db})")
                     row = None
-                    cursor.execute("SELECT inner_name_kr, inner_name_en, profile_img_view FROM actors WHERE inner_name_cn = ? LIMIT 1", (current_search_name,))
+                    # 1단계: inner_name_cn + site
+                    query1 = "SELECT inner_name_kr, inner_name_en, profile_img_path FROM actors WHERE site = ? AND inner_name_cn = ? LIMIT 1"
+                    cursor.execute(query1, (site_name_for_db, current_search_name))
                     row = cursor.fetchone()
                     if not row:
-                        cursor.execute("SELECT inner_name_kr, inner_name_en, profile_img_view, actor_onm FROM actors WHERE actor_onm LIKE ?", (f"%{current_search_name}%",))
+                        query2 = "SELECT inner_name_kr, inner_name_en, profile_img_path, actor_onm FROM actors WHERE site = ? AND actor_onm LIKE ?"
+                        cursor.execute(query2, (site_name_for_db, f"%{current_search_name}%"))
                         potential_rows = cursor.fetchall()
                         if potential_rows:
                             for potential_row in potential_rows:
                                 if SiteAvdbs._parse_and_match_other_names(potential_row["actor_onm"], current_search_name):
                                     row = potential_row; break
                     if not row:
-                        cursor.execute("SELECT inner_name_kr, inner_name_en, profile_img_view FROM actors WHERE inner_name_kr = ? OR inner_name_en = ? OR inner_name_en LIKE ? LIMIT 1", (current_search_name, current_search_name, f"%({current_search_name})%"))
+                        query3 = "SELECT inner_name_kr, inner_name_en, profile_img_path FROM actors WHERE site = ? AND (inner_name_kr = ? OR inner_name_en = ? OR inner_name_en LIKE ?) LIMIT 1"
+                        cursor.execute(query3, (site_name_for_db, current_search_name, current_search_name, f"%({current_search_name})%"))
                         row = cursor.fetchone()
 
                     if row:
                         korean_name = row["inner_name_kr"]
                         name2_field = row["inner_name_en"] if row["inner_name_en"] else ""
-                        db_relative_path = row["profile_img_view"]
+                        db_relative_path = row["profile_img_path"]
                         thumb_url = ""
 
                         if db_relative_path:
                             if db_image_base_url:
                                 thumb_url = db_image_base_url.rstrip('/') + '/' + db_relative_path.lstrip('/')
-                            else: thumb_url = db_relative_path
-
-                            if use_image_transform and image_transform_source and thumb_url.startswith(image_transform_source):
-                                thumb_url = thumb_url.replace(image_transform_source, image_transform_target, 1)
-                                logger.debug(f"DB: 이미지 URL 변환 적용됨 -> {thumb_url}")
+                                logger.debug(f"DB: 이미지 URL 생성 (Prefix 사용): {thumb_url}")
+                            else:
+                                thumb_url = db_relative_path
+                                logger.warning(f"DB: jav_actor_img_url_prefix 설정 없음. 상대 경로 사용: {thumb_url}")
 
                             if DISCORD_UTIL_AVAILABLE and thumb_url and DiscordUtil.isurlattachment(thumb_url) and DiscordUtil.isurlexpired(thumb_url):
-                                logger.warning(f"DB: 만료된 Discord URL 발견, 갱신 시도...")
+                                logger.warning(f"DB: 만료된 Discord URL 발견, 갱신 시도: {thumb_url}")
                                 try:
                                     renewed_data = DiscordUtil.renew_urls({"thumb": thumb_url})
-                                    if renewed_data and renewed_data.get("thumb") != thumb_url:
+                                    if renewed_data and renewed_data.get("thumb") and renewed_data.get("thumb") != thumb_url:
                                         thumb_url = renewed_data.get("thumb"); logger.info(f"DB: Discord URL 갱신 성공 -> {thumb_url}")
                                 except Exception as e_renew: logger.error(f"DB: Discord URL 갱신 중 예외: {e_renew}")
 
@@ -224,27 +238,22 @@ class SiteAvdbs:
 
                         if korean_name and thumb_url:
                             logger.info(f"DB에서 '{current_search_name}' 유효 정보 찾음 ({korean_name}).")
-                            final_info = {"name": korean_name, "name2": name2_field, "thumb": thumb_url, "site": "avdbs_db"}
+                            final_info = {"name": korean_name, "name2": name2_field, "thumb": thumb_url, "site": f"{site_name_for_db}_db"}
                             db_found_valid = True
                             break
-                        # else: logger.debug(f"DB 결과 필수 정보 부족.")
-                    # else: logger.debug(f"DB에서 '{current_search_name}' 정보 찾지 못함.")
-
             except sqlite3.Error as e: logger.error(f"DB 조회 중 오류: {e}")
             except Exception as e_db: logger.exception(f"DB 처리 중 예상치 못한 오류: {e_db}")
             finally:
                 if conn: conn.close()
-        elif use_local_db: logger.warning(f"로컬 DB 사용 설정되었으나 경로 문제: {local_db_path}")
+        elif use_local_db: logger.warning(f"로컬 배우DB 사용 설정되었으나 경로 문제: {local_db_path}")
 
         if not db_found_valid:
             logger.info(f"DB 조회 실패 또는 미사용, 웹 스크래핑 시도: '{original_input_name}'")
             web_info = None
             try:
                 web_kwargs = {
-                    'proxy_url': proxy_url, 'image_mode': image_mode,
-                    'use_image_transform': use_image_transform,
-                    'image_transform_source': image_transform_source,
-                    'image_transform_target': image_transform_target
+                    'proxy_url': proxy_url,
+                    'image_mode': image_mode
                 }
                 web_info = SiteAvdbs.__get_actor_info_from_web(original_input_name, **web_kwargs)
             except Exception as e_web: logger.exception(f"WEB: Fallback 중 예외 발생: {e_web}")
