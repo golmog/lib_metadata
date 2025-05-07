@@ -318,26 +318,22 @@ class SiteUtil:
                     logger.error(f"save_image_to_server_path: 크롭 실패: {image_url}")
                     return None
 
-            # 8. 이미지 저장
-            logger.debug(f"save_image_to_server_path: 저장 시도: {save_filepath}")
-            # Pillow는 기본적으로 원본 포맷 유지 시도. PNG에 quality 지정 시 오류 발생 가능.
+            # 8. 이미지 저장 (PIL.Image.save()는 기본적으로 덮어씀)
+            logger.debug(f"save_image_to_server_path: 저장 시도 (덮어쓰기 가능): {save_filepath}")
             save_kwargs = {'quality': 95} if ext == 'jpg' or ext == 'webp' else {}
             try:
                 im.save(save_filepath, **save_kwargs)
-            except OSError as e: # PNG에 quality 지정 등
+            except OSError as e:
                 logger.warning(f"save_image_to_server_path: 저장 중 OS 오류 발생 (포맷 변환 시도): {e}")
                 try:
-                    # RGB 변환 후 JPEG로 저장 시도
                     im = im.convert("RGB")
-                    ext = 'jpg' # 확장자 변경
-                    filename = f"{ui_code.lower()}_{image_type}.{ext}" if image_type != 'art' else f"{ui_code.lower()}_art_{art_index}.{ext}"
-                    save_filepath = os.path.join(save_dir, filename)
-                    if os.path.exists(save_filepath): # 변환 후 파일명도 체크
-                        logger.debug(f"save_image_to_server_path: 변환된 파일 이미 존재함: {save_filepath}")
-                        relative_path = os.path.join(path_segment, first_char, label, filename).replace("\\", "/")
-                        return relative_path
-                    im.save(save_filepath, quality=95)
-                    logger.info(f"save_image_to_server_path: 원본 포맷 저장 실패, JPEG 변환 저장 성공: {save_filepath}")
+                    ext_new = 'jpg'
+                    filename_new = f"{os.path.splitext(filename)[0]}.{ext_new}"
+                    save_filepath_new = os.path.join(save_dir, filename_new)
+                    
+                    im.save(save_filepath_new, quality=95)
+                    logger.info(f"save_image_to_server_path: 원본 포맷 저장 실패, JPEG 변환 저장 성공: {save_filepath_new}")
+                    filename = filename_new
                 except Exception as e_save_retry:
                     logger.exception(f"save_image_to_server_path: JPEG 변환 저장 재시도 실패: {e_save_retry}")
                     return None
