@@ -3,7 +3,7 @@ import re
 from lxml import html
 
 from .entity_av import EntityAVSearch
-from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings
+from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
 from .plugin import P
 from .site_util import SiteUtil
 
