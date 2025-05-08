@@ -245,35 +245,29 @@ class SiteAvdbs:
             except Exception as e_db: logger.exception(f"DB 처리 중 예상치 못한 오류: {e_db}")
             finally:
                 if conn: conn.close()
-        elif use_local_db: logger.warning(f"로컬 배우DB 사용 설정되었으나 경로 문제: {local_db_path}")
 
-        if not db_found_valid:
-            logger.info(f"DB 조회 실패 또는 미사용, 웹 스크래핑 시도: '{original_input_name}'")
-            web_info = None
-            try:
-                web_kwargs = {
-                    'proxy_url': proxy_url,
-                    'image_mode': image_mode
-                }
-                web_info = SiteAvdbs.__get_actor_info_from_web(original_input_name, **web_kwargs)
-            except Exception as e_web: logger.exception(f"WEB: Fallback 중 예외 발생: {e_web}")
+        elif use_local_db: 
+            logger.warning(f"로컬 배우DB 사용 설정되었으나 경로 문제: {local_db_path}")
+        else:
+            logger.info("로컬 배우DB 사용 안 함.")
 
-            if web_info and web_info.get("name") and web_info.get("thumb"):
-                logger.info(f"WEB: 웹 스크래핑으로 '{original_input_name}' 유효 정보 찾음.")
-                final_info = web_info
-
-        if final_info is not None:
+        # 최종 결과 처리 (DB 검색 결과만 반영)
+        if final_info is not None: # final_info는 DB 검색 성공 시에만 값이 할당됨
             update_count = 0
+            # entity_actor 업데이트
             if final_info.get("name"): entity_actor["name"] = final_info["name"]; update_count += 1
             if final_info.get("name2"): entity_actor["name2"] = final_info["name2"]; update_count += 1
             if final_info.get("thumb"): entity_actor["thumb"] = final_info["thumb"]; update_count += 1
-            entity_actor["site"] = final_info.get("site", "unknown")
+            entity_actor["site"] = final_info.get("site", "unknown_db") # site 정보 업데이트
 
             if update_count > 0: logger.info(f"'{original_input_name}' 최종 정보 업데이트 완료 (출처: {entity_actor['site']}).")
-            else: logger.warning(f"'{original_input_name}' 최종 정보가 비어있어 업데이트 안 함.")
-            return True
+            else: logger.warning(f"'{original_input_name}' DB 정보는 찾았으나 업데이트할 유효 필드 부족.") # 이 경우는 거의 없음
+            return True # DB 검색 성공 및 업데이트 완료
         else:
-            logger.info(f"'{original_input_name}'에 대한 최종 정보 없음 (DB 및 웹 검색 실패).")
+            # DB에서 정보를 찾지 못한 경우
+            logger.info(f"'{original_input_name}'에 대한 정보를 DB에서 찾지 못함.")
+            # 이름 정보가 없을 경우 originalname으로 대체 (선택적)
             if not entity_actor.get('name') and entity_actor.get('originalname'):
                 entity_actor['name'] = entity_actor.get('originalname')
-            return False
+                logger.debug("DB 검색 실패 후 이름 필드를 originalname으로 설정.")
+            return False # DB 검색 실패

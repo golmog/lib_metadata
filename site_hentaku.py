@@ -39,19 +39,24 @@ class SiteHentaku:
         return None
 
     @staticmethod
-    def get_actor_info(entity_actor, **kwargs):
+    def get_actor_info(entity_actor, **kwargs) -> bool:
         retry = kwargs.pop("retry", True)
+        info = None
         try:
             info = SiteHentaku.__get_actor_info(entity_actor["originalname"], **kwargs)
-        except Exception:
-            # 2020-06-01
-            # 단시간에 많은 요청시시 Error발생
+        except Exception as e_hentaku:
+            logger.warning(f"Hentaku 정보 조회 중 예외 발생: {e_hentaku}")
             if retry:
-                logger.debug("단시간 많은 요청으로 재시도")
+                logger.debug("Hentaku: 단시간 많은 요청으로 2초 후 재시도")
                 time.sleep(2)
                 return SiteHentaku.get_actor_info(entity_actor, retry=False, **kwargs)
-            logger.exception("배우 정보 업데이트 중 예외: originalname=%s", entity_actor["originalname"])
+            logger.exception("Hentaku: 배우 정보 업데이트 중 최종 예외: originalname=%s", entity_actor["originalname"])
+            return False
+
+        if info is not None:
+            logger.info(f"Hentaku: '{entity_actor['originalname']}' 정보 찾음. 업데이트 수행.")
+            entity_actor.update(info)
+            return True
         else:
-            if info is not None:
-                entity_actor.update(info)
-        return entity_actor
+            logger.info(f"Hentaku: '{entity_actor['originalname']}' 정보 찾지 못함.")
+            return False
