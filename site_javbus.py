@@ -133,21 +133,28 @@ class SiteJavbus:
         image_server_url = kwargs.get('image_server_url', '').rstrip('/') if use_image_server else ''
         image_server_local_path = kwargs.get('image_server_local_path', '') if use_image_server else ''
         image_path_segment = kwargs.get('url_prefix_segment', 'unknown/unknown')
-        # ps_to_poster, crop_mode는 kwargs 값 우선 사용
         ps_to_poster_setting = kwargs.get('ps_to_poster', ps_to_poster)
         crop_mode_setting = kwargs.get('crop_mode', crop_mode)
-        # --- 설정값 추출 끝 ---
 
         url = f"{cls.site_base_url}/{code[2:]}"
         headers = SiteUtil.default_headers.copy(); headers['Referer'] = cls.site_base_url + "/"
-        tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=headers, verify=False)
+
+        tree = None
+        try:
+            tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=headers, verify=False)
+            if tree is None or not tree.xpath('/html/body/div[5]/div[1]/div[@class="container-fluid"]'): 
+                logger.error(f"JavBus: Failed to get valid detail page tree for {code}. URL: {url}")
+                return None
+        except Exception as e_get_tree:
+            logger.exception(f"JavBus: Exception while getting detail page for {code}: {e_get_tree}")
+            return None
 
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
         entity.thumb = []
         entity.fanart = []
         entity.extras = []
-        ui_code_for_image = "" # 이미지 파일명용 최종 UI 코드
+        ui_code_for_image = "" 
 
         # --- 이미지 처리 로직 (Image Server Mode vs Normal Mode) ---
         img_urls_result = {}
@@ -190,73 +197,97 @@ class SiteJavbus:
         # --- 이미지 처리 설정 끝 ---
 
         # --- 메타데이터 파싱 시작 (JavBus) ---
+        identifier_parsed = False # 식별 코드 파싱 성공 여부 플래그
         try:
-            tags = tree.xpath("/html/body/div[5]/div[1]/div[2]/p")
+            tags = tree.xpath("/html/body/div[5]/div[1]/div[2]/p") # 정보 테이블의 <p> 태그들
+            if not tags: logger.warning(f"JavBus: Metadata <p> tags not found for {code}.")
+
             for tag in tags:
-                tmps = tag.text_content().strip().split(":")
-                key = ""; value = ""
-                if len(tmps) == 2: key = tmps[0].strip(); value = tmps[1].strip()
-                elif len(tmps) == 1: value = tmps[0].strip().replace(" ", "").replace("\t", "").replace("\r\n", " ").strip()
+                # 각 태그 파싱 시 예외 처리 추가
+                try:
+                    tmps = tag.text_content().strip().split(":")
+                    key = ""; value = ""
+                    if len(tmps) == 2: key = tmps[0].strip(); value = tmps[1].strip()
+                    elif len(tmps) == 1: value = tmps[0].strip().replace(" ", "").replace("\t", "").replace("\r\n", " ").strip()
+                    if not value: continue # 값이 없으면 다음 태그로
 
-                if not value: continue
+                    # --- 識別碼 (식별 코드) 파싱 ---
+                    if key == "識別碼":
+                        formatted_code = value.upper()
+                        try:
+                            label, num = value.split("-")
+                            formatted_code = f"{label}-{num.lstrip('0').zfill(3)}"
+                            if entity.tag is None: entity.tag = []
+                            if label not in entity.tag: entity.tag.append(label)
+                        except Exception: pass 
+                        entity.title = entity.originaltitle = entity.sorttitle = formatted_code
+                        ui_code_for_image = formatted_code 
+                        entity.ui_code = ui_code_for_image
+                        identifier_parsed = True # 식별 코드 파싱 성공!
+                        logger.debug(f"JavBus: Identifier parsed: {formatted_code}")
+                        continue # 식별 코드 처리 후 다음 태그로
 
-                if key == "識別碼":
-                    formatted_code = value.upper() # 기본값
-                    try:
-                        label, num = value.split("-")
-                        formatted_code = f"{label}-{num.lstrip('0').zfill(3)}"
+                    # --- 다른 메타데이터 파싱 (식별 코드가 파싱된 후에만 의미 있을 수 있음) ---
+                    # (이하 파싱 로직은 이전과 동일하되, Optional 정보 실패는 Warning으로 처리)
+                    elif key == "發行日期":
+                        if value != "0000-00-00": entity.premiered = value; entity.year = int(value[:4])
+                        else: entity.premiered = "1999-12-31"; entity.year = 1999
+                    elif key == "長度":
+                        try: entity.runtime = int(value.replace("分鐘", "").strip())
+                        except Exception: logger.warning(f"JavBus: Failed to parse runtime '{value}' for {code}")
+                    elif key == "導演": entity.director = value
+                    elif key == "製作商":
+                        entity.studio = value
+                        if do_trans: entity.studio = SiteUtil.av_studio.get(value, SiteUtil.trans(value))
+                        entity.studio = entity.studio.strip()
+                    elif key == "系列":
                         if entity.tag is None: entity.tag = []
-                        if label not in entity.tag: entity.tag.append(label)
-                    except Exception: pass # 파싱 실패해도 formatted_code는 유지
-                    entity.title = entity.originaltitle = entity.sorttitle = formatted_code
-                    ui_code_for_image = formatted_code # 최종 UI 코드 확정
-                    entity.ui_code = ui_code_for_image
-                elif key == "發行日期":
-                    if value != "0000-00-00": entity.premiered = value; entity.year = int(value[:4])
-                    else: entity.premiered = "1999-12-31"; entity.year = 1999
-                elif key == "長度":
-                    try: entity.runtime = int(value.replace("分鐘", "").strip())
-                    except Exception: pass
-                elif key == "導演": entity.director = value
-                elif key == "製作商":
-                    entity.studio = value
-                    if do_trans:
-                        if value in SiteUtil.av_studio: entity.studio = SiteUtil.av_studio[value]
-                        else: entity.studio = SiteUtil.trans(value)
-                    entity.studio = entity.studio.strip()
-                # elif key == "發行商": pass
-                elif key == "系列":
-                    if entity.tag is None: entity.tag = []
-                    trans_series = SiteUtil.trans(value, do_trans=do_trans)
-                    if trans_series and trans_series not in entity.tag: entity.tag.append(trans_series)
-                elif key == "類別":
-                    entity.genre = []
-                    for tmp in value.split(" "):
-                        if not tmp.strip(): continue
-                        if tmp in SiteUtil.av_genre: entity.genre.append(SiteUtil.av_genre[tmp])
-                        elif tmp in SiteUtil.av_genre_ignore_ja: continue
-                        else:
-                            genre_tmp = SiteUtil.trans(tmp, do_trans=do_trans).replace(" ", "")
-                            if genre_tmp not in SiteUtil.av_genre_ignore_ko: entity.genre.append(genre_tmp)
-                elif key == "演員":
-                    if "暫無出演者資訊" in value: continue
-                    entity.actor = []
-                    for tmp in value.split(" "):
-                        if not tmp.strip(): continue
-                        entity.actor.append(EntityActor(tmp.strip()))
+                        trans_series = SiteUtil.trans(value, do_trans=do_trans)
+                        if trans_series and trans_series not in entity.tag: entity.tag.append(trans_series)
+                    elif key == "類別":
+                        entity.genre = []
+                        for tmp in value.split(" "):
+                            if not tmp.strip(): continue
+                            if tmp in SiteUtil.av_genre: entity.genre.append(SiteUtil.av_genre[tmp])
+                            elif tmp in SiteUtil.av_genre_ignore_ja: continue
+                            else:
+                                genre_tmp = SiteUtil.trans(tmp, do_trans=do_trans).replace(" ", "")
+                                if genre_tmp not in SiteUtil.av_genre_ignore_ko: entity.genre.append(genre_tmp)
+                    elif key == "演員":
+                        if "暫無出演者資訊" in value: continue
+                        entity.actor = []
+                        for tmp in value.split(" "):
+                            if not tmp.strip(): continue
+                            entity.actor.append(EntityActor(tmp.strip()))
 
-            # Tagline/Plot
+                except Exception as e_tag_parse:
+                    logger.warning(f"JavBus: Error parsing a metadata tag for {code}: {e_tag_parse}")
+                    # 개별 태그 파싱 오류 시 다음 태그로 계속 진행
+
+            # 식별 코드 파싱 실패 시 에러 로그 및 기본값 설정
+            if not identifier_parsed:
+                logger.error(f"JavBus: CRITICAL - Failed to parse identifier (識別碼) for {code}. Using code as title.")
+                entity.title = entity.originaltitle = entity.sorttitle = code[2:].upper() # 코드를 기본 제목으로
+
+            # Tagline/Plot 파싱 (오류 처리 강화)
             try:
                 h3_tag = tree.xpath("/html/body/div[5]/h3/text()")
                 if h3_tag: # h3 태그 존재 확인
-                    tagline = h3_tag[0].lstrip(entity.title if entity.title else '').strip()
+                    tagline = h3_tag[0].lstrip(entity.title if entity.title else '').strip() # entity.title이 설정된 후 사용
                     entity.tagline = SiteUtil.trans(tagline, do_trans=do_trans).replace(entity.title if entity.title else '', "").replace("[배달 전용]", "").strip()
-                    entity.plot = entity.tagline
-                else: logger.warning("JavBus: H3 title tag not found.")
-            except Exception as e_h3: logger.exception(f"JavBus: Error parsing H3 title: {e_h3}")
+                    entity.plot = entity.tagline # Javbus는 보통 Tagline과 Plot이 동일
+                else:
+                    logger.warning(f"JavBus: H3 title tag (tagline/plot source) not found for {code}.")
+                    # H3 없으면 plot/tagline은 비워둠
+            except Exception as e_h3:
+                logger.exception(f"JavBus: Error parsing H3 title for {code}: {e_h3}")
 
-        except Exception as e_meta:
-            logger.exception(f"JavBus: Error during metadata parsing: {e_meta}")
+        except Exception as e_meta_main:
+            logger.exception(f"JavBus: Major error during metadata parsing for {code}: {e_meta_main}")
+            # 메타 파싱 중 큰 오류 발생 시, 최소한의 정보라도 있는지 확인
+            if not entity.title: # 제목(식별코드 기반)조차 없다면 처리 불가
+                logger.error(f"JavBus: Returning None due to critical metadata parsing failure for {code}.")
+                return None
         # --- 메타데이터 파싱 끝 ---
 
 
@@ -301,23 +332,35 @@ class SiteJavbus:
         # --- 예고편 처리 (없음) ---
         # if use_extras or not use_extras: entity.extras = []
 
-        try:
-            return SiteUtil.shiroutoname_info(entity)
-        except Exception:
-            logger.exception("shiroutoname.com을 이용해 메타 보정 중 예외:")
-            return entity
+        # --- Shiroutoname 보정 (originaltitle이 있을 때만 시도) ---
+        final_entity = entity # 기본 반환값은 현재 entity
+        if entity.originaltitle: # 식별 코드(originaltitle)가 성공적으로 파싱되었을 때만 시도
+            try:
+                logger.debug(f"JavBus: Attempting Shiroutoname correction for {entity.originaltitle}")
+                # SiteUtil.shiroutoname_info는 내부에서 예외처리 강화됨
+                final_entity = SiteUtil.shiroutoname_info(entity) 
+            except Exception as e_shirouto: # 만약을 위한 추가 예외 처리
+                logger.exception(f"JavBus: Exception during Shiroutoname correction call for {entity.originaltitle}: {e_shirouto}")
+                # 오류 발생 시에도 원래 entity 반환
+        else:
+            logger.warning(f"JavBus: Skipping Shiroutoname correction because originaltitle is missing for {code}.")
+
+        return final_entity # 최종 entity 반환
 
 
     @classmethod
-    def info(cls, code, **kwargs):
+    def info(cls, code, **kwargs): # info 래퍼는 기존 유지
         ret = {}
         try:
             entity = cls.__info(code, **kwargs)
+            if entity is not None:
+                ret["ret"] = "success"
+                ret["data"] = entity.as_dict()
+            else:
+                ret["ret"] = "error"
+                ret["data"] = f"Failed to get info entity for {code} (likely page load/parse error)"
         except Exception as exception:
             logger.exception("메타 정보 처리 중 예외:")
             ret["ret"] = "exception"
             ret["data"] = str(exception)
-        else:
-            ret["ret"] = "success"
-            ret["data"] = entity.as_dict()
         return ret
