@@ -398,23 +398,55 @@ class SiteJav321:
 
             # Plot, Tagline
             try:
-                plot_text_nodes = tree.xpath(f"{base_xpath}/div[2]/div[3]/div/text()") # 줄거리 영역
-                plot_full_text = "".join([t.strip() for t in plot_text_nodes if t.strip()]) # 줄바꿈 포함 결합
-                if plot_full_text: entity.plot = SiteUtil.trans(plot_full_text, do_trans=do_trans)
+                # Tagline (제목 - H3 태그에서 small 제거)
+                tagline_h3_nodes = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[1]/h3') 
+                if tagline_h3_nodes:
+                    h3_node = tagline_h3_nodes[0]
+                    # <small> 태그 제거 전처리 (lxml의 deepcopy와 remove 사용)
+                    try:
+                        from copy import deepcopy
+                        h3_clone = deepcopy(h3_node) # 원본 수정을 피하기 위해 복사
+                        for small_tag in h3_clone.xpath('.//small'):
+                            small_tag.getparent().remove(small_tag) # 부모 노드에서 small 태그 제거
+                        # small 태그 제거된 노드의 텍스트 추출
+                        tagline_text = h3_clone.text_content().strip() 
+                    except Exception as e_remove_small:
+                        # 복사/제거 실패 시 원본 텍스트 사용 (fallback)
+                        logger.warning(f"Jav321: Failed to remove <small> from H3, using full text. Error: {e_remove_small}")
+                        tagline_text = h3_node.text_content().strip()
 
-                h3_title_nodes = tree.xpath(f"{base_xpath}/div[1]/h3/text()") # 제목 영역
-                if h3_title_nodes:
-                    tmp_h3_title = h3_title_nodes[0].strip()
-                    # Jav321은 H3가 제목이므로, 줄거리/태그라인 설정 로직 제거 또는 수정 필요
-                    # 현재 entity.title은 품번으로 설정되어 있음. H3는 tagline으로 사용?
-                    entity.tagline = SiteUtil.trans(tmp_h3_title, do_trans=do_trans)
-                    # Plot이 없으면 Tagline을 Plot으로 사용
-                    if not entity.plot and entity.tagline: entity.plot = entity.tagline
+                    if tagline_text:
+                        entity.tagline = SiteUtil.trans(tagline_text, do_trans=do_trans)
+                        logger.debug(f"Jav321: Tagline parsed: {entity.tagline}")
+                    else:
+                        logger.warning(f"Jav321: H3 tag found but text is empty after removing <small> for {code}.")
                 else:
                     logger.warning(f"Jav321: H3 title tag not found for {code}.")
-                    if not entity.tagline and entity.title: entity.tagline = entity.title # H3 없으면 품번을 태그라인으로
-            except Exception as e_h3:
-                logger.exception(f"Jav321: Error parsing Plot/Tagline for {code}: {e_h3}")
+
+                # Plot (제공된 XPath 사용, text_content()로 전체 텍스트)
+                plot_div_nodes = tree.xpath('/html/body/div[2]/div[1]/div[1]/div[2]/div[3]/div')
+                if plot_div_nodes:
+                    # div 내부의 모든 텍스트 노드를 가져와서 합침 (줄바꿈 유지될 수 있음)
+                    # text_content()는 내부 태그 포함 모든 텍스트 가져옴
+                    plot_full_text = plot_div_nodes[0].text_content().strip()
+                    if plot_full_text:
+                        entity.plot = SiteUtil.trans(plot_full_text, do_trans=do_trans)
+                        logger.debug(f"Jav321: Plot parsed (length: {len(entity.plot)}).")
+                    else:
+                        logger.warning(f"Jav321: Plot div found but text content is empty for {code}.")
+                else:
+                    logger.warning(f"Jav321: Plot div not found using XPath for {code}.")
+
+                # Fallback 로직
+                if not entity.plot and entity.tagline: 
+                    entity.plot = entity.tagline
+                    logger.debug(f"Jav321: Using tagline as plot for {code}.")
+                if not entity.tagline and entity.title: 
+                    entity.tagline = entity.title
+                    logger.debug(f"Jav321: Using title as tagline for {code}.")
+
+            except Exception as e_plot_tagline:
+                logger.exception(f"Jav321: Error parsing Plot/Tagline for {code}: {e_plot_tagline}")
 
         except Exception as e_meta_main:
             logger.exception(f"Jav321: Major error during metadata parsing for {code}: {e_meta_main}")
