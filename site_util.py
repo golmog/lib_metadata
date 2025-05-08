@@ -211,19 +211,30 @@ class SiteUtil:
 
 
     @classmethod
-    def imopen(cls, img_src, proxy_url=None):
+    def imopen(cls, img_src, proxy_url=None, referer=None):
         if isinstance(img_src, Image.Image):
             return img_src
         try:
-            # local file
             return Image.open(img_src)
         except (FileNotFoundError, OSError):
-            # remote url
             try:
-                res = cls.get_response(img_src, proxy_url=proxy_url)
+                req_headers = cls.default_headers.copy()
+                if referer:
+                    req_headers['Referer'] = referer
+                elif isinstance(img_src, str) and 'jav321.com' in img_src:
+                    req_headers['Referer'] = 'https://www.jav321.com/' 
+
+                res = cls.get_response(img_src, proxy_url=proxy_url, headers=req_headers)
+                
+                if res.status_code != 200:
+                    logger.warning(f"imopen: Received status code {res.status_code} for {img_src}")
+                content_type = res.headers.get('Content-Type', '').lower()
+                if not content_type.startswith('image/'):
+                    logger.warning(f"imopen: Received non-image Content-Type '{content_type}' for {img_src}")
+
                 return Image.open(BytesIO(res.content))
-            except Exception:
-                logger.exception("이미지 여는 중 예외:")
+            except Exception as e_remote:
+                logger.exception(f"이미지 URL 열기 중 예외 ({img_src}): {e_remote}")
                 return None
 
     @classmethod
