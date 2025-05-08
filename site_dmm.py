@@ -286,9 +286,7 @@ class SiteDmm:
         logger.debug(f"필터링 후 결과 개수: {len(final_result)}")
 
         # 정렬 로직 (final_result 대상)
-        type_priority = {'videoa': 1, 'dvd': 2, 'bluray': 3, 'unknown': 99}
         sorted_result = sorted(final_result, key=lambda k: k.get("score", 0), reverse=True)
-        sorted_result = sorted(sorted_result, key=lambda k: type_priority.get(k.get('content_type', 'unknown'), 99))
 
         # 로깅 (sorted_result 대상)
         if sorted_result:
