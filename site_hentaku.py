@@ -41,9 +41,15 @@ class SiteHentaku:
     @staticmethod
     def get_actor_info(entity_actor, **kwargs) -> bool:
         retry = kwargs.pop("retry", True)
+        proxy_url = kwargs.get("proxy_url") 
+        image_mode = kwargs.get("image_mode", "0")
         info = None
         try:
-            info = SiteHentaku.__get_actor_info(entity_actor["originalname"], **kwargs)
+            info = SiteHentaku.__get_actor_info(
+                entity_actor["originalname"], 
+                proxy_url=proxy_url, 
+                image_mode=image_mode
+            )
         except Exception as e_hentaku:
             logger.warning(f"Hentaku 정보 조회 중 예외 발생: {e_hentaku}")
             if retry:
