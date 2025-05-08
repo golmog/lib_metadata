@@ -517,53 +517,110 @@ class SiteDmm:
                 except Exception as e_title_parse: logger.warning(f"Videoa/VR: Error parsing title: {e_title_parse}")
                 if entity.tagline: entity.tagline = SiteUtil.trans(entity.tagline, do_trans=do_trans)
 
-                # 이미지 URL 추출 (Videoa/VR)
-                ps_url = ps_url_from_cache
-                pl_url = None; arts = []; final_poster_url = None; final_poster_crop = None
+                # --- 이미지 URL 추출 및 최종 포스터/랜드스케이프 결정 ---
+                ps_url = ps_url_from_cache # 캐시에서 가져온 ps URL
+                pl_url = None
+                arts = []
+                specific_poster_candidate = None
+                final_poster_url = None
+                final_poster_crop = None
+
+                # 이미지 유효성 및 비율 확인용 변수
                 pl_valid = False; is_pl_vertical = False; is_pl_landscape = False
                 specific_valid = False; is_specific_vertical = False
+                last_art_valid = False; is_last_art_vertical = False
                 ps_valid = bool(ps_url)
 
                 try:
-                    raw_img_urls = cls.__img_urls(tree, content_type='videoa')
+                    # 1. __img_urls 함수로 모든 이미지 후보 URL 추출
+                    raw_img_urls = cls.__img_urls(tree, content_type='videoa') # videoa/vr 모두 videoa 로직 사용
                     pl_url = raw_img_urls.get('pl')
                     specific_poster_candidate = raw_img_urls.get('specific_poster_candidate')
-                    arts = raw_img_urls.get('arts', [])
+                    arts = raw_img_urls.get('arts', []) # 아트 URL 리스트
 
+                    # 2. 각 후보 이미지의 유효성 및 비율(세로/가로) 확인
                     if pl_url:
                         try:
                             im_pl = SiteUtil.imopen(pl_url, proxy_url=proxy_url)
                             if im_pl: pl_valid = True; w, h = im_pl.size; is_pl_vertical = w < h; is_pl_landscape = w > h
-                        except Exception: pass
+                            logger.debug(f"PL check: valid={pl_valid}, vertical={is_pl_vertical}, landscape={is_pl_landscape} ({pl_url})")
+                        except Exception as e_pl_open: logger.warning(f"Failed to open PL image {pl_url}: {e_pl_open}")
 
                     if specific_poster_candidate:
-                        try: # specific 후보 유효성 및 세로 여부만 체크
+                        try:
                             im_spec = SiteUtil.imopen(specific_poster_candidate, proxy_url=proxy_url)
                             if im_spec: specific_valid = True; w, h = im_spec.size; is_specific_vertical = w < h
-                        except Exception: pass
+                            logger.debug(f"Specific check: valid={specific_valid}, vertical={is_specific_vertical} ({specific_poster_candidate})")
+                        except Exception as e_spec_open: logger.warning(f"Failed to open Specific image {specific_poster_candidate}: {e_spec_open}")
 
+                    last_art_url = None
+                    if arts:
+                        last_art_url = arts[-1] # 마지막 아트 URL
+                        try:
+                            im_last_art = SiteUtil.imopen(last_art_url, proxy_url=proxy_url)
+                            if im_last_art: last_art_valid = True; w, h = im_last_art.size; is_last_art_vertical = w < h
+                            logger.debug(f"Last Art check: valid={last_art_valid}, vertical={is_last_art_vertical} ({last_art_url})")
+                        except Exception as e_lastart_open: logger.warning(f"Failed to open Last Art image {last_art_url}: {e_lastart_open}")
+
+                    # 3. 최종 포스터 결정 (순서대로 시도)
+                    logger.debug("Starting poster decision logic...")
                     # 1순위: PL 처리
-                    if pl_valid and ps_valid:
-                        # <<< 수정: is_hq_poster / has_hq_poster 호출 유지 >>>
-                        if is_pl_vertical and SiteUtil.is_hq_poster(ps_url, pl_url, proxy_url=proxy_url):
-                            final_poster_url = pl_url; final_poster_crop = None
-                        elif is_pl_landscape:
+                    if final_poster_url is None and pl_valid and ps_valid:
+                        if is_pl_vertical: # PL이 세로일 경우
+                            logger.debug("Checking similarity for vertical PL...")
+                            if SiteUtil.is_hq_poster(ps_url, pl_url, proxy_url=proxy_url):
+                                final_poster_url = pl_url; final_poster_crop = None
+                                logger.info("Poster Decision: Using vertical PL (HQ Match).")
+                        elif is_pl_landscape: # PL이 가로일 경우
+                            logger.debug("Checking crop possibility for landscape PL...")
                             crop_pos = SiteUtil.has_hq_poster(ps_url, pl_url, proxy_url=proxy_url)
-                            if crop_pos: final_poster_url = pl_url; final_poster_crop = crop_pos
+                            if crop_pos:
+                                final_poster_url = pl_url; final_poster_crop = crop_pos
+                                logger.info(f"Poster Decision: Using cropped PL (pos: {crop_pos}).")
+
                     # 2순위: Specific 처리
                     if final_poster_url is None and specific_valid and ps_valid:
-                        if is_specific_vertical and SiteUtil.is_hq_poster(ps_url, specific_poster_candidate, proxy_url=proxy_url):
-                            final_poster_url = specific_poster_candidate; final_poster_crop = None
-                        else: # specific이 가로여도 크롭 시도
+                        if is_specific_vertical: # Specific이 세로일 경우
+                            logger.debug("Checking similarity for vertical Specific candidate...")
+                            if SiteUtil.is_hq_poster(ps_url, specific_poster_candidate, proxy_url=proxy_url):
+                                final_poster_url = specific_poster_candidate; final_poster_crop = None
+                                logger.info("Poster Decision: Using vertical Specific candidate (HQ Match).")
+                        else: # Specific이 가로일 경우 (크롭 시도)
+                            logger.debug("Checking crop possibility for landscape Specific candidate...")
                             crop_pos_spec = SiteUtil.has_hq_poster(ps_url, specific_poster_candidate, proxy_url=proxy_url)
-                            if crop_pos_spec: final_poster_url = specific_poster_candidate; final_poster_crop = crop_pos_spec
-                    # 3순위: Fallback
-                    if final_poster_url is None:
-                        if ps_valid: final_poster_url = ps_url; final_poster_crop = None
-                        else: final_poster_url = None
+                            if crop_pos_spec:
+                                final_poster_url = specific_poster_candidate; final_poster_crop = crop_pos_spec
+                                logger.info(f"Poster Decision: Using cropped Specific candidate (pos: {crop_pos_spec}).")
 
-                    logger.info(f"Final Image Decision (Videoa/VR): Poster='{final_poster_url}'(Crop:{final_poster_crop}), Landscape will use PL ('{pl_url}') if available.")
-                except Exception as e_img_det: logger.exception(f"Videoa/VR: Error determining final images: {e_img_det}")
+                    # 2.5순위: 마지막 아트 처리 (신규)
+                    if final_poster_url is None and last_art_valid and ps_valid:
+                        if is_last_art_vertical: # 마지막 아트가 세로일 경우만
+                            logger.debug(f"Checking similarity for last art (vertical): {last_art_url}")
+                            if SiteUtil.is_hq_poster(ps_url, last_art_url, proxy_url=proxy_url):
+                                final_poster_url = last_art_url; final_poster_crop = None
+                                logger.info("Poster Decision: Using last art image as poster (HQ Match).")
+                            else:
+                                logger.debug("Poster Decision: Last art similarity check failed.")
+                        else:
+                            logger.debug("Poster Decision: Last art is not vertical, skipping.")
+
+                    # 3순위: Fallback (PS)
+                    if final_poster_url is None:
+                        if ps_valid:
+                            final_poster_url = ps_url; final_poster_crop = None
+                            logger.info("Poster Decision: Using PS as fallback.")
+                        else:
+                            final_poster_url = None # 최종적으로 포스터 없음
+                            logger.warning("Poster Decision: No valid poster source found.")
+
+                    # 최종 결정된 값 로깅
+                    logger.info(f"Final Image Decision (Videoa/VR): Poster='{final_poster_url}'(Crop:{final_poster_crop}), Landscape='{pl_url}'") # Landscape는 항상 pl_url 사용
+
+                except Exception as e_img_det:
+                    logger.exception(f"Videoa/VR: Error during image determination: {e_img_det}")
+                    # 오류 발생 시에도 기본값 설정 시도 (PS라도 사용)
+                    if ps_url: final_poster_url = ps_url; final_poster_crop = None
+                    if pl_url: final_landscape_url = pl_url # 오류 시에도 랜드스케이프는 유지
 
                 # 메타데이터 파싱 (Videoa/VR)
                 info_table_xpath = '//table[contains(@class, "mg-b20")]//tr'
