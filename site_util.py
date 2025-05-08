@@ -93,6 +93,123 @@ class SiteUtil:
         # logger.debug(res.text)
         return res
 
+
+    @classmethod
+    def get_mgs_half_pl_poster_info_local(cls, ps_url: str, pl_url: str, proxy_url: str = None):
+        """
+        MGStage용으로 pl 이미지를 특별 처리합니다. (로컬 임시 파일 사용, Fallback 강화)
+        pl 이미지를 가로로 반으로 자르고 (오른쪽 우선), 각 절반의 중앙 부분을 ps와 비교합니다.
+        is_hq_poster 검사 성공 시 해당 결과를 사용하고,
+        검사 실패 시에는 성공적으로 크롭된 첫 번째 후보(오른쪽 우선)를 사용합니다.
+        """
+        try:
+            logger.debug(f"MGS Special Local: Trying get_mgs_half_pl_poster_info_local for ps='{ps_url}', pl='{pl_url}'")
+            if not ps_url or not pl_url: return None, None, None
+
+            ps_image = cls.imopen(ps_url, proxy_url=proxy_url)
+            pl_image_original = cls.imopen(pl_url, proxy_url=proxy_url)
+
+            if ps_image is None or pl_image_original is None:
+                logger.debug("MGS Special Local: Failed to open ps_image or pl_image_original.")
+                return None, None, None
+
+            pl_width, pl_height = pl_image_original.size
+            if pl_width < pl_height * 1.1:
+                logger.debug(f"MGS Special Local: pl_image_original not wide enough ({pl_width}x{pl_height}). Skipping.")
+                return None, None, None
+
+            # 최종 결과를 저장할 변수들
+            result_filepath = None
+            fallback_candidate_obj = None # is_hq_poster 실패 시 사용할 첫 번째 성공 크롭 객체
+
+            # 처리 순서 정의: 오른쪽 먼저
+            candidate_sources = []
+            # 오른쪽 절반
+            right_half_box = (pl_width / 2, 0, pl_width, pl_height)
+            right_half_img_obj = pl_image_original.crop(right_half_box)
+            if right_half_img_obj: candidate_sources.append( (right_half_img_obj, f"{pl_url} (right_half)") )
+            # 왼쪽 절반
+            left_half_box = (0, 0, pl_width / 2, pl_height)
+            left_half_img_obj = pl_image_original.crop(left_half_box)
+            if left_half_img_obj: candidate_sources.append( (left_half_img_obj, f"{pl_url} (left_half)") )
+
+            for img_obj_to_crop, obj_name in candidate_sources:
+                logger.debug(f"MGS Special Local: Processing candidate source: {obj_name}")
+                # 중앙 크롭 시도
+                center_cropped_candidate_obj = cls.imcrop(img_obj_to_crop, position='c') 
+
+                if center_cropped_candidate_obj:
+                    logger.debug(f"MGS Special Local: Successfully cropped center from {obj_name}.")
+                    
+                    # is_hq_poster 유사도 검사 시도
+                    logger.debug(f"MGS Special Local: Comparing ps_image with cropped candidate from {obj_name}")
+                    is_similar = cls.is_hq_poster(ps_image, center_cropped_candidate_obj)
+
+                    if is_similar:
+                        logger.info(f"MGS Special Local: Similarity check PASSED for {obj_name}. This is the best match.")
+                        # 성공! 이 객체를 저장하고 반환
+                        try:
+                            # 임시 파일 저장 로직 (이전과 동일)
+                            img_format = center_cropped_candidate_obj.format if center_cropped_candidate_obj.format else "JPEG"
+                            ext = img_format.lower().replace("jpeg", "jpg")
+                            if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
+                            temp_filename = f"mgs_temp_poster_{int(time.time())}_{os.urandom(4).hex()}.{ext}"
+                            temp_filepath = os.path.join(path_data, "tmp", temp_filename)
+                            os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
+                            save_params = {}
+                            if ext in ['jpg', 'webp']: save_params['quality'] = 95
+                            elif ext == 'png': save_params['optimize'] = True
+                            center_cropped_candidate_obj.save(temp_filepath, **save_params)
+                            logger.info(f"MGS Special Local: Saved similarity match to temp file: {temp_filepath}")
+                            return temp_filepath, None, pl_url # 성공 반환 (파일경로, crop=None, 원본pl)
+                        except Exception as e_save_hq:
+                            logger.exception(f"MGS Special Local: Failed to save HQ similarity match from {obj_name}: {e_save_hq}")
+                            # 저장 실패 시 루프 계속 진행 (fallback 가능성 고려)
+                    
+                    else: # is_hq_poster 검사 실패
+                        logger.info(f"MGS Special Local: Similarity check FAILED for {obj_name}.")
+                        # fallback 후보로 저장 (아직 fallback 후보가 없다면)
+                        if fallback_candidate_obj is None:
+                            logger.debug(f"MGS Special Local: Storing cropped candidate from {obj_name} as fallback.")
+                            fallback_candidate_obj = center_cropped_candidate_obj
+                        # 루프 계속 (왼쪽 절반에서 더 좋은 결과(is_similar=True)가 나올 수 있으므로)
+                
+                else: # 크롭 자체 실패
+                    logger.warning(f"MGS Special Local: Failed to crop center from {obj_name}.")
+            
+            # 루프 종료 후: is_hq_poster 매칭이 없었는지 확인
+            if result_filepath is None: # is_hq_poster 성공 케이스가 없었음
+                if fallback_candidate_obj: # fallback 후보가 있다면 사용
+                    logger.info("MGS Special Local: No similarity match found, using the first successfully cropped candidate as fallback.")
+                    try:
+                        # Fallback 후보 저장
+                        img_format = fallback_candidate_obj.format if fallback_candidate_obj.format else "JPEG"
+                        ext = img_format.lower().replace("jpeg", "jpg")
+                        if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
+                        temp_filename = f"mgs_temp_poster_fallback_{int(time.time())}_{os.urandom(4).hex()}.{ext}"
+                        temp_filepath = os.path.join(path_data, "tmp", temp_filename)
+                        os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
+                        save_params = {}
+                        if ext in ['jpg', 'webp']: save_params['quality'] = 95
+                        elif ext == 'png': save_params['optimize'] = True
+                        fallback_candidate_obj.save(temp_filepath, **save_params)
+                        logger.info(f"MGS Special Local: Saved fallback candidate to temp file: {temp_filepath}")
+                        return temp_filepath, None, pl_url # Fallback 성공 반환
+                    except Exception as e_save_fb:
+                        logger.exception(f"MGS Special Local: Failed to save fallback candidate: {e_save_fb}")
+                        # Fallback 저장 실패 시 최종 실패
+                else: # Fallback 후보조차 없음 (양쪽 다 크롭 실패)
+                    logger.warning("MGS Special Local: Cropping failed for both halves. Cannot provide fallback.")
+            
+            # 최종적으로 아무것도 반환되지 못했다면 실패
+            logger.warning("MGS Special Local: Failed to find or create a suitable poster.")
+            return None, None, None
+
+        except Exception as e:
+            logger.exception(f"MGS Special Local: Error in get_mgs_half_pl_poster_info_local: {e}")
+            return None, None, None
+
+
     @classmethod
     def imopen(cls, img_src, proxy_url=None):
         if isinstance(img_src, Image.Image):
@@ -190,68 +307,101 @@ class SiteUtil:
 
         return thumbs
 
+
     @classmethod
-    def process_image_mode(cls, image_mode, image_url, proxy_url=None, crop_mode=None):
+    def process_image_mode(cls, image_mode, image_source, proxy_url=None, crop_mode=None):
         # logger.debug('process_image_mode : %s %s', image_mode, image_url)
-        if image_url is None:
+        if image_source is None:
             return
-        ret = image_url
-        if image_mode == "1":
-            tmp = "{ddns}/metadata/api/image_proxy?url=" + py_urllib.quote_plus(image_url)
-            if proxy_url is not None:
-                tmp += "&proxy_url=" + py_urllib.quote_plus(proxy_url)
-            if crop_mode is not None:
-                tmp += "&crop_mode=" + py_urllib.quote_plus(crop_mode)
-            ret = Util.make_apikey(tmp)
-        elif image_mode == "2":
-            tmp = "{ddns}/metadata/api/discord_proxy?url=" + py_urllib.quote_plus(image_url)
-            if proxy_url is not None:
-                tmp += "&proxy_url=" + py_urllib.quote_plus(proxy_url)
-            if crop_mode is not None:
-                tmp += "&crop_mode=" + py_urllib.quote_plus(crop_mode)
-            ret = Util.make_apikey(tmp)
-        elif image_mode == "3":  # 고정 디스코드 URL.
-            ret = cls.discord_proxy_image(image_url, proxy_url=proxy_url, crop_mode=crop_mode)
-        # elif image_mode == "4":  # landscape to poster (사용 중지됨)
-        #     # logger.debug(image_url)
-        #     # ret = "{ddns}/metadata/normal/image_process.jpg?mode=landscape_to_poster&url=" + py_urllib.quote_plus(
-        #     #     image_url
-        #     # )
-        #     # ret = ret.format(ddns=SystemModelSetting.get("ddns"))
-        #     # ret = Util.make_apikey(tmp)
-        #     logger.warning("Image Mode 4 (landscape_to_poster) is deprecated and ignored.")
-        #     # 이미지 서버 모드(4)는 이 함수에서 처리하지 않음. 호출하는 쪽에서 분기.
-        elif image_mode == "5":  # 로컬에 포스터를 만들고
-            # image_url : 디스코드에 올라간 표지 url 임.
-            im = cls.imopen(image_url, proxy_url=proxy_url)
-            width, height = im.size
-            filename = f"proxy_{time.time()}.jpg"
-            filepath = os.path.join(path_data, "tmp", filename)
-            if width > height:
-                im = cls.imcrop(im)
-            im.save(filepath, quality=95)
-            # poster_url = '{ddns}/file/data/tmp/%s' % filename
-            # poster_url = Util.make_apikey(poster_url)
-            # logger.debug('poster_url : %s', poster_url)
-            ret = cls.discord_proxy_image_localfile(filepath)
-        return ret
+
+        source_is_url = isinstance(image_source, str) and not os.path.exists(image_source) # 로컬 파일 경로가 아닌 URL
+        source_is_local_file = isinstance(image_source, str) and os.path.exists(image_source) # 로컬 파일 경로
+
+        # 로깅 및 파일명 생성용 기본 이름
+        log_name = image_source
+        if source_is_local_file:
+            log_name = f"localfile:{os.path.basename(image_source)}"
+        
+        logger.debug(f"process_image_mode: mode='{image_mode}', source='{log_name}', crop='{crop_mode}'")
+
+        if image_mode == "0": # 원본 사용
+            if source_is_url or source_is_local_file: # URL 또는 파일 경로면 그대로 반환
+                return image_source 
+            else: # PIL 객체 등 기타 타입 (현재 이 함수에서는 URL/파일경로만 가정)
+                logger.warning("process_image_mode: Mode 0 called with non-URL/filepath. Returning None.")
+                return None
+
+        # image_mode '1', '2' (SJVA URL 프록시)는 image_source가 외부 접근 가능한 URL이어야 함.
+        # 로컬 파일은 이 프록시를 직접 사용할 수 없음.
+        if image_mode in ["1", "2"]:
+            if not source_is_url:
+                logger.warning(f"Image mode {image_mode} (SJVA URL Proxy) called with non-URL source '{log_name}'. This mode requires a public URL. Returning original source or None.")
+                # 로컬 파일이면 원래 경로 반환 (프록시 안됨), 객체면 None
+                return image_source if source_is_local_file else None 
+            
+            # 기존 URL 기반 프록시 로직
+            api_path = "image_proxy" if image_mode == "1" else "discord_proxy"
+            tmp = f"{{ddns}}/metadata/api/{api_path}?url=" + py_urllib.quote_plus(image_source) # image_source는 URL
+            if proxy_url: tmp += "&proxy_url=" + py_urllib.quote_plus(proxy_url)
+            if crop_mode: tmp += "&crop_mode=" + py_urllib.quote_plus(crop_mode)
+            return Util.make_apikey(tmp)
+
+        # image_mode '3' (직접 디스코드 업로드 - 로컬 파일도 가능하게 수정)
+        # image_mode '5' (로컬 임시파일 생성 후 디스코드 업로드)
+        # 이 모드들은 최종적으로 PIL Image 객체를 DiscordUtil.proxy_image 등에 전달해야 함.
+        if image_mode in ["3", "5"]:
+            im_opened = None
+            if source_is_url:
+                im_opened = cls.imopen(image_source, proxy_url=proxy_url)
+            elif source_is_local_file:
+                im_opened = cls.imopen(image_source) # 로컬 파일은 프록시 불필요
+            
+            if im_opened is None:
+                logger.warning(f"process_image_mode: Mode {image_mode} failed to open image from '{log_name}'.")
+                return image_source # 실패 시 원본 반환 (URL 또는 파일 경로)
+
+            final_im_for_upload = im_opened
+            # crop_mode 적용 (URL에서 왔거나, 로컬파일인데 crop_mode가 지정된 경우)
+            # get_mgs_half_pl_poster_info_local에서 온 파일은 crop_mode=None으로 전달됨.
+            if crop_mode: 
+                logger.debug(f"process_image_mode: Mode {image_mode} applying crop_mode '{crop_mode}' to image from '{log_name}'.")
+                cropped = cls.imcrop(im_opened, position=crop_mode)
+                if cropped: final_im_for_upload = cropped
+                else: logger.warning(f"process_image_mode: Mode {image_mode} cropping failed for '{log_name}'. Using uncropped.")
+            
+            # Mode 5는 항상 로컬 파일을 거침. Mode 3은 직접 PIL 객체를 discord_proxy_image에 전달.
+            if image_mode == "5":
+                temp_filename_mode5 = f"proxy_mode5_{time.time()}.jpg"
+                temp_filepath_mode5 = os.path.join(path_data, "tmp", temp_filename_mode5)
+                try:
+                    final_im_for_upload.save(temp_filepath_mode5, quality=95)
+                    # discord_proxy_image_localfile은 파일 경로를 받아 Discord에 올림
+                    return cls.discord_proxy_image_localfile(temp_filepath_mode5) 
+                except Exception as e_save5:
+                    logger.exception(f"process_image_mode: Mode 5 failed to save/proxy image from '{log_name}': {e_save5}")
+                    return image_source # 실패 시 원본
+            
+            elif image_mode == "3":
+                # discord_proxy_image가 PIL 객체를 받을 수 있도록 수정했거나,
+                # 아니면 여기서 객체를 임시 저장하고 그 경로를 전달.
+                # 여기서는 discord_proxy_image가 객체를 처리한다고 가정.
+                # obj_info_str은 디버깅/캐시 등에 사용될 수 있는 문자열.
+                return cls.discord_proxy_image(final_im_for_upload, obj_info_str=log_name)
+
+        # 모든 조건에 맞지 않거나 처리 실패 시 원본 반환
+        logger.debug(f"process_image_mode: No specific action for mode '{image_mode}' or processing failed. Returning original source: {image_source}")
+        return image_source
+
 
     @classmethod
-    def save_image_to_server_path(cls, image_url: str, image_type: str, base_path: str, path_segment: str, ui_code: str, art_index: int = None, proxy_url: str = None, crop_mode: str = None):
+    def save_image_to_server_path(cls, image_source, image_type: str, base_path: str, path_segment: str, ui_code: str, art_index: int = None, proxy_url: str = None, crop_mode: str = None):
         """
-        이미지를 다운로드하여 지정된 로컬 경로에 저장하고, 웹 서버 접근용 상대 경로를 반환합니다.
-
-        :param image_url: 다운로드할 원본 이미지 URL
-        :param image_type: 이미지 종류 ('ps', 'pl', 'p', 'art')
-        :param base_path: 로컬 저장 기본 경로 (설정값: jav_censored_image_server_local_path)
-        :param path_segment: 하위 경로 세그먼트 (예: 'jav/cen')
-        :param ui_code: 파일명 생성에 사용될 코드 (예: 'ABP-123')
-        :param art_index: 이미지 타입이 'art'일 경우 파일명에 사용될 인덱스
-        :param proxy_url: 이미지 다운로드 시 사용할 프록시 URL
-        :param crop_mode: 이미지 타입이 'p'일 경우 적용할 크롭 모드 ('l', 'r', 'c')
-        :return: 저장 성공 시 상대 경로 (예: 'jav/cen/A/ABP/abp-123_p.jpg'), 실패 시 None
+        이미지를 다운로드하거나 로컬 파일로부터 지정된 로컬 경로에 저장하고, 웹 서버 접근용 상대 경로를 반환합니다.
+        기존 파일이 존재하면 덮어씁니다.
+        image_source는 URL 문자열 또는 로컬 파일 경로여야 합니다.
         """
-        if not all([image_url, image_type, base_path, path_segment, ui_code]):
+        # 1. 필수 인자 유효성 검사
+        if not all([image_source, image_type, base_path, path_segment, ui_code]):
             logger.warning("save_image_to_server_path: 필수 인자 누락.")
             return None
         if image_type not in ['ps', 'pl', 'p', 'art']:
@@ -261,94 +411,126 @@ class SiteUtil:
             logger.warning("save_image_to_server_path: image_type='art'일 때 art_index 필요.")
             return None
 
+        # 2. 입력 소스 타입 판별 및 로깅 정보 설정
+        source_is_local_file = isinstance(image_source, str) and os.path.exists(image_source)
+        source_is_url = not source_is_local_file and isinstance(image_source, str)
+
+        im = None
+        log_source_info = ""
+        if source_is_url:
+            log_source_info = image_source
+        elif source_is_local_file:
+            log_source_info = f"localfile:{os.path.basename(image_source)}"
+        else: # URL이나 로컬 파일 경로가 아닌 경우
+            logger.warning(f"save_image_to_server_path: 지원하지 않는 image_source 타입: {type(image_source)}. URL 또는 로컬 파일 경로여야 합니다.")
+            return None
+
         try:
-            # 1. 경로 및 파일명 생성 준비
-            ui_code_parts = ui_code.split('-')
-            if not ui_code_parts:
-                logger.error(f"save_image_to_server_path: 유효하지 않은 ui_code 형식: {ui_code}")
-                return None
-            label = ui_code_parts[0].upper()
-            first_char = label[0] if label[0].isalpha() else '09'
+            # 3. 이미지 열기 (URL 또는 로컬 파일)
+            if source_is_url:
+                im = cls.imopen(image_source, proxy_url=proxy_url)
+            elif source_is_local_file:
+                im = cls.imopen(image_source) # 로컬 파일
 
-            # 2. 이미지 다운로드 및 정보 확인
-            im = cls.imopen(image_url, proxy_url=proxy_url)
             if im is None:
-                logger.warning(f"save_image_to_server_path: 이미지 열기 실패: {image_url}")
+                logger.warning(f"save_image_to_server_path: 이미지 열기 실패: {log_source_info}")
                 return None
 
-            # 3. 확장자 결정 및 허용 여부 확인
+            # 4. 확장자 결정 및 지원 포맷 확인/변환
             original_format = im.format
-            if not original_format: # PIL에서 format을 못 읽는 경우 대비 (거의 없음)
-                ext_match = re.search(r'\.(jpg|jpeg|png|webp|gif)(\?|$)', image_url.lower())
-                if ext_match: original_format = ext_match.group(1).upper()
-                else: original_format = "JPEG" # 기본값 JPEG
-                logger.debug(f"PIL format missing, deduced format: {original_format} from URL: {image_url}")
+            if not original_format: # format 정보 없을 시 추론
+                if source_is_url:
+                    ext_match = re.search(r'\.(jpg|jpeg|png|webp|gif)(\?|$)', image_source.lower())
+                    if ext_match: original_format = ext_match.group(1).upper()
+                elif source_is_local_file:
+                    _, file_ext = os.path.splitext(image_source)
+                    if file_ext: original_format = file_ext[1:].upper()
+                if not original_format: original_format = "JPEG" # 최후 기본값
+                logger.debug(f"PIL format missing for '{log_source_info}', deduced/defaulted to: {original_format}")
 
-            ext = original_format.lower()
-            if ext == 'jpeg': ext = 'jpg' # jpeg는 jpg로 통일
-
+            ext = original_format.lower().replace("jpeg", "jpg")
             allowed_exts = ['jpg', 'png', 'webp']
-            if ext not in allowed_exts:
-                logger.warning(f"save_image_to_server_path: 지원하지 않는 이미지 포맷: {ext} ({image_url})")
-                return None # gif 등 처리 안 함
 
-            # 4. 최종 저장 경로 및 파일명 결정
-            save_dir = os.path.join(base_path, path_segment, first_char, label)
+            if ext not in allowed_exts:
+                logger.warning(f"save_image_to_server_path: 지원하지 않는 이미지 포맷 '{ext}' from {log_source_info}. JPG로 변환 시도.")
+                try:
+                    # 변환 로직 (RGBA, P 모드 등 고려)
+                    if im.mode == 'P':
+                        im = im.convert('RGBA' if 'transparency' in im.info else 'RGB')
+                    if im.mode == 'RGBA' and ext != 'png': # PNG 외에는 알파 채널 제거
+                        im = im.convert('RGB')
+                    elif im.mode not in ('RGB', 'L', 'RGBA'): # L(흑백)도 일단 통과
+                        im = im.convert('RGB')
+
+                    ext = 'jpg' # JPG로 강제 변환 시 확장자 변경
+                    logger.info(f"save_image_to_server_path: 이미지 변환 성공 (to RGB/JPG) for {log_source_info}.")
+                except Exception as e_convert:
+                    logger.error(f"save_image_to_server_path: 이미지 변환 실패 for {log_source_info}: {e_convert}")
+                    return None # 변환 실패 시 저장 불가
+
+            # 5. 저장 경로 및 파일명 결정
+            ui_code_parts = ui_code.split('-')
+            label_part = ui_code_parts[0].upper() if ui_code_parts else "UNKNOWN"
+            first_char = label_part[0] if label_part and label_part[0].isalpha() else '09'
+            save_dir = os.path.join(base_path, path_segment, first_char, label_part)
+
             if image_type == 'art':
                 filename = f"{ui_code.lower()}_art_{art_index}.{ext}"
-            else:
+            else: # ps, pl, p
                 filename = f"{ui_code.lower()}_{image_type}.{ext}"
             save_filepath = os.path.join(save_dir, filename)
 
-            # 5. 파일 존재 여부 확인 (존재 시 패스)
-            if os.path.exists(save_filepath):
-                logger.debug(f"save_image_to_server_path: 파일 이미 존재함: {save_filepath}")
-                # 이미 존재해도 상대 경로는 반환해야 함
-                relative_path = os.path.join(path_segment, first_char, label, filename).replace("\\", "/")
-                return relative_path
-
-            # 6. 디렉토리 생성
+            # 6. 디렉토리 생성 (덮어쓰므로 파일 존재 검사 불필요)
             os.makedirs(save_dir, exist_ok=True)
 
             # 7. 이미지 크롭 (필요 시)
-            if image_type == 'p' and crop_mode in ['l', 'r', 'c']:
-                logger.debug(f"save_image_to_server_path: 이미지 크롭 적용 (type='p', mode='{crop_mode}')")
-                im = cls.imcrop(im, position=crop_mode)
-                if im is None: # 크롭 실패 시
-                    logger.error(f"save_image_to_server_path: 크롭 실패: {image_url}")
-                    return None
+            if image_type == 'p' and crop_mode:
+                logger.debug(f"save_image_to_server_path: Applying crop_mode '{crop_mode}' to image for {log_source_info}")
+                cropped_im = cls.imcrop(im, position=crop_mode)
+                if cropped_im is None:
+                    logger.error(f"save_image_to_server_path: 크롭 실패 (crop_mode: {crop_mode}) for {log_source_info}")
+                    return None # 크롭 실패 시 저장 불가
+                im = cropped_im # 크롭된 이미지로 대체
 
-            # 8. 이미지 저장 (PIL.Image.save()는 기본적으로 덮어씀)
-            logger.debug(f"save_image_to_server_path: 저장 시도 (덮어쓰기 가능): {save_filepath}")
-            save_kwargs = {'quality': 95} if ext == 'jpg' or ext == 'webp' else {}
+            # 8. 이미지 저장 (덮어쓰기)
+            logger.debug(f"Saving image to {save_filepath} (will overwrite if exists).")
+            save_options = {}
+            if ext == 'jpg': save_options['quality'] = 95
+            elif ext == 'webp': save_options.update({'quality': 95, 'lossless': False})
+            elif ext == 'png': save_options['optimize'] = True
+
             try:
-                im.save(save_filepath, **save_kwargs)
-            except OSError as e:
-                logger.warning(f"save_image_to_server_path: 저장 중 OS 오류 발생 (포맷 변환 시도): {e}")
+                im.save(save_filepath, **save_options)
+            except OSError as e_os_save:
+                # OSError 발생 시 RGB 변환 후 JPG로 저장 재시도
+                logger.warning(f"save_image_to_server_path: OSError on save ({save_filepath}): {str(e_os_save)}. Retrying as RGB/JPG.")
                 try:
-                    im = im.convert("RGB")
-                    ext_new = 'jpg'
-                    filename_new = f"{os.path.splitext(filename)[0]}.{ext_new}"
-                    save_filepath_new = os.path.join(save_dir, filename_new)
-                    
-                    im.save(save_filepath_new, quality=95)
-                    logger.info(f"save_image_to_server_path: 원본 포맷 저장 실패, JPEG 변환 저장 성공: {save_filepath_new}")
-                    filename = filename_new
-                except Exception as e_save_retry:
-                    logger.exception(f"save_image_to_server_path: JPEG 변환 저장 재시도 실패: {e_save_retry}")
-                    return None
-            except Exception as e_save:
-                logger.exception(f"save_image_to_server_path: 이미지 저장 실패: {e_save}")
-                return None
+                    if im.mode != 'RGB':
+                        logger.debug(f"Converting image mode from {im.mode} to RGB for saving.")
+                        im_rgb = im.convert("RGB")
+                    else:
+                        im_rgb = im # 이미 RGB였다면 그대로 사용
+
+                    save_filepath_jpg = f"{os.path.splitext(save_filepath)[0]}.jpg" # 파일명 확장자 .jpg로 변경
+                    im_rgb.save(save_filepath_jpg, quality=95) # JPG로 저장
+                    logger.info(f"save_image_to_server_path: Saved as JPG after retry: {save_filepath_jpg}")
+                    filename = os.path.basename(save_filepath_jpg) # 최종 파일명 업데이트!
+                except Exception as e_retry_save:
+                    logger.exception(f"save_image_to_server_path: RGB conversion or save retry failed: {e_retry_save}")
+                    return None # 재시도 실패
+            except Exception as e_main_save: # 기타 저장 예외
+                logger.exception(f"save_image_to_server_path: Main image save failed for {save_filepath}: {e_main_save}")
+                return None # 최종 실패
 
             # 9. 성공 시 상대 경로 반환
-            relative_path = os.path.join(path_segment, first_char, label, filename).replace("\\", "/")
+            relative_path = os.path.join(path_segment, first_char, label_part, filename).replace("\\", "/") # 최종 filename 사용
             logger.info(f"save_image_to_server_path: 저장 성공: {relative_path}")
             return relative_path
 
-        except Exception as e:
-            logger.exception(f"save_image_to_server_path: 처리 중 예외 발생: {e}")
+        except Exception as e: # 함수 전체를 감싸는 예외 처리
+            logger.exception(f"save_image_to_server_path: 처리 중 예외 발생 ({log_source_info}): {e}")
             return None
+
 
     @classmethod
     def __shiroutoname_info(cls, keyword):
@@ -509,38 +691,39 @@ class SiteUtil:
         return ret
 
     @classmethod
-    def is_hq_poster(cls, im_sm, im_lg, proxy_url=None):
+    def is_hq_poster(cls, im_sm_source, im_lg_source, proxy_url=None):
         logger.debug(f"--- is_hq_poster called ---")
-        logger.debug(f"  Small Image URL: {im_sm}")
-        logger.debug(f"  Large Image URL: {im_lg}")
+        log_sm_info = f"URL: {im_sm_source}" if isinstance(im_sm_source, str) else f"Type: {type(im_sm_source)}"
+        log_lg_info = f"URL: {im_lg_source}" if isinstance(im_lg_source, str) else f"Type: {type(im_lg_source)}"
+        logger.debug(f"  Small Image Source: {log_sm_info}")
+        logger.debug(f"  Large Image Source: {log_lg_info}")
+        
         try:
-            if not im_sm or not isinstance(im_sm, str) or not im_lg or not isinstance(im_lg, str):
-                logger.debug("  Result: False (Invalid or empty URL)")
+            if im_sm_source is None or im_lg_source is None:
+                logger.debug("  Result: False (Source is None)")
                 return False
 
-            im_sm_obj = cls.imopen(im_sm, proxy_url=proxy_url)
-            im_lg_obj = cls.imopen(im_lg, proxy_url=proxy_url)
+            im_sm_obj = cls.imopen(im_sm_source, proxy_url=proxy_url)
+            im_lg_obj = cls.imopen(im_lg_source, proxy_url=proxy_url)
 
             if im_sm_obj is None or im_lg_obj is None:
-                logger.debug("  Result: False (Failed to open one or both images)")
+                logger.debug("  Result: False (Failed to open one or both images from source)")
                 return False
-            logger.debug("  Images opened successfully.")
+            logger.debug("  Images acquired/opened successfully.")
 
             try:
                 from imagehash import dhash as hfun
-                from imagehash import phash # phash도 미리 임포트
+                from imagehash import phash 
 
                 ws, hs = im_sm_obj.size; wl, hl = im_lg_obj.size
                 logger.debug(f"  Sizes: Small=({ws}x{hs}), Large=({wl}x{hl})")
-                if ws > wl or hs > hl:
-                    logger.debug("  Result: False (Small image larger than large image)")
-                    return False
 
                 ratio_sm = ws / hs if hs != 0 else 0
                 ratio_lg = wl / hl if hl != 0 else 0
                 ratio_diff = abs(ratio_sm - ratio_lg)
                 logger.debug(f"  Aspect Ratios: Small={ratio_sm:.3f}, Large={ratio_lg:.3f}, Diff={ratio_diff:.3f}")
-                if ratio_diff > 0.1:
+
+                if ratio_diff > 0.1: 
                     logger.debug("  Result: False (Aspect ratio difference > 0.1)")
                     return False
 
@@ -551,27 +734,27 @@ class SiteUtil:
                 if hdis_d >= 14:
                     logger.debug("  Result: False (dhash distance >= 14)")
                     return False
+
                 if hdis_d <= 6:
                     logger.debug("  Result: True (dhash distance <= 6)")
                     return True
 
-                # phash 추가 비교
                 phash_sm = phash(im_sm_obj); phash_lg = phash(im_lg_obj)
                 hdis_p = phash_sm - phash_lg
                 hdis_sum = hdis_d + hdis_p # 합산 거리
                 logger.debug(f"  phash distance: {hdis_p}, Combined distance (d+p): {hdis_sum}")
-                result = hdis_sum < 20
+                result = hdis_sum < 20 # 합산 거리가 20 미만이면 유사하다고 판단
                 logger.debug(f"  Result: {result} (Combined distance < 20)")
                 return result
 
             except ImportError:
-                logger.warning("  Result: False (ImageHash library not found)")
+                logger.warning("  ImageHash library not found. Cannot perform hash comparison.")
                 return False
             except Exception as hash_e:
-                logger.exception(f"  Result: False (Error during image hash comparison: {hash_e})")
+                logger.exception(f"  Error during image hash comparison: {hash_e}")
                 return False
         except Exception as e:
-            logger.exception(f"  Result: False (Error in is_hq_poster: {e})")
+            logger.exception(f"  Error in is_hq_poster: {e}")
             return False
         finally:
             logger.debug(f"--- is_hq_poster finished ---")
