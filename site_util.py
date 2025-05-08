@@ -210,72 +210,21 @@ class SiteUtil:
             return None, None, None
 
 
-    # 도메인별로 마지막 세션 쿠키 획득 시간 추적 (간단 캐싱)
-    _last_cookie_fetch_time = {}
-    _cookie_fetch_interval = 60 * 5 # 예: 5분마다 쿠키 갱신 시도
-
     @classmethod
-    def imopen(cls, img_src, proxy_url=None, referer=None):
+    def imopen(cls, img_src, proxy_url=None):
         if isinstance(img_src, Image.Image):
             return img_src
         try:
-            # 로컬 파일 처리
+            # local file
             return Image.open(img_src)
         except (FileNotFoundError, OSError):
-            # 원격 URL 처리
+            # remote url
             try:
-                # --- 쿠키 획득 시도 (Jav321 등 특정 사이트 대상) ---
-                needs_cookie_check = False
-                target_domain = None
-                if isinstance(img_src, str):
-                    if 'jav321.com' in img_src: 
-                        needs_cookie_check = True; target_domain = 'jav321.com'; target_base_url = 'https://www.jav321.com/'
-                    # 필요시 다른 사이트 추가 (예: javbus.com)
-                    elif 'javbus.com' in img_src:
-                        needs_cookie_check = True; target_domain = 'javbus.com'; target_base_url = 'https://www.javbus.com/'
-                
-                if needs_cookie_check and target_domain:
-                    current_time = time.time()
-                    last_fetch = cls._last_cookie_fetch_time.get(target_domain, 0)
-                    # 일정 시간이 지났으면 쿠키 갱신 시도
-                    if current_time - last_fetch > cls._cookie_fetch_interval:
-                        logger.debug(f"Attempting to fetch/refresh cookies for {target_domain}...")
-                        try:
-                            # 메인 페이지 방문하여 쿠키 획득 시도
-                            cookie_headers = cls.default_headers.copy()
-                            cookie_headers['Referer'] = target_base_url # 메인 페이지 Referer
-                            cls.get_response(target_base_url, method='GET', proxy_url=proxy_url, headers=cookie_headers, timeout=10)
-                            cls._last_cookie_fetch_time[target_domain] = current_time # 마지막 획득 시간 기록
-                            logger.debug(f"Cookie fetch attempt done for {target_domain}.")
-                        except Exception as e_cookie:
-                            logger.warning(f"Failed to fetch cookies for {target_domain}: {e_cookie}")
-                            # 실패해도 일단 진행 (기존 쿠키가 유효할 수 있음)
-                # --- 쿠키 획득 시도 끝 ---
-
-                # --- 이미지 요청 헤더 설정 ---
-                req_headers = cls.default_headers.copy()
-                if referer: 
-                    req_headers['Referer'] = referer
-                elif target_base_url: # 위에서 설정된 target_base_url 사용 (더 구체적인 Referer)
-                    req_headers['Referer'] = target_base_url
-                # --- 헤더 설정 끝 ---
-
-                # 이미지 요청 (세션은 SiteUtil.session 사용)
-                res = cls.get_response(img_src, proxy_url=proxy_url, headers=req_headers)
-
-                if res.status_code != 200:
-                    logger.warning(f"imopen: Received status code {res.status_code} for {img_src}")
-                    # return None
-                content_type = res.headers.get('Content-Type', '').lower()
-                if not content_type.startswith('image/'):
-                    logger.warning(f"imopen: Received non-image Content-Type '{content_type}' for {img_src}")
-                    # return None
-
+                res = cls.get_response(img_src, proxy_url=proxy_url)
                 return Image.open(BytesIO(res.content))
-            except Exception as e_remote: 
-                logger.exception(f"이미지 URL 열기 중 예외 ({img_src}): {e_remote}")
+            except Exception:
+                logger.exception("이미지 여는 중 예외:")
                 return None
-
 
     @classmethod
     def imcrop(cls, im, position=None, box_only=False):
