@@ -691,6 +691,70 @@ class SiteUtil:
         return ret
 
     @classmethod
+    def are_images_visually_same(cls, img_src1, img_src2, proxy_url=None, threshold=5):
+        """
+        두 이미지 소스(URL 또는 로컬 경로)가 시각적으로 거의 동일한지 비교합니다.
+        Image hashing (dhash + phash)을 사용하여 거리가 임계값 미만인지 확인합니다.
+        """
+        logger.debug(f"Comparing visual similarity (threshold: {threshold})...")
+        log_src1 = img_src1 if isinstance(img_src1, str) else "PIL Object 1"
+        log_src2 = img_src2 if isinstance(img_src2, str) else "PIL Object 2"
+        logger.debug(f"  Source 1: {log_src1}")
+        logger.debug(f"  Source 2: {log_src2}")
+
+        try:
+            if img_src1 is None or img_src2 is None:
+                logger.debug("  Result: False (One or both sources are None)")
+                return False
+
+            # 이미지 열기 (imopen은 URL, 경로, PIL 객체 처리 가능)
+            # 첫 번째 이미지는 proxy_url 사용 가능, 두 번째는 주로 로컬 파일이므로 불필요
+            im1 = cls.imopen(img_src1, proxy_url=proxy_url) 
+            im2 = cls.imopen(img_src2) # 두 번째는 로컬 파일 경로 가정
+
+            if im1 is None or im2 is None:
+                logger.debug("  Result: False (Failed to open one or both images)")
+                return False
+            logger.debug("  Images opened successfully.")
+
+            try:
+                from imagehash import dhash, phash # 한 번에 임포트
+
+                # 크기가 약간 달라도 해시는 비슷할 수 있으므로 크기 비교는 선택적
+                # w1, h1 = im1.size; w2, h2 = im2.size
+                # if w1 != w2 or h1 != h2:
+                #     logger.debug(f"  Sizes differ: ({w1}x{h1}) vs ({w2}x{h2}). Might still be visually similar.")
+
+                # dhash 및 phash 계산
+                dhash1 = dhash(im1); dhash2 = dhash(im2)
+                phash1 = phash(im1); phash2 = phash(im2)
+
+                # 거리 계산
+                d_dist = dhash1 - dhash2
+                p_dist = phash1 - phash2
+                combined_dist = d_dist + p_dist
+
+                logger.debug(f"  dhash distance: {d_dist}")
+                logger.debug(f"  phash distance: {p_dist}")
+                logger.debug(f"  Combined distance: {combined_dist}")
+
+                # 임계값 비교
+                is_same = combined_dist < threshold
+                logger.debug(f"  Result: {is_same} (Combined distance < {threshold})")
+                return is_same
+
+            except ImportError:
+                logger.warning("  ImageHash library not found. Cannot perform visual similarity check.")
+                return False # 라이브러리 없으면 비교 불가
+            except Exception as hash_e:
+                logger.exception(f"  Error during image hash comparison: {hash_e}")
+                return False # 해시 비교 중 오류
+
+        except Exception as e:
+            logger.exception(f"  Error in are_images_visually_same: {e}")
+            return False # 전체 함수 오류
+
+    @classmethod
     def is_hq_poster(cls, im_sm_source, im_lg_source, proxy_url=None):
         logger.debug(f"--- is_hq_poster called ---")
         log_sm_info = f"URL: {im_sm_source}" if isinstance(im_sm_source, str) else f"Type: {type(im_sm_source)}"
