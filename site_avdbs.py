@@ -198,13 +198,35 @@ class SiteAvdbs:
                     cursor.execute(query1, (site_name_for_db, current_search_name))
                     row = cursor.fetchone()
                     if not row:
-                        query2 = "SELECT inner_name_kr, inner_name_en, profile_img_path, actor_onm FROM actors WHERE site = ? AND actor_onm LIKE ?"
-                        cursor.execute(query2, (site_name_for_db, f"%{current_search_name}%"))
+                        query2 = """
+                            SELECT inner_name_kr, inner_name_en, profile_img_path, actor_onm, inner_name_cn 
+                            FROM actors 
+                            WHERE site = ? AND (actor_onm LIKE ? OR inner_name_cn LIKE ?)
+                        """
+                        like_search_term = f"%{current_search_name}%"
+                        cursor.execute(query2, (site_name_for_db, like_search_term, like_search_term))
                         potential_rows = cursor.fetchall()
                         if potential_rows:
                             for potential_row in potential_rows:
-                                if SiteAvdbs._parse_and_match_other_names(potential_row["actor_onm"], current_search_name):
-                                    row = potential_row; break
+                                matched_by_onm = False
+                                if potential_row["actor_onm"]:
+                                    matched_by_onm = SiteAvdbs._parse_and_match_other_names(potential_row["actor_onm"], current_search_name)
+                                
+                                matched_by_cn = False
+                                if potential_row["inner_name_cn"]:
+                                    cn_parts = set()
+                                    cn_text = potential_row["inner_name_cn"]
+                                    for part in re.split(r'[（）()/]', cn_text):
+                                        cleaned_part = part.strip()
+                                        if cleaned_part:
+                                            cn_parts.add(cleaned_part)
+                                    if current_search_name in cn_parts:
+                                        matched_by_cn = True
+
+                                if matched_by_onm or matched_by_cn:
+                                    row = potential_row
+                                    logger.debug(f"DB 검색 2단계: '{current_search_name}' 매칭 성공 (ONM: {matched_by_onm}, CN: {matched_by_cn})")
+                                    break
                     if not row:
                         query3 = "SELECT inner_name_kr, inner_name_en, profile_img_path FROM actors WHERE site = ? AND (inner_name_kr = ? OR inner_name_en = ? OR inner_name_en LIKE ?) LIMIT 1"
                         cursor.execute(query3, (site_name_for_db, current_search_name, current_search_name, f"%({current_search_name})%"))

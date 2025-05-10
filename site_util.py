@@ -660,6 +660,47 @@ class SiteUtil:
     def discord_renew_urls(cls, data):
         return DiscordUtil.renew_urls(data)
 
+
+    @classmethod
+    def get_user_custom_image_paths(cls, base_local_dir: str, path_segment: str, ui_code: str, type_suffix_with_extension: str, image_server_url: str):
+        """
+        주어진 ui_code와 타입 접미사 및 확장자를 기반으로 사용자 지정 이미지의 로컬 경로와 웹 URL을 생성하고 존재를 확인.
+        """
+        if not all([base_local_dir, path_segment, ui_code, type_suffix_with_extension, image_server_url]):
+            # logger.debug("get_user_custom_image_paths: Required arguments missing.")
+            return None, None
+
+        try:
+            ui_code_lower = ui_code.lower()
+            filename_with_suffix = f"{ui_code_lower}{type_suffix_with_extension}"
+
+            ui_code_parts = ui_code.split('-')
+            label_part = ui_code_parts[0].upper() if ui_code_parts else "UNKNOWN"
+            # 첫 글자 추출 (알파벳 아니면 '09')
+            first_char = ""
+            if label_part:
+                if label_part[0].isalpha():
+                    first_char = label_part[0].upper()
+                else:
+                    first_char = '09'
+            else:
+                first_char = 'UNKNOWN_FC'
+
+            user_image_dir_local = os.path.join(base_local_dir, path_segment, first_char, label_part)
+            user_image_file_local_path = os.path.join(user_image_dir_local, filename_with_suffix)
+
+            if os.path.exists(user_image_file_local_path):
+                relative_web_path = os.path.join(path_segment, first_char, label_part, filename_with_suffix).replace("\\", "/")
+                full_web_url = f"{image_server_url.rstrip('/')}/{relative_web_path.lstrip('/')}"
+                # logger.info(f"User custom image found: Local='{user_image_file_local_path}', Web='{full_web_url}'")
+                return user_image_file_local_path, full_web_url
+            else:
+                return None, None
+        except Exception as e:
+            logger.exception(f"Error in get_user_custom_image_paths for {ui_code}{type_suffix_with_extension}: {e}")
+            return None, None
+
+
     @classmethod
     def get_image_url(cls, image_url, image_mode, proxy_url=None, with_poster=False):
         try:
