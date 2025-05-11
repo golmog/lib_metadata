@@ -850,7 +850,6 @@ class SiteDmm:
 
     @classmethod
     def info(cls, code, **kwargs):
-        # (원본 코드와 동일)
         ret = {}; entity_result_val_final = None
         try:
             entity_result_val_final = cls.__info(code, **kwargs) 

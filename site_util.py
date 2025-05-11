@@ -5,6 +5,8 @@ import time
 from datetime import timedelta
 from io import BytesIO
 
+import cloudscraper
+
 import requests
 from framework import SystemModelSetting  # pylint: disable=import-error
 from framework import path_data, py_urllib  # pylint: disable=import-error
@@ -53,6 +55,82 @@ class SiteUtil:
     PTN_SPECIAL_CHAR = re.compile(r"[-=+,#/\?:^$.@*\"※~&%ㆍ!』\\‘|\(\)\[\]\<\>`'…》]")
     PTN_HANGUL_CHAR = re.compile(r"[ㄱ-ㅣ가-힣]+")
 
+
+    _cs_scraper_instance = None # cloudscraper 인스턴스 캐싱용 (선택적)
+
+    @classmethod
+    def get_cloudscraper_instance(cls, new_instance=False):
+        # 간단한 싱글톤 또는 캐시된 인스턴스 반환 (매번 생성 방지)
+        # browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False} 등 User-Agent 설정 가능
+        # delay: 요청 사이 지연시간 (초) - 너무 자주 요청 시 차단 방지
+        if new_instance or cls._cs_scraper_instance is None:
+            try:
+                # User-Agent는 default_headers의 것을 활용하거나, cloudscraper 기본값 사용
+                # browser_kwargs = {'custom': cls.default_headers['User-Agent']} if 'User-Agent' in cls.default_headers else {}
+                cls._cs_scraper_instance = cloudscraper.create_scraper(
+                    # browser=browser_kwargs, # 필요시 User-Agent 지정
+                    delay=5 # 예시: 요청 간 5초 지연 (너무 짧으면 차단될 수 있음, 적절히 조절)
+                )
+                logger.debug("Created new cloudscraper instance.")
+            except Exception as e_cs_create:
+                logger.error(f"Failed to create cloudscraper instance: {e_cs_create}")
+                return None # 생성 실패 시 None 반환
+        return cls._cs_scraper_instance
+
+    @classmethod
+    def get_response_cs(cls, url, **kwargs):
+        """cloudscraper를 사용하여 HTTP GET 요청을 보내고 응답 객체를 반환합니다."""
+        method = kwargs.pop("method", "GET").upper()
+        proxy_url = kwargs.pop("proxy_url", None)
+        cookies = kwargs.pop("cookies", None) # requests와 동일한 방식으로 쿠키 전달 가능
+        headers = kwargs.pop("headers", cls.default_headers.copy()) # 헤더 전달
+
+        scraper = cls.get_cloudscraper_instance()
+        if scraper is None:
+            logger.error("SiteUtil.get_response_cs: Failed to get cloudscraper instance.")
+            return None
+
+        current_proxies = None
+        if proxy_url:
+            # cloudscraper는 requests와 동일한 프록시 형식을 사용합니다.
+            # {"http": "http://...", "https": "https://..."}
+            # 만약 http 프록시 하나만 있다면, 양쪽에 모두 설정해주는 것이 일반적입니다.
+            # 또는 proxy_url이 http:// 또는 https:// 로 시작하는지 확인하여 그에 맞게 설정.
+            # parsed_proxy = urlparse(proxy_url)
+            # if parsed_proxy.scheme:
+            #    current_proxies = {parsed_proxy.scheme: proxy_url}
+            # else: # 스킴 없으면 http, https 모두 시도
+            current_proxies = {"http": proxy_url, "https": proxy_url}
+            scraper.proxies.update(current_proxies) # scraper 인스턴스에 프록시 설정
+
+        logger.debug(f"SiteUtil.get_response_cs: Making {method} request to URL='{url}'")
+        if current_proxies: logger.debug(f"  Using proxies for cloudscraper: {current_proxies}")
+        if cookies: logger.debug(f"  Using cookies for cloudscraper: {list(cookies.keys())}") # 값 대신 키만 로깅
+        if headers: scraper.headers.update(headers) # 헤더 적용
+
+        try:
+            if method == "POST":
+                post_data = kwargs.pop("post_data", None)
+                res = scraper.post(url, data=post_data, cookies=cookies, **kwargs)
+            else: # GET
+                res = scraper.get(url, cookies=cookies, **kwargs)
+            
+            logger.debug(f"  Cloudscraper response status: {res.status_code}, URL: {res.url}")
+            res.raise_for_status() # 2xx 아닐 시 예외 발생 (requests와 동일)
+            return res
+        except cloudscraper.exceptions.CloudflareChallengeError as e_cf_challenge:
+            logger.error(f"SiteUtil.get_response_cs: Cloudflare challenge error for URL='{url}'. Error: {e_cf_challenge}")
+            # 이 경우, scraper 인스턴스를 새로 만들어서 재시도해볼 수 있음 (선택적 고급 처리)
+            # scraper = cls.get_cloudscraper_instance(new_instance=True) ... 재시도 ...
+            return None # 챌린지 실패 시 None 반환
+        except requests.exceptions.RequestException as e_req: # cloudscraper는 requests 예외도 발생시킴
+            logger.error(f"SiteUtil.get_response_cs: RequestException for URL='{url}'. Proxy='{proxy_url}'. Error: {e_req}")
+            return None
+        except Exception as e_general:
+            logger.error(f"SiteUtil.get_response_cs: General Exception for URL='{url}'. Proxy='{proxy_url}'. Error: {e_general}")
+            return None
+
+
     @classmethod
     def get_tree(cls, url, **kwargs):
         text = cls.get_text(url, **kwargs)
@@ -72,8 +150,10 @@ class SiteUtil:
     @classmethod
     def get_response(cls, url, **kwargs):
         proxy_url = kwargs.pop("proxy_url", None)
+        current_proxies = None # 현재 요청에 사용될 프록시 정보 로깅용
         if proxy_url:
             kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
+            current_proxies = kwargs["proxies"] # 로깅용으로 저장
 
         kwargs.setdefault("headers", cls.default_headers)
 
@@ -83,15 +163,32 @@ class SiteUtil:
             method = "POST"
             kwargs["data"] = post_data
 
-        # temporary fix to bypass blocked image url
-        if "javbus.com" in url:
+        if "javbus.com" in url: # 이 부분은 JavDB와 무관
             kwargs.setdefault("headers", {})
             kwargs["headers"]["referer"] = "https://www.javbus.com/"
 
-        res = cls.session.request(method, url, **kwargs)
-        # logger.debug(res.headers)
-        # logger.debug(res.text)
-        return res
+        # === 디버그 로그 추가 시작 ===
+        logger.debug(f"SiteUtil.get_response: Making {method} request to URL='{url}'")
+        if current_proxies:
+            logger.debug(f"  Using proxies: {current_proxies}")
+        else:
+            logger.debug("  No proxies configured for this request.")
+        # logger.debug(f"  With headers: {kwargs.get('headers')}") # 헤더는 너무 길 수 있으므로 필요시 주석 해제
+        # === 디버그 로그 추가 끝 ===
+        
+        try:
+            res = cls.session.request(method, url, **kwargs)
+            logger.debug(f"  Response status: {res.status_code}, URL after redirects (if any): {res.url}")
+            # logger.debug(f"  Response headers: {res.headers}") # 응답 헤더도 필요시 주석 해제
+            return res
+        except requests.exceptions.RequestException as e_req:
+            logger.error(f"SiteUtil.get_response: RequestException for URL='{url}'. Proxy='{proxy_url}'. Error: {e_req}")
+            logger.error(traceback.format_exc()) # 상세 트레이스백
+            return None # 예외 발생 시 None 반환 고려 (호출부에서 None 체크 필요)
+        except Exception as e_general: # 기타 예외
+            logger.error(f"SiteUtil.get_response: General Exception for URL='{url}'. Proxy='{proxy_url}'. Error: {e_general}")
+            logger.error(traceback.format_exc())
+            return None
 
 
     @classmethod
@@ -207,6 +304,71 @@ class SiteUtil:
 
         except Exception as e:
             logger.exception(f"MGS Special Local: Error in get_mgs_half_pl_poster_info_local: {e}")
+            return None, None, None
+
+    @classmethod
+    def get_javdb_poster_from_pl_local(cls, pl_url: str, original_code_for_log: str = "unknown", proxy_url: str = None):
+        """
+        JavDB용으로 PL 이미지를 특별 처리하여 포스터로 사용할 임시 파일 경로와 추천 crop_mode를 반환합니다.
+        - PL 이미지의 aspect ratio를 확인합니다.
+        - 1.8 이상 (가로로 매우 김): 오른쪽 절반을 잘라 임시 파일로 저장하고, 추천 crop_mode는 'c' (센터).
+        - 1.8 미만 (일반 가로): 원본 PL URL을 그대로 사용하고, 추천 crop_mode는 'r' (오른쪽).
+        성공 시 (임시 파일 경로 또는 원본 URL, 추천 crop_mode, 원본 PL URL), 실패 시 (None, None, None) 반환.
+        """
+        try:
+            logger.debug(f"JavDB Poster Util: Trying get_javdb_poster_from_pl_local for pl_url='{pl_url}', code='{original_code_for_log}'")
+            if not pl_url:
+                return None, None, None
+
+            pl_image_original = cls.imopen(pl_url, proxy_url=proxy_url)
+            if pl_image_original is None:
+                logger.debug(f"JavDB Poster Util: Failed to open pl_image_original from '{pl_url}'.")
+                return None, None, None
+
+            pl_width, pl_height = pl_image_original.size
+            aspect_ratio = pl_width / pl_height if pl_height > 0 else 0
+            logger.debug(f"JavDB Poster Util: PL aspect_ratio={aspect_ratio:.2f} ({pl_width}x{pl_height})")
+
+            if aspect_ratio >= 1.8: # 가로로 매우 긴 이미지
+                logger.info(f"JavDB Poster Util: PL is very wide (ratio {aspect_ratio:.2f}). Processing right-half.")
+                # 오른쪽 절반 자르기
+                right_half_box = (pl_width / 2, 0, pl_width, pl_height)
+                right_half_img_obj = pl_image_original.crop(right_half_box)
+
+                if right_half_img_obj:
+                    try:
+                        # 임시 파일 저장
+                        img_format = right_half_img_obj.format if right_half_img_obj.format else "JPEG"
+                        ext = img_format.lower().replace("jpeg", "jpg")
+                        if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
+                        
+                        temp_filename = f"javdb_temp_poster_{original_code_for_log.replace('/','_')}_{int(time.time())}_{os.urandom(4).hex()}.{ext}"
+                        temp_filepath = os.path.join(path_data, "tmp", temp_filename)
+                        os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
+                        
+                        save_params = {}
+                        if ext in ['jpg', 'webp']: save_params['quality'] = 95
+                        elif ext == 'png': save_params['optimize'] = True
+                        
+                        right_half_img_obj.save(temp_filepath, **save_params)
+                        logger.info(f"JavDB Poster Util: Saved processed (right-half) PL to temp file: {temp_filepath}")
+                        return temp_filepath, 'c', pl_url # 임시 파일 경로, 추천 crop 'c', 원본 pl_url
+                    except Exception as e_save_half:
+                        logger.exception(f"JavDB Poster Util: Failed to save processed (right-half) PL: {e_save_half}")
+                        # 저장 실패 시 원본 PL과 'r' 모드 반환 (Fallback)
+                        return pl_url, 'r', pl_url
+                else: # 오른쪽 절반 크롭 실패
+                    logger.warning(f"JavDB Poster Util: Failed to crop right-half from PL. Using original PL with 'r' crop.")
+                    return pl_url, 'r', pl_url
+            else: # 일반적인 가로 이미지 (aspect_ratio < 1.8)
+                logger.debug(f"JavDB Poster Util: PL is normal landscape (ratio {aspect_ratio:.2f}). Using original PL with 'r' crop.")
+                return pl_url, 'r', pl_url
+
+        except Exception as e:
+            logger.exception(f"JavDB Poster Util: Error in get_javdb_poster_from_pl_local: {e}")
+            # 예외 발생 시에도 원본 PL과 'r' 모드를 fallback으로 시도해볼 수 있도록.
+            if 'pl_url' in locals() and pl_url:
+                return pl_url, 'r', pl_url 
             return None, None, None
 
 
