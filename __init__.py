@@ -6,10 +6,17 @@ try:
     import xmltodict
 except ImportError:
     try:
-        os.system(f"{app.config['config']['pip']} install xmltodict")
+        os.system(f"{app.config['config']['pip']} install xmltodict cloudscraper")
     except Exception:
         pass
 
+try:
+    import cloudscraper
+except ImportError:
+    try:
+        os.system(f"{app.config['config']['pip']} install cloudscraper")
+    except Exception:
+        pass
 
 from .plugin import P
 
