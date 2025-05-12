@@ -435,6 +435,90 @@ class SiteDmm:
 
 
     @classmethod
+    def _get_dmm_video_trailer_from_args_json(cls, cid_part, detail_url_for_referer, proxy_url=None, current_content_type_for_log="video"):
+        """
+        DMM의 videoa 및 새로운 VR 타입 예고편 추출 헬퍼.
+        AJAX -> iframe -> args JSON 파싱하여 (trailer_url, trailer_title) 반환.
+        실패 시 (None, None) 반환.
+        """
+        trailer_url = None
+        trailer_title_from_json = None # JSON에서 가져온 제목
+
+        try:
+            ajax_url = py_urllib_parse.urljoin(cls.site_base_url, f"/digital/videoa/-/detail/ajax-movie/=/cid={cid_part}/")
+            logger.debug(f"DMM Trailer Helper ({current_content_type_for_log}): Accessing AJAX URL: {ajax_url}")
+            
+            ajax_headers = cls._get_request_headers(referer=detail_url_for_referer)
+            ajax_headers.update({'Accept': 'text/html, */*; q=0.01', 'X-Requested-With': 'XMLHttpRequest'})
+            
+            ajax_res = SiteUtil.get_response(ajax_url, proxy_url=proxy_url, headers=ajax_headers)
+            
+            if ajax_res and ajax_res.status_code == 200 and ajax_res.text.strip():
+                iframe_tree = html.fromstring(ajax_res.text)
+                iframe_srcs = iframe_tree.xpath("//iframe/@src")
+                
+                if iframe_srcs:
+                    iframe_url = py_urllib_parse.urljoin(ajax_url, iframe_srcs[0])
+                    logger.debug(f"DMM Trailer Helper ({current_content_type_for_log}): Accessing iframe URL: {iframe_url}")
+                    iframe_text = SiteUtil.get_text(iframe_url, proxy_url=proxy_url, headers=cls._get_request_headers(referer=ajax_url))
+                    
+                    if iframe_text:
+                        match_args_json = re.search(r'(?:const|var|let)?\s*args\s*=\s*(\{.*?\});', iframe_text, re.DOTALL)
+                        if match_args_json:
+                            json_data_str = match_args_json.group(1)
+                            try:
+                                data_json = json.loads(json_data_str)
+                                bitrates = sorted(data_json.get("bitrates",[]), key=lambda k: isinstance(k.get("bitrate"), int) and k.get("bitrate", 0), reverse=True) # bitrate가 숫자인 경우에만 정렬, 아니면 순서대로
+                                
+                                if bitrates and isinstance(bitrates[0], dict) and bitrates[0].get("src"):
+                                    trailer_url_raw = bitrates[0]["src"]
+                                    trailer_url = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
+                                elif data_json.get("src"): # bitrates 없고 최상위 src
+                                    trailer_url_raw = data_json.get("src")
+                                    trailer_url = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
+
+                                if data_json.get("title") and data_json.get("title").strip():
+                                    trailer_title_from_json = data_json.get("title").strip()
+                                    
+                            except json.JSONDecodeError as e_json:
+                                logger.error(f"DMM Trailer Helper ({current_content_type_for_log}): JSONDecodeError - {e_json}. Data: {json_data_str[:200]}...")
+                        else:
+                            logger.warning(f"DMM Trailer Helper ({current_content_type_for_log}): 'args' JSON not found in iframe for CID: {cid_part}")
+                    else:
+                        logger.warning(f"DMM Trailer Helper ({current_content_type_for_log}): Failed to get iframe content for CID: {cid_part}")
+                else:
+                    logger.warning(f"DMM Trailer Helper ({current_content_type_for_log}): No iframe in AJAX response for CID: {cid_part}")
+            else:
+                status_code = ajax_res.status_code if ajax_res else "None"
+                logger.warning(f"DMM Trailer Helper ({current_content_type_for_log}): AJAX request failed for CID: {cid_part}. Status: {status_code}")
+        except Exception as e_helper:
+            logger.exception(f"DMM Trailer Helper ({current_content_type_for_log}): Exception for CID {cid_part}: {e_helper}")
+
+        return trailer_url, trailer_title_from_json
+
+    @classmethod
+    def _get_dmm_vr_trailer_fallback(cls, cid_part, detail_url_for_referer, proxy_url=None):
+        """
+        DMM VR 타입 예고편 추출의 이전 방식 Fallback.
+        sampleUrl JavaScript 변수를 파싱.
+        """
+        trailer_url = None
+        try:
+            vr_player_page_url = f"{cls.site_base_url}/digital/-/vr-sample-player/=/cid={cid_part}/"
+            logger.debug(f"DMM VR Trailer Fallback: Accessing player page: {vr_player_page_url}")
+            vr_player_html = SiteUtil.get_text(vr_player_page_url, proxy_url=proxy_url, headers=cls._get_request_headers(referer=detail_url_for_referer))
+            if vr_player_html:
+                match_js_var = re.search(r'var\s+sampleUrl\s*=\s*["\']([^"\']+)["\']', vr_player_html)
+                if match_js_var:
+                    trailer_url_raw = match_js_var.group(1)
+                    trailer_url = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
+                    logger.info(f"DMM VR Trailer Fallback: Found sampleUrl: {trailer_url}")
+        except Exception as e_fallback:
+            logger.exception(f"DMM VR Trailer Fallback: Exception for CID {cid_part}: {e_fallback}")
+        return trailer_url
+
+
+    @classmethod
     def __info( 
         cls, code, do_trans=True, proxy_url=None, image_mode="0", max_arts=10, 
         use_extras=True, ps_to_poster=False, crop_mode=None, **kwargs 
@@ -796,49 +880,50 @@ class SiteDmm:
 
         if use_extras: # 예고편 처리
             entity.extras = [] 
-            try: 
-                trailer_title_dmm_extra_val_final = entity.tagline if entity.tagline else entity.title if entity.title else code
-                trailer_url_dmm_extra_val_final = None
-                # (DMM 타입별 예고편 추출 로직 시작)
-                if entity.content_type == 'vr': 
-                    vr_player_page_url_e_f = f"{cls.site_base_url}/digital/-/vr-sample-player/=/cid={cid_part}/"
-                    vr_player_html_e_f = SiteUtil.get_text(vr_player_page_url_e_f, proxy_url=proxy_url, headers=cls._get_request_headers(referer=detail_url))
-                    if vr_player_html_e_f:
-                        match_js_var_e_f = re.search(r'var\s+sampleUrl\s*=\s*["\']([^"\']+)["\']', vr_player_html_e_f)
-                        if match_js_var_e_f: trailer_url_dmm_extra_val_final = "https:" + match_js_var_e_f.group(1) if match_js_var_e_f.group(1).startswith("//") else match_js_var_e_f.group(1)
-                elif entity.content_type == 'videoa': 
-                    ajax_url_v_e_f = py_urllib_parse.urljoin(cls.site_base_url, f"/digital/videoa/-/detail/ajax-movie/=/cid={cid_part}/")
-                    ajax_headers_v_e_f = cls._get_request_headers(referer=detail_url); ajax_headers_v_e_f.update({'Accept': 'text/html, */*; q=0.01', 'X-Requested-With': 'XMLHttpRequest'})
-                    ajax_res_v_e_f = SiteUtil.get_response(ajax_url_v_e_f, proxy_url=proxy_url, headers=ajax_headers_v_e_f)
-                    if ajax_res_v_e_f and ajax_res_v_e_f.status_code == 200 and ajax_res_v_e_f.text.strip():
-                        iframe_tree_v_e_f = html.fromstring(ajax_res_v_e_f.text)
-                        iframe_srcs_v_e_f = iframe_tree_v_e_f.xpath("//iframe/@src")
-                        if iframe_srcs_v_e_f:
-                            iframe_url_v_e_f = py_urllib_parse.urljoin(ajax_url_v_e_f, iframe_srcs_v_e_f[0])
-                            iframe_text_v_e_f = SiteUtil.get_text(iframe_url_v_e_f, proxy_url=proxy_url, headers=cls._get_request_headers(referer=ajax_url_v_e_f))
-                            if iframe_text_v_e_f:
-                                pos_v_e_f = iframe_text_v_e_f.find("const args = {")
-                                if pos_v_e_f != -1:
-                                    json_s_v_e_f = iframe_text_v_e_f.find("{", pos_v_e_f); json_e_v_e_f = iframe_text_v_e_f.find("};", json_s_v_e_f)
-                                    if json_s_v_e_f != -1 and json_e_v_e_f != -1:
-                                        data_str_v_e_f = iframe_text_v_e_f[json_s_v_e_f : json_e_v_e_f+1]
-                                        data_v_e_f = json.loads(data_str_v_e_f)
-                                        bitrates_v_e_f = sorted(data_v_e_f.get("bitrates",[]), key=lambda k_ex_v_f: k_ex_v_f.get("bitrate", 0), reverse=True)
-                                        if bitrates_v_e_f and bitrates_v_e_f[0].get("src"): trailer_url_dmm_extra_val_final = "https:" + bitrates_v_e_f[0]["src"] if bitrates_v_e_f[0]["src"].startswith("//") else bitrates_v_e_f[0]["src"]
-                                        if data_v_e_f.get("title") and data_v_e_f["title"].strip(): trailer_title_dmm_extra_val_final = data_v_e_f["title"].strip()
+            # 기본 트레일러 제목 설정 (JSON에서 못 가져올 경우 사용)
+            default_trailer_title = entity.tagline if entity.tagline and entity.tagline != entity.ui_code else entity.ui_code
+            trailer_url_final = None
+            trailer_title_to_use = default_trailer_title # 기본값
+
+            try:
+                if entity.content_type == 'vr':
+                    # 1차 시도: 새로운 args JSON 방식
+                    trailer_url_final, title_from_json = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url, proxy_url, entity.content_type)
+                    if title_from_json: trailer_title_to_use = title_from_json # JSON 제목 우선
+
+                    # 2차 시도 (Fallback): 이전 sampleUrl 방식
+                    if not trailer_url_final:
+                        logger.info(f"DMM VR Trailer: New method failed for {cid_part}. Trying fallback (old sampleUrl method).")
+                        trailer_url_final = cls._get_dmm_vr_trailer_fallback(cid_part, detail_url, proxy_url)
+                        # Fallback에서는 JSON 제목이 없으므로 default_trailer_title 사용
+                
+                elif entity.content_type == 'videoa':
+                    trailer_url_final, title_from_json = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url, proxy_url, entity.content_type)
+                    if title_from_json: trailer_title_to_use = title_from_json
+
                 elif entity.content_type == 'dvd' or entity.content_type == 'bluray': 
-                    onclick_trailer_d_e_f = tree.xpath('//a[@id="sample-video1"]/@onclick | //a[contains(@onclick,"gaEventVideoStart")]/@onclick')
-                    if onclick_trailer_d_e_f:
-                        onclick_text_d_e_f = onclick_trailer_d_e_f[0]; match_json_d_e_f = re.search(r"gaEventVideoStart\s*\(\s*'(\{.*?\})'\s*,\s*'(\{.*?\})'\s*\)", onclick_text_d_e_f)
-                        if match_json_d_e_f:
-                            video_data_str_d_e_f = match_json_d_e_f.group(1).replace('\\"', '"')
-                            video_data_d_e_f = json.loads(video_data_str_d_e_f)
-                            if video_data_d_e_f.get("video_url"): trailer_url_dmm_extra_val_final = video_data_d_e_f["video_url"]
-                # (DMM 타입별 예고편 추출 로직 끝)
-                if trailer_url_dmm_extra_val_final:
-                    entity.extras.append(EntityExtra("trailer", SiteUtil.trans(trailer_title_dmm_extra_val_final, do_trans=do_trans), "mp4", trailer_url_dmm_extra_val_final))
-            except Exception as e_trailer_dmm_main_detail_final: logger.exception(f"DMM ({entity.content_type}): Trailer error: {e_trailer_dmm_main_detail_final}")
-        
+                    onclick_trailer = tree.xpath('//a[@id="sample-video1"]/@onclick | //a[contains(@onclick,"gaEventVideoStart")]/@onclick')
+                    if onclick_trailer:
+                        match_json = re.search(r"gaEventVideoStart\s*\(\s*'(\{.*?\})'\s*,\s*'(\{.*?\})'\s*\)", onclick_trailer[0])
+                        if match_json:
+                            video_data_str = match_json.group(1).replace('\\"', '"') # 첫 번째 JSON 그룹이 비디오 정보
+                            try:
+                                video_data = json.loads(video_data_str)
+                                if video_data.get("video_url"):
+                                    trailer_url_final = video_data["video_url"]
+                                    # 이 방식은 JSON에 제목 정보가 없을 수 있음
+                            except json.JSONDecodeError as e_json_dvd:
+                                logger.error(f"DMM DVD/BR Trailer: JSONDecodeError - {e_json_dvd}. Data: {video_data_str[:100]}")
+                if trailer_url_final:
+                    # 최종 트레일러 제목 번역 (이미 번역된 tagline 등을 사용했다면 중복 번역될 수 있으므로 주의)
+                    # trailer_title_to_use가 이미 번역된 값(tagline)이거나, 번역 불필요한 ui_code일 수 있음.
+                    # 또는 JSON에서 온 제목이라면 번역 필요.
+                    # 여기서는 trailer_title_to_use를 한번 더 번역 (SiteUtil.trans는 이미 번역된 건 그대로 반환)
+                    final_trans_trailer_title = SiteUtil.trans(trailer_title_to_use, do_trans=do_trans)
+                    entity.extras.append(EntityExtra("trailer", final_trans_trailer_title, "mp4", trailer_url_final))
+            except Exception as e_trailer_main: 
+                logger.exception(f"DMM ({entity.content_type}): Main trailer processing error: {e_trailer_main}")
+
         logger.info(f"DMM ({entity.content_type}): __info finished for {code}. UI: {ui_code_for_image}, PSkip:{skip_default_poster_logic}, PLSkip:{skip_default_landscape_logic}, Thumbs:{len(entity.thumb)}, Fanarts:{len(entity.fanart)}")
         return entity
 
