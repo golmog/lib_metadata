@@ -4,6 +4,7 @@ import re
 import time
 from datetime import timedelta
 from io import BytesIO
+from urllib.parse import urlparse
 
 import cloudscraper
 
@@ -115,7 +116,7 @@ class SiteUtil:
             else: # GET
                 res = scraper.get(url, cookies=cookies, **kwargs)
             
-            logger.debug(f"  Cloudscraper response status: {res.status_code}, URL: {res.url}")
+            # logger.debug(f"  Cloudscraper response status: {res.status_code}, URL: {res.url}")
             res.raise_for_status() # 2xx 아닐 시 예외 발생 (requests와 동일)
             return res
         except cloudscraper.exceptions.CloudflareChallengeError as e_cf_challenge:
@@ -167,18 +168,9 @@ class SiteUtil:
             kwargs.setdefault("headers", {})
             kwargs["headers"]["referer"] = "https://www.javbus.com/"
 
-        # === 디버그 로그 추가 시작 ===
-        logger.debug(f"SiteUtil.get_response: Making {method} request to URL='{url}'")
-        if current_proxies:
-            logger.debug(f"  Using proxies: {current_proxies}")
-        else:
-            logger.debug("  No proxies configured for this request.")
-        # logger.debug(f"  With headers: {kwargs.get('headers')}") # 헤더는 너무 길 수 있으므로 필요시 주석 해제
-        # === 디버그 로그 추가 끝 ===
-        
         try:
             res = cls.session.request(method, url, **kwargs)
-            logger.debug(f"  Response status: {res.status_code}, URL after redirects (if any): {res.url}")
+            # logger.debug(f"  Response status: {res.status_code}, URL after redirects (if any): {res.url}")
             # logger.debug(f"  Response headers: {res.headers}") # 응답 헤더도 필요시 주석 해제
             return res
         except requests.exceptions.RequestException as e_req:
@@ -325,50 +317,45 @@ class SiteUtil:
                 logger.debug(f"JavDB Poster Util: Failed to open pl_image_original from '{pl_url}'.")
                 return None, None, None
 
+            original_format = pl_image_original.format # 원본 포맷 저장
+
             pl_width, pl_height = pl_image_original.size
             aspect_ratio = pl_width / pl_height if pl_height > 0 else 0
-            logger.debug(f"JavDB Poster Util: PL aspect_ratio={aspect_ratio:.2f} ({pl_width}x{pl_height})")
+            logger.debug(f"JavDB Poster Util: PL aspect_ratio={aspect_ratio:.2f} ({pl_width}x{pl_height}), format={original_format}")
+
+            processed_pil_object = pl_image_original # 기본적으로 원본 PIL 객체
+            recommended_crop_mode = 'r' # 기본 추천 크롭 모드
 
             if aspect_ratio >= 1.8: # 가로로 매우 긴 이미지
                 logger.info(f"JavDB Poster Util: PL is very wide (ratio {aspect_ratio:.2f}). Processing right-half.")
-                # 오른쪽 절반 자르기
                 right_half_box = (pl_width / 2, 0, pl_width, pl_height)
-                right_half_img_obj = pl_image_original.crop(right_half_box)
+                try:
+                    right_half_img_obj = pl_image_original.crop(right_half_box)
+                    if right_half_img_obj:
+                        if original_format: right_half_img_obj.format = original_format # 원본 포맷 유지
+                        processed_pil_object = right_half_img_obj
+                        recommended_crop_mode = 'c'
+                        logger.info(f"JavDB Poster Util: Successfully cropped right-half. Recommended crop: 'c'.")
+                    else: # 크롭 자체가 실패 (매우 드문 경우)
+                        logger.warning("JavDB Poster Util: Cropping right-half returned None. Using original PL.")
+                except Exception as e_crop_half:
+                    logger.error(f"JavDB Poster Util: Error cropping right-half: {e_crop_half}. Using original PL.")
+            else: # 일반적인 가로 이미지
+                logger.debug(f"JavDB Poster Util: PL is normal landscape. Recommended crop: 'r'.")
+                # processed_pil_object는 이미 pl_image_original, recommended_crop_mode는 'r'
+            
+            # 원본 포맷이 없었다면, 여기서라도 기본값 설정 시도 (선택적)
+            if processed_pil_object and not processed_pil_object.format:
+                logger.warning("JavDB Poster Util: Processed PIL object still has no format. Defaulting to JPEG for safety.")
+                processed_pil_object.format = "JPEG"
 
-                if right_half_img_obj:
-                    try:
-                        # 임시 파일 저장
-                        img_format = right_half_img_obj.format if right_half_img_obj.format else "JPEG"
-                        ext = img_format.lower().replace("jpeg", "jpg")
-                        if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
-                        
-                        temp_filename = f"javdb_temp_poster_{original_code_for_log.replace('/','_')}_{int(time.time())}_{os.urandom(4).hex()}.{ext}"
-                        temp_filepath = os.path.join(path_data, "tmp", temp_filename)
-                        os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
-                        
-                        save_params = {}
-                        if ext in ['jpg', 'webp']: save_params['quality'] = 95
-                        elif ext == 'png': save_params['optimize'] = True
-                        
-                        right_half_img_obj.save(temp_filepath, **save_params)
-                        logger.info(f"JavDB Poster Util: Saved processed (right-half) PL to temp file: {temp_filepath}")
-                        return temp_filepath, 'c', pl_url # 임시 파일 경로, 추천 crop 'c', 원본 pl_url
-                    except Exception as e_save_half:
-                        logger.exception(f"JavDB Poster Util: Failed to save processed (right-half) PL: {e_save_half}")
-                        # 저장 실패 시 원본 PL과 'r' 모드 반환 (Fallback)
-                        return pl_url, 'r', pl_url
-                else: # 오른쪽 절반 크롭 실패
-                    logger.warning(f"JavDB Poster Util: Failed to crop right-half from PL. Using original PL with 'r' crop.")
-                    return pl_url, 'r', pl_url
-            else: # 일반적인 가로 이미지 (aspect_ratio < 1.8)
-                logger.debug(f"JavDB Poster Util: PL is normal landscape (ratio {aspect_ratio:.2f}). Using original PL with 'r' crop.")
-                return pl_url, 'r', pl_url
+            return processed_pil_object, recommended_crop_mode, pl_url
 
         except Exception as e:
             logger.exception(f"JavDB Poster Util: Error in get_javdb_poster_from_pl_local: {e}")
-            # 예외 발생 시에도 원본 PL과 'r' 모드를 fallback으로 시도해볼 수 있도록.
-            if 'pl_url' in locals() and pl_url:
-                return pl_url, 'r', pl_url 
+            if 'pl_image_original' in locals() and pl_image_original: # 원본이라도 열렸다면
+                if not pl_image_original.format : pl_image_original.format = "JPEG"
+                return pl_image_original, 'r', pl_url if 'pl_url' in locals() else None
             return None, None, None
 
 
@@ -394,6 +381,9 @@ class SiteUtil:
 
         if not isinstance(im, Image.Image):
             return im
+
+        original_format = im.format
+
         width, height = im.size
         new_w = height / 1.4225
         if position == "l":
@@ -403,10 +393,30 @@ class SiteUtil:
         else:
             # default: from right
             left = width - new_w
-        box = (left, 0, left + new_w, height)
+        
+        # left, right 값이 이미지 경계를 벗어나지 않도록 조정 (음수 또는 width 초과 방지)
+        left = max(0, min(left, width - new_w))
+        right = left + new_w
+        if right > width : # new_w가 너무 커서 오른쪽 경계를 넘는 경우
+            new_w = width - left
+            right = width
+        if new_w <= 0 : # 계산된 너비가 0 이하이면 크롭 불가
+            logger.warning(f"imcrop: Calculated new_w ({new_w}) is invalid for image size {width}x{height}. Returning original.")
+            return im # 원본 반환 또는 None
+
+        box = (left, 0, right, height) # 수정된 right 사용
+        
         if box_only:
             return box
-        return im.crop(box)
+        
+        try:
+            cropped_im = im.crop(box)
+            if cropped_im and original_format: # 크롭 성공했고 원본 포맷 정보가 있었다면
+                cropped_im.format = original_format # format 속성 복사
+            return cropped_im
+        except Exception as e_crop:
+            logger.error(f"Error during im.crop with box {box}: {e_crop}")
+            return None # 크롭 실패 시 None 반환
 
     @classmethod
     def resolve_jav_imgs(cls, img_urls: dict, ps_to_poster: bool = False, proxy_url: str = None, crop_mode: str = None):
@@ -472,86 +482,73 @@ class SiteUtil:
 
     @classmethod
     def process_image_mode(cls, image_mode, image_source, proxy_url=None, crop_mode=None):
-        # logger.debug('process_image_mode : %s %s', image_mode, image_url)
         if image_source is None:
             return
 
-        source_is_url = isinstance(image_source, str) and not os.path.exists(image_source) # 로컬 파일 경로가 아닌 URL
-        source_is_local_file = isinstance(image_source, str) and os.path.exists(image_source) # 로컬 파일 경로
-
-        # 로깅 및 파일명 생성용 기본 이름
         log_name = image_source
-        if source_is_local_file:
+        if isinstance(image_source, str) and os.path.exists(image_source):
             log_name = f"localfile:{os.path.basename(image_source)}"
         
         logger.debug(f"process_image_mode: mode='{image_mode}', source='{log_name}', crop='{crop_mode}'")
 
-        if image_mode == "0": # 원본 사용
-            if source_is_url or source_is_local_file: # URL 또는 파일 경로면 그대로 반환
-                return image_source 
-            else: # PIL 객체 등 기타 타입 (현재 이 함수에서는 URL/파일경로만 가정)
-                logger.warning("process_image_mode: Mode 0 called with non-URL/filepath. Returning None.")
-                return None
+        if image_mode == "0": 
+            return image_source # 원본 사용
 
-        # image_mode '1', '2' (SJVA URL 프록시)는 image_source가 외부 접근 가능한 URL이어야 함.
-        # 로컬 파일은 이 프록시를 직접 사용할 수 없음.
-        if image_mode in ["1", "2"]:
-            if not source_is_url:
-                logger.warning(f"Image mode {image_mode} (SJVA URL Proxy) called with non-URL source '{log_name}'. This mode requires a public URL. Returning original source or None.")
-                # 로컬 파일이면 원래 경로 반환 (프록시 안됨), 객체면 None
-                return image_source if source_is_local_file else None 
+        if image_mode in ["1", "2"]: # SJVA URL 프록시
+            if not (isinstance(image_source, str) and not os.path.exists(image_source)): # URL이 아니면
+                logger.warning(f"Image mode {image_mode} (SJVA URL Proxy) called with non-URL source '{log_name}'.")
+                return image_source # 원본 반환 (프록시 불가)
             
-            # 기존 URL 기반 프록시 로직
-            api_path = "image_proxy" if image_mode == "1" else "discord_proxy"
-            tmp = f"{{ddns}}/metadata/api/{api_path}?url=" + py_urllib.quote_plus(image_source) # image_source는 URL
+            api_path = "image_proxy" if image_mode == "1" else "discord_proxy" # SJVA 내 API 엔드포인트 이름
+            tmp = f"{{ddns}}/metadata/api/{api_path}?url=" + py_urllib.quote_plus(image_source)
             if proxy_url: tmp += "&proxy_url=" + py_urllib.quote_plus(proxy_url)
             if crop_mode: tmp += "&crop_mode=" + py_urllib.quote_plus(crop_mode)
             return Util.make_apikey(tmp)
 
-        # image_mode '3' (직접 디스코드 업로드 - 로컬 파일도 가능하게 수정)
+        # image_mode '3' (직접 디스코드 업로드)
         # image_mode '5' (로컬 임시파일 생성 후 디스코드 업로드)
-        # 이 모드들은 최종적으로 PIL Image 객체를 DiscordUtil.proxy_image 등에 전달해야 함.
-        if image_mode in ["3", "5"]:
-            im_opened = None
-            if source_is_url:
-                im_opened = cls.imopen(image_source, proxy_url=proxy_url)
-            elif source_is_local_file:
-                im_opened = cls.imopen(image_source) # 로컬 파일은 프록시 불필요
+        if image_mode == "3":
+            discord_kwargs = {}
+            if proxy_url: discord_kwargs['proxy_url'] = proxy_url
+            if crop_mode: discord_kwargs['crop_mode'] = crop_mode
             
-            if im_opened is None:
-                logger.warning(f"process_image_mode: Mode {image_mode} failed to open image from '{log_name}'.")
-                return image_source # 실패 시 원본 반환 (URL 또는 파일 경로)
+            if not isinstance(image_source, str):
+                logger.error(f"process_image_mode (mode 3): image_source is not a URL/filepath. Type: {type(image_source)}")
+                return None
 
-            final_im_for_upload = im_opened
-            # crop_mode 적용 (URL에서 왔거나, 로컬파일인데 crop_mode가 지정된 경우)
-            # get_mgs_half_pl_poster_info_local에서 온 파일은 crop_mode=None으로 전달됨.
-            if crop_mode: 
-                logger.debug(f"process_image_mode: Mode {image_mode} applying crop_mode '{crop_mode}' to image from '{log_name}'.")
-                cropped = cls.imcrop(im_opened, position=crop_mode)
-                if cropped: final_im_for_upload = cropped
-                else: logger.warning(f"process_image_mode: Mode {image_mode} cropping failed for '{log_name}'. Using uncropped.")
-            
-            # Mode 5는 항상 로컬 파일을 거침. Mode 3은 직접 PIL 객체를 discord_proxy_image에 전달.
-            if image_mode == "5":
-                temp_filename_mode5 = f"proxy_mode5_{time.time()}.jpg"
-                temp_filepath_mode5 = os.path.join(path_data, "tmp", temp_filename_mode5)
-                try:
-                    final_im_for_upload.save(temp_filepath_mode5, quality=95)
-                    # discord_proxy_image_localfile은 파일 경로를 받아 Discord에 올림
-                    return cls.discord_proxy_image_localfile(temp_filepath_mode5) 
-                except Exception as e_save5:
-                    logger.exception(f"process_image_mode: Mode 5 failed to save/proxy image from '{log_name}': {e_save5}")
-                    return image_source # 실패 시 원본
-            
-            elif image_mode == "3":
-                # discord_proxy_image가 PIL 객체를 받을 수 있도록 수정했거나,
-                # 아니면 여기서 객체를 임시 저장하고 그 경로를 전달.
-                # 여기서는 discord_proxy_image가 객체를 처리한다고 가정.
-                # obj_info_str은 디버깅/캐시 등에 사용될 수 있는 문자열.
-                return cls.discord_proxy_image(final_im_for_upload, obj_info_str=log_name)
+            return cls.discord_proxy_image(image_source, **discord_kwargs)
 
-        # 모든 조건에 맞지 않거나 처리 실패 시 원본 반환
-        logger.debug(f"process_image_mode: No specific action for mode '{image_mode}' or processing failed. Returning original source: {image_source}")
+        if image_mode == "5":
+            # 1. image_source (URL)로 이미지 열기
+            im_opened = cls.imopen(image_source, proxy_url=proxy_url)
+            if im_opened is None: return image_source
+
+            # 2. (선택적) 크롭 적용 - 원본 코드에서는 crop_mode를 여기서 적용 안했음.
+            #    만약 crop_mode를 여기서 적용하려면:
+            #    if crop_mode:
+            #        cropped = cls.imcrop(im_opened, position=crop_mode)
+            #        if cropped: im_opened = cropped
+            
+            # 3. 임시 파일로 저장
+            #    파일 이름에 crop_mode 정보를 포함시키는 것이 좋음 (만약 여기서 크롭했다면)
+            temp_filename_mode5 = f"proxy_mode5_{os.path.basename(image_source if isinstance(image_source, str) else 'img')}_{time.time()}.jpg"
+            if crop_mode: temp_filename_mode5 = f"proxy_mode5_crop{crop_mode}_{os.path.basename(image_source if isinstance(image_source, str) else 'img')}_{time.time()}.jpg"
+
+            temp_filepath_mode5 = os.path.join(path_data, "tmp", temp_filename_mode5)
+            try:
+                save_format = im_opened.format if im_opened.format else "JPEG"
+                # JPEG 저장 시 RGB 변환 필요할 수 있음
+                img_to_save_mode5 = im_opened
+                if save_format == 'JPEG' and img_to_save_mode5.mode not in ('RGB', 'L'):
+                    img_to_save_mode5 = img_to_save_mode5.convert('RGB')
+
+                img_to_save_mode5.save(temp_filepath_mode5, format=save_format, quality=95)
+                return cls.discord_proxy_image_localfile(temp_filepath_mode5) 
+            except Exception as e_save5:
+                logger.exception(f"process_image_mode: Mode 5 failed to save/proxy image from '{log_name}': {e_save5}")
+                return image_source
+            
+        logger.debug(f"process_image_mode: No specific action for mode '{image_mode}'. Returning original source: {image_source}")
         return image_source
 
 
@@ -772,38 +769,93 @@ class SiteUtil:
         return text
 
     @classmethod
-    def discord_proxy_image(cls, image_url: str, **kwargs) -> str:
-        if not image_url:
+    def discord_proxy_image(cls, image_url: str, **kwargs) -> str: # 첫 인자는 URL 또는 파일 경로 (문자열)
+        if not image_url or not isinstance(image_url, str):
+            logger.warning(f"Discord_proxy_image: Invalid image_url (not a string or empty): {image_url}")
             return image_url
 
         cache = CacheUtil.get_cache()
-        cached = cache.get(image_url, {})
+        cached_data_for_url = cache.get(image_url, {})
 
-        crop_mode = kwargs.pop("crop_mode", None)
-        mode = f"crop{crop_mode}" if crop_mode is not None else "original"
-        if cached_url := cached.get(mode):
-            if DiscordUtil.isurlattachment(cached_url):
-                if not DiscordUtil.isurlexpired(cached_url):
-                    return cached_url
+        crop_mode_from_caller = kwargs.pop("crop_mode", None) 
+        
+        # 캐시 내부 키 (mode_str)는 crop_mode 유무 및 값에 따라 유니크하게 생성
+        is_cropped_image = False
+        if crop_mode_from_caller and isinstance(crop_mode_from_caller, str) and crop_mode_from_caller.strip():
+            mode_str = f"crop_{crop_mode_from_caller.strip()}" # 예: "crop_r"
+            is_cropped_image = True
+        else:
+            mode_str = "no_crop" # 크롭 없으면 "no_crop"
+        
+        logger.debug(f"Discord_proxy_image: Processing URL/Path='{image_url}', Mode='{mode_str}'")
 
-        proxy_url = kwargs.pop("proxy_url", None)
-        if (im := cls.imopen(image_url, proxy_url=proxy_url)) is None:
+        if cached_discord_url := cached_data_for_url.get(mode_str):
+            if DiscordUtil.isurlattachment(cached_discord_url) and not DiscordUtil.isurlexpired(cached_discord_url):
+                logger.debug(f"Discord_proxy_image: Cache hit for Mode='{mode_str}'. URL: {cached_discord_url}")
+                return cached_discord_url
+            else:
+                logger.debug(f"Discord_proxy_image: Cache for Mode='{mode_str}' found but expired or invalid.")
+
+        proxy_url_for_open = kwargs.pop("proxy_url", None)
+        
+        pil_image_opened = cls.imopen(image_url, proxy_url=proxy_url_for_open)
+        if pil_image_opened is None:
+            logger.warning(f"Discord_proxy_image: Failed to open image from: {image_url}")
             return image_url
 
         try:
-            if crop_mode is not None:
-                imformat = im.format  # retain original image's format like "JPEG", "PNG"
-                im = cls.imcrop(im, position=crop_mode)
-                im.format = imformat
-            # 파일 이름이 이상한 값이면 첨부가 안될 수 있음
-            filename = f"{mode}.{im.format.lower().replace('jpeg', 'jpg')}"
-            fields = [{"name": "mode", "value": mode}]
-            cached[mode] = DiscordUtil.proxy_image(im, filename, title=image_url, fields=fields)
-            cache[image_url] = cached
-            return cached[mode]
-        except Exception:
-            logger.exception("이미지 프록시 중 예외:")
+            image_to_upload = pil_image_opened
+            original_format_from_pil = pil_image_opened.format # 열린 이미지의 원본 포맷
+
+            if is_cropped_image: # crop_mode가 실제로 있을 때만 크롭 수행
+                logger.debug(f"Discord_proxy_image: Applying crop_mode '{crop_mode_from_caller}' to image from '{image_url}'.")
+                cropped_image = cls.imcrop(pil_image_opened, position=crop_mode_from_caller.strip())
+                if cropped_image:
+                    image_to_upload = cropped_image
+                    if original_format_from_pil: image_to_upload.format = original_format_from_pil 
+                    elif not image_to_upload.format : image_to_upload.format = "JPEG"
+                else:
+                    logger.warning(f"Discord_proxy_image: Cropping failed for URL='{image_url}', Mode='{mode_str}'. Uploading uncropped (original from imopen).")
+                    # image_to_upload는 이미 pil_image_opened (크롭 안 된 상태)
+            
+            if not image_to_upload.format:
+                image_to_upload.format = "JPEG"
+
+            # --- 파일명 생성 로직 변경 ---
+            # 원본 URL에서 파일명과 확장자 분리 (쿼리스트링 제거)
+            base_name_with_ext = os.path.basename(urlparse(image_url).path)
+            name_part, ext_part = os.path.splitext(base_name_with_ext)
+            
+            # Pillow에서 얻은 실제 이미지 포맷으로 확장자 결정 (더 신뢰성 있음)
+            current_image_format = image_to_upload.format if image_to_upload.format else "JPEG"
+            final_ext = current_image_format.lower().replace("jpeg", "jpg")
+            if final_ext not in ['jpg', 'png', 'webp']: final_ext = 'jpg' # 안전한 확장자로 통일
+
+            # 최종 파일명 결정
+            if is_cropped_image: # 크롭된 이미지인 경우
+                filename_for_discord = f"{name_part[:50]}_crop.{final_ext}" # 예: originalname_crop.jpg
+            else: # 원본 이미지인 경우
+                filename_for_discord = f"{name_part[:50]}.{final_ext}"     # 예: originalname.jpg
+            
+            # 파일명이 비어있거나 "."으로 시작하는 경우 방지
+            if not name_part: filename_for_discord = f"image{'_crop' if is_cropped_image else ''}.{final_ext}"
+            elif filename_for_discord.startswith("."): filename_for_discord = f"image{filename_for_discord}"
+
+
+            fields = [{"name": "original_url", "value": image_url[:1000]}]
+            fields.append({"name": "applied_transform", "value": mode_str}) # 캐시 키에 사용된 mode_str 기록
+            
+            logger.debug(f"Discord_proxy_image: Uploading to Discord. Filename: '{filename_for_discord}', Title: '{image_url}'")
+            new_discord_url = DiscordUtil.proxy_image(image_to_upload, filename_for_discord, title=image_url, fields=fields)
+            
+            cached_data_for_url[mode_str] = new_discord_url
+            cache[image_url] = cached_data_for_url
+            logger.info(f"Discord_proxy_image: Uploaded and cached. MainKey='{image_url}', Mode='{mode_str}'. URL: {new_discord_url}")
+            return new_discord_url
+        except Exception as e_proxy:
+            logger.exception(f"이미지 프록시 중 예외 (discord_proxy_image for {image_url}): {e_proxy}")
             return image_url
+
 
     @classmethod
     def discord_proxy_image_localfile(cls, filepath: str) -> str:
