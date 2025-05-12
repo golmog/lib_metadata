@@ -504,53 +504,92 @@ class SiteJav321:
                     if is_placeholder_poster_default: # 상세 PS가 플레이스홀더인 경우
                         if ps_url_from_search_cache:
                             final_poster_source = ps_url_from_search_cache
-                            logger.info(f"Jav321 (Default Logic): Using PS from search cache as poster source: {final_poster_source}")
                         else:
-                            final_poster_source = ps_url_detail_page_default # 플레이스홀더 PS라도 사용
-                            logger.warning(f"Jav321 (Default Logic): PS from search cache not available, using (placeholder) detailed page PS as poster source: {final_poster_source}")
+                            final_poster_source = ps_url_detail_page_default # 플레이스홀더라 해도 일단 사용
                         final_poster_crop_mode = None
-                    else: # 상세 PS가 플레이스홀더가 아닌 경우 (또는 검사 불가) - Jav321의 기존 포스터 결정 로직
-                        resolved_poster_url_step1 = None; resolved_crop_mode_step1 = None
-                        # 1단계: 기본 후보
+                        logger.info(f"Jav321 (Default Logic): Placeholder PS. Using '{final_poster_source}' as poster.")
+                    else: # 상세 PS가 플레이스홀더가 아닌 경우 (또는 검사 불가)
+                        resolved_poster_url_step1 = None
+                        resolved_crop_mode_step1 = None
+                        specific_art_candidate = arts_urls_page_default[0] if arts_urls_page_default else None
+
+                        # 1단계: 기본 후보 결정 (ps_to_poster, crop_mode, has_hq_poster 등 사용)
+                        # 이 로직은 specific_art_candidate를 아직 직접적으로 사용하지 않음.
                         if ps_to_poster_setting and ps_url_detail_page_default: 
                             resolved_poster_url_step1 = ps_url_detail_page_default
                         elif crop_mode_setting and pl_url_detail_page_default: 
-                            resolved_poster_url_step1 = pl_url_detail_page_default; resolved_crop_mode_step1 = crop_mode_setting
+                            resolved_poster_url_step1 = pl_url_detail_page_default
+                            resolved_crop_mode_step1 = crop_mode_setting
                         elif pl_url_detail_page_default and ps_url_detail_page_default:
                             loc = SiteUtil.has_hq_poster(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
-                            if loc: resolved_poster_url_step1 = pl_url_detail_page_default; resolved_crop_mode_step1 = loc
+                            if loc: 
+                                resolved_poster_url_step1 = pl_url_detail_page_default
+                                resolved_crop_mode_step1 = loc
+                            elif SiteUtil.is_hq_poster(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url): 
+                                resolved_poster_url_step1 = pl_url_detail_page_default
                             else: 
-                                if SiteUtil.is_hq_poster(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url): 
-                                    resolved_poster_url_step1 = pl_url_detail_page_default
-                                else: resolved_poster_url_step1 = ps_url_detail_page_default
-                        elif ps_url_detail_page_default: resolved_poster_url_step1 = ps_url_detail_page_default
-                        elif pl_url_detail_page_default: resolved_poster_url_step1 = pl_url_detail_page_default; resolved_crop_mode_step1 = crop_mode_setting
-                        if not resolved_poster_url_step1 and ps_url_detail_page_default: resolved_poster_url_step1 = ps_url_detail_page_default
+                                resolved_poster_url_step1 = ps_url_detail_page_default
+                        elif ps_url_detail_page_default: 
+                            resolved_poster_url_step1 = ps_url_detail_page_default
+                        elif pl_url_detail_page_default: 
+                            resolved_poster_url_step1 = pl_url_detail_page_default
+                            resolved_crop_mode_step1 = crop_mode_setting # crop_mode_setting 사용
                         
-                        logger.debug(f"Jav321 (Default Logic) Step 1: Poster='{resolved_poster_url_step1}', Crop='{resolved_crop_mode_step1}'")
+                        # resolved_poster_url_step1이 결정 안됐으면 ps_url_detail_page_default를 기본으로
+                        if not resolved_poster_url_step1 and ps_url_detail_page_default:
+                            resolved_poster_url_step1 = ps_url_detail_page_default
+                        
+                        logger.debug(f"Jav321 (Default Logic) Step 1: Base Poster='{resolved_poster_url_step1}', Base Crop='{resolved_crop_mode_step1}'")
 
-                        # 2단계: MGS 스타일 특별 처리
+                        # 1.5단계: Specific Art 후보 고려 (DMM 스타일)
+                        #    - ps_url_from_search_cache (검색 결과 썸네일) 또는 ps_url_detail_page_default (상세 페이지 썸네일)와
+                        #      specific_art_candidate (Arts 목록의 첫 번째 이미지)를 비교.
+                        #    - is_hq_poster 통과 시, specific_art_candidate를 포스터로 사용.
+                        #      이 경우, resolved_poster_url_step1과 resolved_crop_mode_step1을 덮어씀.
+                        
+                        comparison_ps_for_specific_art = ps_url_from_search_cache if ps_url_from_search_cache else ps_url_detail_page_default
+                        if specific_art_candidate and comparison_ps_for_specific_art:
+                            logger.debug(f"Jav321 (Default Logic) Step 1.5: Checking specific_art_candidate '{specific_art_candidate}' against '{comparison_ps_for_specific_art}'")
+                            if SiteUtil.is_hq_poster(comparison_ps_for_specific_art, specific_art_candidate, proxy_url=proxy_url):
+                                logger.info(f"Jav321 (Default Logic) Step 1.5: specific_art_candidate IS HQ. Using it as poster.")
+                                resolved_poster_url_step1 = specific_art_candidate
+                                resolved_crop_mode_step1 = None # specific_art_candidate는 보통 세로형 포스터로 간주, 크롭 불필요
+                            else:
+                                logger.debug(f"Jav321 (Default Logic) Step 1.5: specific_art_candidate IS NOT HQ.")
+                        else:
+                            logger.debug(f"Jav321 (Default Logic) Step 1.5: No specific_art_candidate or comparison_ps to check.")
+
+
+                        # 2단계: MGS 스타일 특별 처리 (get_mgs_half_pl_poster_info_local 사용)
+                        #    - 이 단계는 resolved_poster_url_step1 (1 또는 1.5단계 결과)과 pl_url_detail_page_default를 사용.
                         jav321_special_poster_filepath = None
                         attempt_special_local = False
-                        if pl_url_detail_page_default and ps_url_detail_page_default and \
-                            not ps_to_poster_setting and resolved_poster_url_step1 == ps_url_detail_page_default:
+                        # 조건: PL이 있고, (1 또는 1.5단계에서 결정된) 포스터 소스가 PL이며, ps_to_poster 설정이 아니고, 상세페이지 PS도 있어야 함
+                        if pl_url_detail_page_default and \
+                            resolved_poster_url_step1 == pl_url_detail_page_default and \
+                            not ps_to_poster_setting and \
+                            ps_url_detail_page_default: # 상세페이지 PS가 있어야 MGS 스타일 비교 가능
                             attempt_special_local = True
                         
                         if attempt_special_local:
-                            logger.info(f"Jav321 (Default Logic): Attempting special poster (local) for {code}")
+                            logger.info(f"Jav321 (Default Logic) Step 2: Attempting MGS-style special poster processing for {code}")
+                            # MGS 함수는 (임시파일경로, 크롭모드(None), 원본PL) 반환
                             temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
                             if temp_filepath and os.path.exists(temp_filepath): 
                                 jav321_special_poster_filepath = temp_filepath
-                                logger.info(f"Jav321 (Default Logic): Special poster (local) successful: {jav321_special_poster_filepath}")
+                                logger.info(f"Jav321 (Default Logic) Step 2: MGS-style special poster successful: {jav321_special_poster_filepath}")
                             else:
-                                logger.info(f"Jav321 (Default Logic): Special poster (local) failed for {code}.")
+                                logger.info(f"Jav321 (Default Logic) Step 2: MGS-style special poster failed for {code}.")
                         
-                        # 3단계: 최종 결정
-                        if jav321_special_poster_filepath:
-                            final_poster_source = jav321_special_poster_filepath; final_poster_crop_mode = None
-                        else:
-                            final_poster_source = resolved_poster_url_step1; final_poster_crop_mode = resolved_crop_mode_step1
-                        logger.debug(f"Jav321 (Default Logic): Final default poster source: {final_poster_source}, Crop: {final_poster_crop_mode}")
+                        # 3단계: 최종 포스터 결정
+                        if jav321_special_poster_filepath: # 2단계 성공 시
+                            final_poster_source = jav321_special_poster_filepath
+                            final_poster_crop_mode = None # MGS 스타일은 이미 크롭 완료된 포스터
+                        else: # 2단계 실패 또는 해당 안 됨 -> 1/1.5단계 결과 사용
+                            final_poster_source = resolved_poster_url_step1
+                            final_poster_crop_mode = resolved_crop_mode_step1
+                        
+                        logger.debug(f"Jav321 (Default Logic) Final decided poster: Source='{final_poster_source}', Crop='{final_poster_crop_mode}'")
 
                 # --- C. 기본 랜드스케이프 소스 결정 (사용자 지정 랜드스케이프가 없을 때만) ---
                 if not skip_default_landscape_logic:

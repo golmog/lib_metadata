@@ -72,7 +72,7 @@ class SiteUtil:
                     # browser=browser_kwargs, # 필요시 User-Agent 지정
                     delay=5 # 예시: 요청 간 5초 지연 (너무 짧으면 차단될 수 있음, 적절히 조절)
                 )
-                logger.debug("Created new cloudscraper instance.")
+                # logger.debug("Created new cloudscraper instance.")
             except Exception as e_cs_create:
                 logger.error(f"Failed to create cloudscraper instance: {e_cs_create}")
                 return None # 생성 실패 시 None 반환
@@ -105,8 +105,8 @@ class SiteUtil:
             scraper.proxies.update(current_proxies) # scraper 인스턴스에 프록시 설정
 
         logger.debug(f"SiteUtil.get_response_cs: Making {method} request to URL='{url}'")
-        if current_proxies: logger.debug(f"  Using proxies for cloudscraper: {current_proxies}")
-        if cookies: logger.debug(f"  Using cookies for cloudscraper: {list(cookies.keys())}") # 값 대신 키만 로깅
+        # if current_proxies: logger.debug(f"  Using proxies for cloudscraper: {current_proxies}")
+        # if cookies: logger.debug(f"  Using cookies for cloudscraper: {list(cookies.keys())}") # 값 대신 키만 로깅
         if headers: scraper.headers.update(headers) # 헤더 적용
 
         try:
