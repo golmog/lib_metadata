@@ -246,7 +246,7 @@ class SiteJavbus:
                     genre_values_p_node_list = genre_header_p_node.xpath("./following-sibling::p[1]")
                     if genre_values_p_node_list:
                         genre_values_p_actual_node = genre_values_p_node_list[0]
-                        logger.debug(f"JavBus: Genre values P tag content: {html.tostring(genre_values_p_actual_node, encoding='unicode')[:300]}")
+                        # logger.debug(f"JavBus: Genre values P tag content: {html.tostring(genre_values_p_actual_node, encoding='unicode')[:300]}")
                         
                         genre_span_tags = genre_values_p_actual_node.xpath("./span[@class='genre']")
 

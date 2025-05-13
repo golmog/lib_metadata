@@ -15,7 +15,7 @@ logger = P.logger
 class SiteJav321:
     site_name = "jav321"
     site_base_url = "https://www.jav321.com"
-    module_char = "D"
+    module_char = "C"
     site_char = "T"
     _ps_url_cache = {} 
 
