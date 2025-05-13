@@ -178,35 +178,26 @@ class SiteJav321:
             # 3. Arts 이미지 추출 (오른쪽 두 번째 이후, onerror 우선)
             arts_xpath = '/html/body/div[2]/div[2]/div[position()>1]//a[contains(@href, "/snapshot/")]/img' # img 태그 자체 선택
             arts_img_tags = tree.xpath(arts_xpath)
-            
-            processed_arts = []
+
+            temp_arts_list = []
             if arts_img_tags:
-                logger.debug(f"Jav321: Found {len(arts_img_tags)} potential art image tags in sidebar.")
-                
                 for img_tag in arts_img_tags:
                     current_art_url = None
                     onerror_url = cls._get_jav321_url_from_onerror(img_tag.attrib.get('onerror'))
-                    if onerror_url:
-                        current_art_url = onerror_url
-                    else: # onerror 없으면 src 사용
+                    if onerror_url: current_art_url = onerror_url
+                    else: 
                         src_url = img_tag.attrib.get('src')
                         if src_url: current_art_url = src_url.strip()
-                    
-                    if current_art_url:
-                        # PL과 중복 체크 및 리스트 추가 (중복 방지)
-                        if current_art_url != img_urls.get('pl') and current_art_url not in processed_arts:
-                            processed_arts.append(current_art_url)
-                
-                img_urls['arts'] = processed_arts
-                logger.debug(f"Jav321: Extracted {len(img_urls['arts'])} unique arts (onerror preferred).")
-            else:
-                logger.warning(f"Jav321: Arts 이미지 태그(사이드바 두번째 이후)를 찾지 못했습니다. XPath: {arts_xpath}")
-
+                    if current_art_url: temp_arts_list.append(current_art_url)
+            
+            # 순서 유지하며 중복 제거 (dict.fromkeys는 Python 3.7+)
+            # 또는 루프와 if not in으로 처리
+            img_urls['arts'] = list(dict.fromkeys(temp_arts_list))
+            
         except Exception as e_img:
             logger.exception(f"Jav321: Error extracting image URLs: {e_img}")
-            img_urls = {'ps': "", 'pl': "", 'arts': []} 
-
-        logger.debug(f"Jav321 Final Extracted URLs: PS='{img_urls.get('ps')}', PL='{img_urls.get('pl')}', Arts Count={len(img_urls.get('arts',[]))}")
+        
+        logger.debug(f"Jav321 Raw Extracted URLs: PS='{img_urls['ps']}', PL='{img_urls['pl']}', All Arts from sidebar ({len(img_urls['arts'])})='{img_urls['arts'][:3]}...'")
         return img_urls
 
 
@@ -501,59 +492,52 @@ class SiteJav321:
                 
                 # --- B. 기본 포스터 결정 (사용자 지정 포스터가 없을 때만) ---
                 if not skip_default_poster_logic:
-                    if is_placeholder_poster_default: # 상세 PS가 플레이스홀더인 경우
+                    if is_placeholder_poster_default:
                         if ps_url_from_search_cache:
                             final_poster_source = ps_url_from_search_cache
                         else:
                             final_poster_source = ps_url_detail_page_default # 플레이스홀더라 해도 일단 사용
+
+                        final_poster_source = ps_url_from_search_cache if ps_url_from_search_cache else ps_url_detail_page_default
                         final_poster_crop_mode = None
-                        logger.info(f"Jav321 (Default Logic): Placeholder PS. Using '{final_poster_source}' as poster.")
-                    else: # 상세 PS가 플레이스홀더가 아닌 경우 (또는 검사 불가)
+                    else: 
                         resolved_poster_url_step1 = None
                         resolved_crop_mode_step1 = None
-                        specific_art_candidate = arts_urls_page_default[0] if arts_urls_page_default else None
+                        
+                        # arts_urls_page_default에서 PL로 사용된 것을 제외한 실제 Art 목록의 첫 번째를 specific 후보로.
+                        actual_arts_for_specific_check = []
+                        if pl_url_detail_page_default: # PL이 있다면
+                            actual_arts_for_specific_check = [art for art in arts_urls_page_default if art != pl_url_detail_page_default]
+                        else: # PL이 없다면 (매우 드문 경우) arts_urls_page_default 그대로 사용
+                            actual_arts_for_specific_check = arts_urls_page_default
+                        
+                        specific_art_candidate_jav321 = actual_arts_for_specific_check[0] if actual_arts_for_specific_check else None
+                        logger.debug(f"Jav321 (Default Logic): specific_art_candidate_jav321 = '{specific_art_candidate_jav321}' from {len(actual_arts_for_specific_check)} actual arts.")
 
-                        # 1단계: 기본 후보 결정 (ps_to_poster, crop_mode, has_hq_poster 등 사용)
-                        # 이 로직은 specific_art_candidate를 아직 직접적으로 사용하지 않음.
+                        # 1단계: 기본 후보 결정 (기존 Jav321 방식)
                         if ps_to_poster_setting and ps_url_detail_page_default: 
                             resolved_poster_url_step1 = ps_url_detail_page_default
                         elif crop_mode_setting and pl_url_detail_page_default: 
-                            resolved_poster_url_step1 = pl_url_detail_page_default
-                            resolved_crop_mode_step1 = crop_mode_setting
+                            resolved_poster_url_step1 = pl_url_detail_page_default; resolved_crop_mode_step1 = crop_mode_setting
                         elif pl_url_detail_page_default and ps_url_detail_page_default:
                             loc = SiteUtil.has_hq_poster(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
-                            if loc: 
-                                resolved_poster_url_step1 = pl_url_detail_page_default
-                                resolved_crop_mode_step1 = loc
+                            if loc: resolved_poster_url_step1 = pl_url_detail_page_default; resolved_crop_mode_step1 = loc
                             elif SiteUtil.is_hq_poster(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url): 
                                 resolved_poster_url_step1 = pl_url_detail_page_default
-                            else: 
-                                resolved_poster_url_step1 = ps_url_detail_page_default
-                        elif ps_url_detail_page_default: 
-                            resolved_poster_url_step1 = ps_url_detail_page_default
-                        elif pl_url_detail_page_default: 
-                            resolved_poster_url_step1 = pl_url_detail_page_default
-                            resolved_crop_mode_step1 = crop_mode_setting # crop_mode_setting 사용
-                        
-                        # resolved_poster_url_step1이 결정 안됐으면 ps_url_detail_page_default를 기본으로
-                        if not resolved_poster_url_step1 and ps_url_detail_page_default:
-                            resolved_poster_url_step1 = ps_url_detail_page_default
-                        
+                            else: resolved_poster_url_step1 = ps_url_detail_page_default
+                        elif ps_url_detail_page_default: resolved_poster_url_step1 = ps_url_detail_page_default
+                        elif pl_url_detail_page_default: resolved_poster_url_step1 = pl_url_detail_page_default; resolved_crop_mode_step1 = crop_mode_setting
+                        if not resolved_poster_url_step1 and ps_url_detail_page_default: resolved_poster_url_step1 = ps_url_detail_page_default
                         logger.debug(f"Jav321 (Default Logic) Step 1: Base Poster='{resolved_poster_url_step1}', Base Crop='{resolved_crop_mode_step1}'")
 
-                        # 1.5단계: Specific Art 후보 고려 (DMM 스타일)
-                        #    - ps_url_from_search_cache (검색 결과 썸네일) 또는 ps_url_detail_page_default (상세 페이지 썸네일)와
-                        #      specific_art_candidate (Arts 목록의 첫 번째 이미지)를 비교.
-                        #    - is_hq_poster 통과 시, specific_art_candidate를 포스터로 사용.
-                        #      이 경우, resolved_poster_url_step1과 resolved_crop_mode_step1을 덮어씀.
-                        
-                        comparison_ps_for_specific_art = ps_url_from_search_cache if ps_url_from_search_cache else ps_url_detail_page_default
-                        if specific_art_candidate and comparison_ps_for_specific_art:
-                            logger.debug(f"Jav321 (Default Logic) Step 1.5: Checking specific_art_candidate '{specific_art_candidate}' against '{comparison_ps_for_specific_art}'")
-                            if SiteUtil.is_hq_poster(comparison_ps_for_specific_art, specific_art_candidate, proxy_url=proxy_url):
+                        # 1.5단계: Specific Art 후보 고려 (Arts 목록의 첫 번째 이미지)
+                        comparison_ps_for_specific = ps_url_detail_page_default if ps_url_detail_page_default else ps_url_from_search_cache
+                        if specific_art_candidate_jav321 and comparison_ps_for_specific:
+                            logger.debug(f"Jav321 (Default Logic) Step 1.5: Checking specific_art_candidate '{specific_art_candidate_jav321}' against PS '{comparison_ps_for_specific}'")
+                            if SiteUtil.is_hq_poster(comparison_ps_for_specific, specific_art_candidate_jav321, proxy_url=proxy_url):
                                 logger.info(f"Jav321 (Default Logic) Step 1.5: specific_art_candidate IS HQ. Using it as poster.")
-                                resolved_poster_url_step1 = specific_art_candidate
-                                resolved_crop_mode_step1 = None # specific_art_candidate는 보통 세로형 포스터로 간주, 크롭 불필요
+                                resolved_poster_url_step1 = specific_art_candidate_jav321 # 1단계 결과를 덮어씀
+                                resolved_crop_mode_step1 = None # 세로 이미지로 간주, 크롭 불필요
                             else:
                                 logger.debug(f"Jav321 (Default Logic) Step 1.5: specific_art_candidate IS NOT HQ.")
                         else:
@@ -599,12 +583,32 @@ class SiteJav321:
                         final_landscape_url_source = pl_url_detail_page_default # 상세 페이지 PL을 기본 랜드스케이프로
                     logger.debug(f"Jav321 (Default Logic): Default landscape source: {final_landscape_url_source}")
                 
-                # --- D. 기본 아트 URL 리스트 (상세 PS가 플레이스홀더가 아닐 때만) ---
-                if is_placeholder_poster_default: 
-                    arts_urls_for_processing = []
-                else:
-                    arts_urls_for_processing = arts_urls_page_default
-                logger.debug(f"Jav321 (Default Logic): Arts for processing count: {len(arts_urls_for_processing)}")
+                # --- D. 기본 아트 URL 리스트 (arts_urls_for_processing) 구성 ---
+                #    - 초기 후보: arts_urls_page_default (이 안에는 PL, 첫번째 Art 등 모두 포함될 수 있음)
+                #    - 제외 대상: final_landscape_source, final_poster_source
+                #    - 중복 제거 및 max_arts 적용
+                
+                potential_fanarts_jav321 = arts_urls_page_default # __img_urls에서 가져온 모든 사이드바 스냅샷
+
+                urls_used_as_thumb_jav321 = set()
+                if final_landscape_url_source and not skip_default_landscape_logic:
+                    urls_used_as_thumb_jav321.add(final_landscape_url_source)
+                if final_poster_source and not skip_default_poster_logic:
+                    # final_poster_source가 임시 파일 경로일 수 있으므로, 원본 URL도 고려해야 하지만,
+                    # Jav321의 MGS 스타일 처리가 성공하면 final_poster_source는 로컬 경로가 됨.
+                    # 이 경우, 그 원본이 된 pl_url_detail_page_default는 이미 랜드스케이프로 제외되었을 수 있음.
+                    # 여기서는 final_poster_source가 URL이라고 가정하고 추가.
+                    if isinstance(final_poster_source, str) and final_poster_source.startswith("http"):
+                        urls_used_as_thumb_jav321.add(final_poster_source)
+                    # 만약 final_poster_source가 specific_art_candidate_jav321 이었다면, 그것도 제외됨.
+                
+                arts_urls_for_processing = [] # 최종 팬아트 목록 변수명 일치
+                seen_fanart_urls_jav321 = set()
+                for art_url in potential_fanarts_jav321:
+                    if len(arts_urls_for_processing) >= max_arts: break
+                    if art_url and art_url not in urls_used_as_thumb_jav321 and art_url not in seen_fanart_urls_jav321:
+                        arts_urls_for_processing.append(art_url)
+                        seen_fanart_urls_jav321.add(art_url)
 
                 # --- E. 일반 모드 이미지 처리 (use_image_server=False or image_mode != '4') ---
                 if not (use_image_server and image_mode == '4'):
@@ -613,12 +617,12 @@ class SiteJav321:
                     if final_poster_source and not skip_default_poster_logic:
                         processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
                         if processed_poster: entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
-                    
+
                     # 랜드스케이프 썸네일 추가 (사용자 지정이 아니고, 소스가 있을 때)
                     if final_landscape_url_source and not skip_default_landscape_logic:
                         processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_url_source, proxy_url=proxy_url)
                         if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
-                    
+
                     # 팬아트 추가
                     if arts_urls_for_processing:
                         processed_fanart_count = 0
@@ -633,7 +637,7 @@ class SiteJav321:
                                 processed_art = SiteUtil.process_image_mode(image_mode, art_url, proxy_url=proxy_url)
                                 if processed_art: entity.fanart.append(processed_art); processed_fanart_count += 1
                         logger.debug(f"Jav321 (Default Logic) Normal Mode: Added {processed_fanart_count} fanarts.")
-            
+
             except Exception as e_img_proc_default:
                 logger.exception(f"Jav321: Error during default image processing logic: {e_img_proc_default}")
 

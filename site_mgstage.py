@@ -502,10 +502,10 @@ class SiteMgstageDvd(SiteMgstage):
 
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
-        entity.thumb = []; entity.fanart = []; entity.extras = []
+        entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
         ui_code_for_image = ""
-        
         identifier_parsed = False
+
         try:
             logger.debug(f"MGStage ({cls.module_char}): Parsing metadata for {code}...")
             h1_tags = tree.xpath('//h1[@class="tag"]/text()')
@@ -517,7 +517,9 @@ class SiteMgstageDvd(SiteMgstage):
 
             info_table_xpath = '//div[@class="detail_data"]//tr'
             tr_nodes = tree.xpath(info_table_xpath)
-            tmp_premiered_haishin_dvd = None 
+            
+            temp_shohin_hatsubai = None
+            temp_haishin_kaishi = None
 
             for tr_node in tr_nodes:
                 key_node = tr_node.xpath("./th"); value_node_outer = tr_node.xpath("./td")
@@ -535,11 +537,12 @@ class SiteMgstageDvd(SiteMgstage):
                     ui_code_for_image = formatted_品番; entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image
                     entity.ui_code = ui_code_for_image; identifier_parsed = True
                     logger.info(f"MGStage ({cls.module_char}): Identifier parsed as: {ui_code_for_image}")
-                elif "商品発売日" in key_text: # Dvd는 상품 출시일 우선
-                    try: entity.premiered = value_text_content.replace("/", "-"); entity.year = int(value_text_content[:4])
-                    except Exception: logger.warning(f"MGStage ({cls.module_char}): Premiered date parse error '{value_text_content}'")
-                elif "配信開始日" in key_text: 
-                    tmp_premiered_haishin_dvd = value_text_content.replace("/", "-")
+                elif "商品発売日" in key_text:
+                    if value_text_content and value_text_content.lower() != "dvd未発売" and "----" not in value_text_content:
+                        temp_shohin_hatsubai = value_text_content.replace("/", "-")
+                elif "配信開始日" in key_text:
+                    if value_text_content and "----" not in value_text_content:
+                        temp_haishin_kaishi = value_text_content.replace("/", "-")
                 elif "収録時間" in key_text:
                     try: entity.runtime = int(value_text_content.replace("min", "").strip())
                     except Exception: logger.warning(f"MGStage ({cls.module_char}): Runtime parse error '{value_text_content}'")
@@ -568,12 +571,18 @@ class SiteMgstageDvd(SiteMgstage):
                         else:
                             genre_ko = SiteUtil.trans(genre_text_ja, do_trans=do_trans).replace(" ", "")
                             if genre_ko not in SiteUtil.av_genre_ignore_ko: entity.genre.append(genre_ko)
+
+            if temp_shohin_hatsubai: # 1순위: 상품 발매일
+                entity.premiered = temp_shohin_hatsubai
+            elif temp_haishin_kaishi: # 2순위: 전송 개시일
+                entity.premiered = temp_haishin_kaishi
             
-            if entity.premiered is None and tmp_premiered_haishin_dvd: # 상품출시일 없으면 배신일
-                entity.premiered = tmp_premiered_haishin_dvd
-                try: entity.year = int(tmp_premiered_haishin_dvd[:4])
+            if entity.premiered:
+                try: entity.year = int(entity.premiered[:4])
                 except Exception: entity.year = 0
-            elif entity.premiered is None: entity.year = 0
+            else:
+                entity.year = 0
+                logger.warning(f"MGStage ({cls.module_char}): Premiered date could not be determined for {code}.")
             
             plot_p_nodes = tree.xpath('//*[@id="introduction"]//p[1]')
             if plot_p_nodes:
@@ -605,13 +614,10 @@ class SiteMgstageDvd(SiteMgstage):
                 ui_code_for_image = code[2:].upper().replace("_", "-") 
                 entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image
                 entity.ui_code = ui_code_for_image
-                logger.warning(f"MGStage ({cls.module_char}): Using fallback identifier: {ui_code_for_image}")
         except Exception as e_meta_main_dvd:
             logger.exception(f"MGStage ({cls.module_char}): Major error during metadata parsing for {code}: {e_meta_main_dvd}")
-            if not ui_code_for_image: 
-                logger.error(f"MGStage ({cls.module_char}): Returning None due to critical metadata parsing failure (no identifier).")
-                return None
-        
+            if not ui_code_for_image: return None
+
         user_custom_poster_url = None; user_custom_landscape_url = None
         skip_default_poster_logic = False; skip_default_landscape_logic = False
         if use_image_server and image_server_local_path and image_server_url and ui_code_for_image:

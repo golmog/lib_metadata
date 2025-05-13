@@ -108,7 +108,7 @@ class SiteDmm:
         lists = []
         try: lists = tree.xpath(list_xpath)
         except Exception as e_xpath: logger.error(f"XPath error: {e_xpath}")
-        if not lists: logger.warning(f"No items found using Desktop Grid XPath."); return []
+        if not lists: logger.debug(f"No items found using Desktop Grid XPath."); return []
 
         ret = []; score = 60
 
