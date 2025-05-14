@@ -236,7 +236,7 @@ class SiteDmm:
                 # 검색 키워드와 품번 비교하여 점수 산정
                 if len(keyword_tmps) == 2:
                     if item_ui_code_base == dmm_keyword: current_score = 100
-                    elif item_ui_code_base.replace("0", "") == dmm_keyword.replace("0", ""): current_score = 100
+                    elif item_ui_code_base.replace("0", "") == dmm_keyword.replace("0", ""): current_score = 60
                     elif dmm_keyword in item_ui_code_base: current_score = score
                     elif keyword_tmps[0] in item.code and keyword_tmps[1] in item.code: current_score = score
                     elif keyword_tmps[0] in item.code or keyword_tmps[1] in item.code: current_score = 60
