@@ -344,44 +344,74 @@ class SiteJavdb:
                     entity.plot = entity.tagline
 
             # --- 이미지 정보 추출 ---
-            main_poster_href_info = tree_info.xpath('//div[@class="column column-video-cover"]/a/@href')
-            main_poster_img_src_info = tree_info.xpath('//div[@class="column column-video-cover"]/a/img/@src')
-            pl_url_raw = None 
-            if main_poster_href_info: pl_url_raw = main_poster_href_info[0].strip()
-            elif main_poster_img_src_info: pl_url_raw = main_poster_img_src_info[0].strip()
+            pl_url = None # 최종 PL URL
             
-            pl_url = None
-            if pl_url_raw:
+            # 1. 메인 커버 이미지 (PL) 추출 시도
+            #    a/@href 는 비디오 재생 링크일 수 있으므로, img/@src를 우선적으로 확인
+            main_cover_img_src_nodes = tree_info.xpath('//div[@class="column column-video-cover"]//img[@class="video-cover"]/@src')
+            if main_cover_img_src_nodes:
+                pl_url_raw = main_cover_img_src_nodes[0].strip()
                 if pl_url_raw.startswith("//"):
                     pl_url = "https:" + pl_url_raw
-                elif not pl_url_raw.startswith("http"):
-                    logger.warning(f"JavDB Info: Unexpected pl_url_raw format: {pl_url_raw}. Assuming it's a full URL or needs https prepended if starting with //.")
+                elif not pl_url_raw.startswith("http"): 
+                    # /로 시작하는 상대경로가 아니라면 (예: 그냥 파일명), JavDB의 일반적인 이미지 URL 패턴을 따름
+                    # JavDB 커버 이미지는 보통 cdn.jdbstatic.com 같은 절대 URL이거나 //로 시작함.
+                    # /v/... 와 같은 링크가 여기에 들어오면 안 됨.
+                    if not pl_url_raw.startswith("/"): # /로 시작하지 않는 이상한 경우
+                        logger.warning(f"JavDB Info: Unexpected PL image src format (not // or http or /): {pl_url_raw}")
+                        # 이 경우 처리가 애매하므로 일단 None으로 두거나, 오류 가능성 인지
+                    else: # /로 시작하는 상대경로 (JavDB 커버는 보통 이런 형태 아님)
+                        pl_url = py_urllib_parse.urljoin(cls.site_base_url, pl_url_raw)
+                else: # http 또는 https로 시작하는 정상 URL
                     pl_url = pl_url_raw
-                else:
-                    pl_url = pl_url_raw
+            
+            if not pl_url: # img/@src 에서 못찾았을 경우, a/@href도 확인 (매우 드문 경우)
+                main_cover_a_href_nodes = tree_info.xpath('//div[@class="column column-video-cover"]/a[@data-fancybox="gallery"]/@href')
+                if main_cover_a_href_nodes:
+                    pl_url_raw_href = main_cover_a_href_nodes[0].strip()
+                    # a/@href는 이미지 파일 URL이어야 함 (/v/... 형태의 링크는 제외)
+                    if pl_url_raw_href and not pl_url_raw_href.startswith("/v/"):
+                        if pl_url_raw_href.startswith("//"):
+                            pl_url = "https:" + pl_url_raw_href
+                        elif not pl_url_raw_href.startswith("http"):
+                            if pl_url_raw_href.startswith("/"): # 사이트 루트 기준 상대 경로
+                                pl_url = py_urllib_parse.urljoin(cls.site_base_url, pl_url_raw_href)
+                            else:
+                                logger.warning(f"JavDB Info: Unexpected PL a/@href format: {pl_url_raw_href}")
+                        else:
+                            pl_url = pl_url_raw_href
+            
+            logger.debug(f"JavDB Info: Determined pl_url = '{pl_url}'")
+
 
             arts_urls = [] 
-            sample_image_nodes_info = tree_info.xpath('//div[contains(@class, "tile-images")]/a[@class="tile-item"]/@href')
-            for art_link_raw in sample_image_nodes_info:
-                art_full_url_raw = art_link_raw.strip()
-                art_full_url = None
-                if art_full_url_raw:
-                    if art_full_url_raw.startswith("//"):
-                        art_full_url = "https:" + art_full_url_raw
-                    elif not art_full_url_raw.startswith("http"):
-                        if art_full_url_raw.startswith("/samples/"):
-                            art_full_url = py_urllib_parse.urljoin(cls.site_base_url, art_full_url_raw)
-                        else:
-                            # logger.warning(f"JavDB Info: Unexpected art_link_raw format (not // or http or /samples/): {art_full_url_raw}")
-                            if art_full_url_raw.startswith("/v/"):
-                                # logger.debug(f"  Skipping potential related work link in arts: {art_full_url_raw}")
-                                continue 
+            # 샘플 이미지는 항상 'tile-images preview-images' div 내부에 있다고 가정
+            sample_image_container = tree_info.xpath('//div[contains(@class, "preview-images")]')
+            if sample_image_container:
+                # 컨테이너 내부의 a.tile-item 만 선택 (다른 추천 영상 링크 배제)
+                sample_image_nodes_info = sample_image_container[0].xpath('./a[@class="tile-item"]/@href')
+                for art_link_raw in sample_image_nodes_info:
+                    art_full_url_raw = art_link_raw.strip()
+                    art_full_url = None
+                    if art_full_url_raw:
+                        if art_full_url_raw.startswith("//"):
+                            art_full_url = "https:" + art_full_url_raw
+                        elif not art_full_url_raw.startswith("http"):
+                            # JavDB 샘플 이미지는 보통 cdn 주소 (// 또는 http)
+                            # /로 시작하는 경우는 드물지만, 있다면 urljoin
+                            if art_full_url_raw.startswith("/"): 
+                                art_full_url = py_urllib_parse.urljoin(cls.site_base_url, art_full_url_raw)
+                            else: # 그 외의 경우는 잘못된 URL일 가능성 높음
+                                logger.warning(f"JavDB Info: Unexpected art_link_raw format: {art_full_url_raw}")
+                                continue # 이 URL은 arts_urls에 추가하지 않음
+                        else: # http 또는 https로 시작
                             art_full_url = art_full_url_raw
-                    else:
-                        art_full_url = art_full_url_raw
-                
-                if art_full_url:
-                    arts_urls.append(art_full_url)
+                    
+                    if art_full_url:
+                        arts_urls.append(art_full_url)
+            else:
+                logger.warning(f"JavDB Info: Sample image container (div.preview-images) not found for {code}.")
+            logger.debug(f"JavDB Info: Collected {len(arts_urls)} arts_urls: {arts_urls[:5]}")
 
             # --- 사용자 지정 이미지 확인 ---
             user_custom_poster_url = None
@@ -404,21 +434,26 @@ class SiteJavdb:
             final_poster_source_for_processing = None 
             recommended_crop_mode_from_util = None 
             
-            if not skip_default_poster_logic and pl_url:
-                poster_pil_or_url, rec_crop_mode, _ = SiteUtil.get_javdb_poster_from_pl_local(pl_url, current_ui_code_for_image, proxy_url=proxy_url)
-                if poster_pil_or_url: 
-                    final_poster_source_for_processing = poster_pil_or_url
-                    recommended_crop_mode_from_util = rec_crop_mode
-                else: 
-                    final_poster_source_for_processing = pl_url
-                    recommended_crop_mode_from_util = 'r' 
-
+            if not skip_default_poster_logic: # 사용자 지정 포스터가 없을 때만 실행
+                if pl_url: # pl_url이 정상적으로 추출되었을 때만 진행
+                    log_identifier_for_util = entity.ui_code if hasattr(entity, 'ui_code') and entity.ui_code else original_code_for_url
+                    poster_pil_or_url, rec_crop_mode, _ = SiteUtil.get_javdb_poster_from_pl_local(pl_url, log_identifier_for_util, proxy_url=proxy_url)
+                    if poster_pil_or_url: 
+                        final_poster_source_for_processing = poster_pil_or_url
+                        recommended_crop_mode_from_util = rec_crop_mode
+                    else: 
+                        logger.warning(f"JavDB Info: get_javdb_poster_from_pl_local returned None for pl_url '{pl_url}'. Falling back.")
+                        final_poster_source_for_processing = pl_url # Fallback
+                        recommended_crop_mode_from_util = 'r' 
+                else:
+                    logger.warning(f"JavDB Info: pl_url is None. Cannot determine default poster source.")
+            
             final_poster_crop_mode_to_use = user_defined_crop_mode if user_defined_crop_mode else recommended_crop_mode_from_util
             if final_poster_crop_mode_to_use is None and final_poster_source_for_processing:
                 final_poster_crop_mode_to_use = 'r'
 
             final_landscape_source_for_processing = None
-            if not skip_default_landscape_logic and pl_url: 
+            if not skip_default_landscape_logic and pl_url: # pl_url이 있을 때만
                 final_landscape_source_for_processing = pl_url
 
             temp_poster_file_for_server_save = None 
