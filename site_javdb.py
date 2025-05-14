@@ -5,6 +5,7 @@ from lxml import html
 import os 
 from framework import path_data
 from PIL import Image
+import urllib.parse as py_urllib_parse
 
 from .entity_av import EntityAVSearch
 from .entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
@@ -359,7 +360,6 @@ class SiteJavdb:
                 else:
                     pl_url = pl_url_raw
 
-
             arts_urls = [] 
             sample_image_nodes_info = tree_info.xpath('//div[contains(@class, "tile-images")]/a[@class="tile-item"]/@href')
             for art_link_raw in sample_image_nodes_info:
@@ -369,8 +369,14 @@ class SiteJavdb:
                     if art_full_url_raw.startswith("//"):
                         art_full_url = "https:" + art_full_url_raw
                     elif not art_full_url_raw.startswith("http"):
-                        logger.warning(f"JavDB Info: Unexpected art_link_raw format: {art_full_url_raw}.")
-                        art_full_url = art_full_url_raw
+                        if art_full_url_raw.startswith("/samples/"):
+                            art_full_url = py_urllib_parse.urljoin(cls.site_base_url, art_full_url_raw)
+                        else:
+                            # logger.warning(f"JavDB Info: Unexpected art_link_raw format (not // or http or /samples/): {art_full_url_raw}")
+                            if art_full_url_raw.startswith("/v/"):
+                                # logger.debug(f"  Skipping potential related work link in arts: {art_full_url_raw}")
+                                continue 
+                            art_full_url = art_full_url_raw
                     else:
                         art_full_url = art_full_url_raw
                 

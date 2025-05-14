@@ -6,6 +6,7 @@ from datetime import timedelta
 from io import BytesIO
 from urllib.parse import urlparse
 
+import traceback
 import cloudscraper
 
 import requests
@@ -102,12 +103,12 @@ class SiteUtil:
             #    current_proxies = {parsed_proxy.scheme: proxy_url}
             # else: # 스킴 없으면 http, https 모두 시도
             current_proxies = {"http": proxy_url, "https": proxy_url}
-            scraper.proxies.update(current_proxies) # scraper 인스턴스에 프록시 설정
+            scraper.proxies.update(current_proxies)
 
         logger.debug(f"SiteUtil.get_response_cs: Making {method} request to URL='{url}'")
         # if current_proxies: logger.debug(f"  Using proxies for cloudscraper: {current_proxies}")
-        # if cookies: logger.debug(f"  Using cookies for cloudscraper: {list(cookies.keys())}") # 값 대신 키만 로깅
-        if headers: scraper.headers.update(headers) # 헤더 적용
+        # if cookies: logger.debug(f"  Using cookies for cloudscraper: {list(cookies.keys())}")
+        if headers: scraper.headers.update(headers)
 
         try:
             if method == "POST":
@@ -117,18 +118,17 @@ class SiteUtil:
                 res = scraper.get(url, cookies=cookies, **kwargs)
             
             # logger.debug(f"  Cloudscraper response status: {res.status_code}, URL: {res.url}")
-            res.raise_for_status() # 2xx 아닐 시 예외 발생 (requests와 동일)
+            res.raise_for_status()
             return res
         except cloudscraper.exceptions.CloudflareChallengeError as e_cf_challenge:
             logger.error(f"SiteUtil.get_response_cs: Cloudflare challenge error for URL='{url}'. Error: {e_cf_challenge}")
-            # 이 경우, scraper 인스턴스를 새로 만들어서 재시도해볼 수 있음 (선택적 고급 처리)
-            # scraper = cls.get_cloudscraper_instance(new_instance=True) ... 재시도 ...
-            return None # 챌린지 실패 시 None 반환
-        except requests.exceptions.RequestException as e_req: # cloudscraper는 requests 예외도 발생시킴
+        except requests.exceptions.RequestException as e_req:
             logger.error(f"SiteUtil.get_response_cs: RequestException for URL='{url}'. Proxy='{proxy_url}'. Error: {e_req}")
+            logger.error(traceback.format_exc())
             return None
         except Exception as e_general:
             logger.error(f"SiteUtil.get_response_cs: General Exception for URL='{url}'. Proxy='{proxy_url}'. Error: {e_general}")
+            logger.error(traceback.format_exc())
             return None
 
 
