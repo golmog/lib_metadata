@@ -345,17 +345,37 @@ class SiteJavdb:
             # --- 이미지 정보 추출 ---
             main_poster_href_info = tree_info.xpath('//div[@class="column column-video-cover"]/a/@href')
             main_poster_img_src_info = tree_info.xpath('//div[@class="column column-video-cover"]/a/img/@src')
-            pl_url = None 
-            if main_poster_href_info: pl_url = main_poster_href_info[0].strip()
-            elif main_poster_img_src_info: pl_url = main_poster_img_src_info[0].strip()
-            if pl_url and pl_url.startswith("//"): pl_url = "https:" + pl_url
+            pl_url_raw = None 
+            if main_poster_href_info: pl_url_raw = main_poster_href_info[0].strip()
+            elif main_poster_img_src_info: pl_url_raw = main_poster_img_src_info[0].strip()
+            
+            pl_url = None
+            if pl_url_raw:
+                if pl_url_raw.startswith("//"):
+                    pl_url = "https:" + pl_url_raw
+                elif not pl_url_raw.startswith("http"):
+                    logger.warning(f"JavDB Info: Unexpected pl_url_raw format: {pl_url_raw}. Assuming it's a full URL or needs https prepended if starting with //.")
+                    pl_url = pl_url_raw
+                else:
+                    pl_url = pl_url_raw
+
 
             arts_urls = [] 
             sample_image_nodes_info = tree_info.xpath('//div[contains(@class, "tile-images")]/a[@class="tile-item"]/@href')
-            for art_link in sample_image_nodes_info:
-                art_full_url = art_link.strip()
-                if art_full_url.startswith("//"): art_full_url = "https:" + art_full_url
-                arts_urls.append(art_full_url)
+            for art_link_raw in sample_image_nodes_info:
+                art_full_url_raw = art_link_raw.strip()
+                art_full_url = None
+                if art_full_url_raw:
+                    if art_full_url_raw.startswith("//"):
+                        art_full_url = "https:" + art_full_url_raw
+                    elif not art_full_url_raw.startswith("http"):
+                        logger.warning(f"JavDB Info: Unexpected art_link_raw format: {art_full_url_raw}.")
+                        art_full_url = art_full_url_raw
+                    else:
+                        art_full_url = art_full_url_raw
+                
+                if art_full_url:
+                    arts_urls.append(art_full_url)
 
             # --- 사용자 지정 이미지 확인 ---
             user_custom_poster_url = None
