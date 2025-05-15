@@ -146,58 +146,60 @@ class SiteJav321:
             ps_xpath = '/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/img' # img 태그 자체 선택
             ps_img_tags = tree.xpath(ps_xpath)
             if ps_img_tags:
-                img_tag = ps_img_tags[0]
-                onerror_url = cls._get_jav321_url_from_onerror(img_tag.attrib.get('onerror'))
-                if onerror_url:
-                    img_urls['ps'] = onerror_url
-                    logger.debug(f"Jav321: Found ps via onerror: {img_urls['ps']}")
-                else: # onerror 없거나 유효하지 않으면 src 사용
-                    src_url = img_tag.attrib.get('src')
-                    if src_url:
-                        img_urls['ps'] = src_url.strip()
-                        logger.debug(f"Jav321: Found ps via src (onerror failed): {img_urls['ps']}")
-                    else:
-                        logger.warning(f"Jav321: PS 이미지 URL을 onerror와 src 모두에서 찾지 못했습니다.")
+                img_tag_ps = ps_img_tags[0]
+                src_url_ps = img_tag_ps.attrib.get('src')
+                onerror_url_ps = cls._get_jav321_url_from_onerror(img_tag_ps.attrib.get('onerror'))
+
+                if src_url_ps and src_url_ps.strip(): # src가 있고 비어있지 않으면 우선 사용
+                    img_urls['ps'] = src_url_ps.strip()
+                    logger.debug(f"Jav321: Found ps via src: {img_urls['ps']}")
+                elif onerror_url_ps: # src가 없거나 비어있으면 onerror 사용
+                    img_urls['ps'] = onerror_url_ps
+                    logger.debug(f"Jav321: Found ps via onerror (src failed): {img_urls['ps']}")
+                else:
+                    logger.warning(f"Jav321: PS 이미지 URL을 src와 onerror 모두에서 찾지 못했습니다.")
             else:
                 logger.warning(f"Jav321: PS 이미지 태그를 찾지 못했습니다. XPath: {ps_xpath}")
 
             # 2. PL 이미지 추출 (오른쪽 첫번째 이미지, onerror 우선)
-            pl_xpath = '/html/body/div[2]/div[2]/div[2]/p/a/img' # img 태그 자체 선택
+            pl_xpath = '/html/body/div[2]/div[2]/div[1]/p/a/img' # img 태그 자체 선택
             pl_img_tags = tree.xpath(pl_xpath)
             if pl_img_tags:
-                img_tag = pl_img_tags[0]
-                onerror_url = cls._get_jav321_url_from_onerror(img_tag.attrib.get('onerror'))
-                if onerror_url:
-                    img_urls['pl'] = onerror_url
-                    logger.debug(f"Jav321: Found pl via onerror: {img_urls['pl']}")
-                else: # onerror 없거나 유효하지 않으면 src 사용
-                    src_url = img_tag.attrib.get('src')
-                    if src_url:
-                        img_urls['pl'] = src_url.strip()
-                        logger.debug(f"Jav321: Found pl via src (onerror failed): {img_urls['pl']}")
-                    else:
-                        logger.warning(f"Jav321: PL 이미지 URL(사이드바 첫번째)을 onerror와 src 모두에서 찾지 못했습니다.")
+                img_tag_pl = pl_img_tags[0]
+                src_url_pl = img_tag_pl.attrib.get('src')
+                onerror_url_pl = cls._get_jav321_url_from_onerror(img_tag_pl.attrib.get('onerror'))
+
+                if src_url_pl and src_url_pl.strip():
+                    img_urls['pl'] = src_url_pl.strip()
+                    logger.debug(f"Jav321: Found pl via src: {img_urls['pl']}")
+                elif onerror_url_pl:
+                    img_urls['pl'] = onerror_url_pl
+                    logger.debug(f"Jav321: Found pl via onerror (src failed): {img_urls['pl']}")
+                else:
+                    logger.warning(f"Jav321: PL 이미지 URL(사이드바 첫번째)을 src와 onerror 모두에서 찾지 못했습니다.")
             else:
                 logger.warning(f"Jav321: PL 이미지 태그(사이드바 첫번째)를 찾지 못했습니다. XPath: {pl_xpath}")
 
-            # 3. Arts 이미지 추출 (오른쪽 두 번째 이후, onerror 우선)
-            arts_xpath = '/html/body/div[2]/div[2]/div[position()>1]//a[contains(@href, "/snapshot/")]/img' # img 태그 자체 선택
+            # 3. Arts 이미지 추출 (사이드바 이미지들, src 우선, onerror는 fallback)
+            arts_xpath = '/html/body/div[2]/div[2]/div[position()>0]//a[contains(@href, "/snapshot/")]/img' 
             arts_img_tags = tree.xpath(arts_xpath)
-
+            
             temp_arts_list = []
             if arts_img_tags:
-                for img_tag in arts_img_tags:
+                for img_tag_art in arts_img_tags:
                     current_art_url = None
-                    onerror_url = cls._get_jav321_url_from_onerror(img_tag.attrib.get('onerror'))
-                    if onerror_url: current_art_url = onerror_url
-                    else: 
-                        src_url = img_tag.attrib.get('src')
-                        if src_url: current_art_url = src_url.strip()
-                    if current_art_url: temp_arts_list.append(current_art_url)
+                    src_url_art = img_tag_art.attrib.get('src')
+                    onerror_url_art = cls._get_jav321_url_from_onerror(img_tag_art.attrib.get('onerror'))
+
+                    if src_url_art and src_url_art.strip():
+                        current_art_url = src_url_art.strip()
+                    elif onerror_url_art:
+                        current_art_url = onerror_url_art
+                    
+                    if current_art_url:
+                        temp_arts_list.append(current_art_url)
             
-            # 순서 유지하며 중복 제거 (dict.fromkeys는 Python 3.7+)
-            # 또는 루프와 if not in으로 처리
-            img_urls['arts'] = list(dict.fromkeys(temp_arts_list))
+            img_urls['arts'] = list(dict.fromkeys(temp_arts_list)) 
             
         except Exception as e_img:
             logger.exception(f"Jav321: Error extracting image URLs: {e_img}")
