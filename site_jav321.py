@@ -46,15 +46,13 @@ class SiteJav321:
             code_from_url_path = res.url.split("/")[-1] 
             item.code = cls.module_char + cls.site_char + code_from_url_path 
             
-            item.ui_code = keyword
+            item.ui_code = keyword.upper()
             
-            # ... (이하 이미지, 날짜, 제목 파싱은 이전과 동일) ...
             base_xpath = "/html/body/div[2]/div[1]/div[1]"
             tree = html.fromstring(res.text)
 
             img_tag_node = tree.xpath(f"{base_xpath}/div[2]/div[1]/div[1]/img")
             raw_ps_url = ""
-            # ... (src 우선 이미지 추출 로직은 동일) ...
             if img_tag_node:
                 src_attr = img_tag_node[0].attrib.get('src')
                 onerror_attr = img_tag_node[0].attrib.get('onerror')
@@ -83,7 +81,6 @@ class SiteJav321:
             if item.title == "제목 없음": logger.warning(f"Jav321 Search: Title not found for code: {item.code}")
 
             if manual:
-                # ... (manual 모드 처리 동일) ...
                 _image_mode = "1" if image_mode != "0" else image_mode
                 if processed_image_url: item.image_url = SiteUtil.process_image_mode(_image_mode, processed_image_url, proxy_url=proxy_url)
                 else: item.image_url = ""
@@ -324,7 +321,7 @@ class SiteJav321:
                 info_node = info_container_node_list[0]
                 all_b_tags = info_node.xpath("./b")
 
-                for b_tag_key_node in all_b_tags: # 원본 루프 변수명 사용 가정
+                for b_tag_key_node in all_b_tags:
                     current_key = cls._clean_value(b_tag_key_node.text_content()).replace(":", "")
                     if not current_key: continue
 
@@ -410,7 +407,6 @@ class SiteJav321:
                             
                     elif current_key == "シリーズ":
                         series_name_raw = ""
-                        # 시리즈는 링크일 수도, 텍스트일 수도 있음 (Jav321 원본 코드 참고 필요)
                         series_a_tag = b_tag_key_node.xpath("./following-sibling::a[1][contains(@href, '/series/')]")
                         if series_a_tag:
                             series_name_raw = series_a_tag[0].text_content().strip()
@@ -670,7 +666,6 @@ class SiteJav321:
                 if art_relative_path: entity.fanart.append(f"{image_server_url}/{art_relative_path}")
 
         # === 6. 예고편 처리, Shiroutoname 보정 등 ===
-        # 예고편 처리 (Jav321)
         entity.extras = [] 
         if use_extras:
             try: 
@@ -702,11 +697,10 @@ class SiteJav321:
 
     @classmethod
     def info(cls, code, **kwargs):
-        # 원본 info wrapper 로직 유지 + kwargs 전달 (필수)
         ret = {}
         try:
-            entity = cls.__info(code, **kwargs) # kwargs 전달
-            if entity: # entity None 체크 추가
+            entity = cls.__info(code, **kwargs)
+            if entity:
                 ret["ret"] = "success"; ret["data"] = entity.as_dict()
             else:
                 ret["ret"] = "error"; ret["data"] = f"Failed to get Jav321 info entity for {code}"
