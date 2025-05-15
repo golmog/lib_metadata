@@ -145,7 +145,7 @@ class SiteJav321:
             def finalize_image_url(raw_url_str_input, url_type_for_log=""): # 로깅을 위해 타입 추가
                 if not raw_url_str_input or not isinstance(raw_url_str_input, str): return ""
                 url_to_process = raw_url_str_input.strip()
-                logger.debug(f"  Finalize input ({url_type_for_log}): '{url_to_process}'") # 입력값 로깅
+                logger.debug(f"  Finalize input ({url_type_for_log}): '{url_to_process}'")
                 
                 is_dmm_pics_url = "pics.dmm.co.jp" in url_to_process.lower()
                 final_url_scheme_fixed = url_to_process
@@ -338,15 +338,15 @@ class SiteJav321:
                             formatted_pid = pid_value_cleaned.upper()
                             try: 
                                 label_pid_val, num_pid_val = formatted_pid.split('-', 1)
-                                ui_code_for_image = f"{label_pid_val.upper()}-{num_pid_val}"
+                                ui_code_for_image = f"{label_pid_val()}-{num_pid_val}"
                             except ValueError: 
                                 ui_code_for_image = formatted_pid
                             entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image 
                             entity.ui_code = ui_code_for_image; identifier_parsed = True
                             logger.info(f"Jav321: Identifier (ui_code_for_image) parsed: {ui_code_for_image}")
                             if entity.tag is None: entity.tag = []
-                            if '-' in ui_code_for_image and ui_code_for_image.split('-',1)[0].upper() not in entity.tag:
-                                entity.tag.append(ui_code_for_image.split('-',1)[0].upper())
+                            if '-' in ui_code_for_image and ui_code_for_image.split('-',1)[0]() not in entity.tag:
+                                entity.tag.append(ui_code_for_image.split('-',1)[0]())
                     
                     elif current_key == "出演者":
                         if entity.actor is None: entity.actor = []
