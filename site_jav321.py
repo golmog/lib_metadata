@@ -462,7 +462,7 @@ class SiteJav321:
                     skip_default_poster_logic = True
                     logger.info(f"Jav321: Using user custom poster for {ui_code_for_image}: {web_url}")
                     break 
-            
+
             for suffix in landscape_suffixes:
                 _, web_url = SiteUtil.get_user_custom_image_paths(
                     image_server_local_path, image_path_segment, ui_code_for_image, suffix, image_server_url
@@ -473,19 +473,19 @@ class SiteJav321:
                     skip_default_landscape_logic = True
                     logger.info(f"Jav321: Using user custom landscape for {ui_code_for_image}: {web_url}")
                     break
-        
+
         # === 4. 기본 이미지 처리 (사용자 지정 이미지가 해당 타입을 대체하지 않은 경우) ===
         final_poster_source = None; final_poster_crop_mode = None
         final_landscape_url_source = None; 
         arts_urls_for_processing = [] 
-        
+
         ps_url_from_search_cache = cls._ps_url_cache.get(code) # 검색 시 캐시된 PS
-        
+
         # 기본 이미지 로직은 사용자 지정 이미지가 없거나, 팬아트가 더 필요할 때 실행
         if entity.fanart is None: entity.fanart = []
-        
+
         if not skip_default_poster_logic or not skip_default_landscape_logic or (len(entity.fanart) < max_arts and max_arts > 0) :
-            
+
             logger.debug(f"Jav321: Running default image logic for {code}...")
             try:
                 img_urls_from_page = cls.__img_urls(tree) 

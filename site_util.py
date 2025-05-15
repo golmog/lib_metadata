@@ -946,7 +946,7 @@ class SiteUtil:
         return ret
 
     @classmethod
-    def are_images_visually_same(cls, img_src1, img_src2, proxy_url=None, threshold=5):
+    def are_images_visually_same(cls, img_src1, img_src2, proxy_url=None, threshold=10):
         """
         두 이미지 소스(URL 또는 로컬 경로)가 시각적으로 거의 동일한지 비교합니다.
         Image hashing (dhash + phash)을 사용하여 거리가 임계값 미만인지 확인합니다.
