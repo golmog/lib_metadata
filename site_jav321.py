@@ -141,21 +141,45 @@ class SiteJav321:
     def __img_urls(cls, tree):
         img_urls = {'ps': "", 'pl': "", 'arts': []}
         try:
-            # finalize_image_url 헬퍼 함수 정의 (위에 제시된 코드)
-            def finalize_image_url(raw_url_str):
-                # ... (위에 제시된 finalize_image_url 함수 내용) ...
-                if not raw_url_str or not isinstance(raw_url_str, str): return ""
-                url = raw_url_str.strip()
-                is_dmm_pics_url = "pics.dmm.co.jp" in url
-                if url.startswith("//"): url = "https:" + url
-                elif url.startswith("http://"): url = "https://" + url[len("http://"):]
-                elif not url.startswith("https://") and (url.startswith("/") or is_dmm_pics_url) : 
-                    if url.startswith("/"): return py_urllib_parse.urljoin(cls.site_base_url, url)
-                    else: url = "https://" + url
-                if is_dmm_pics_url:
-                    match_dmm = re.match(r'(https://pics\.dmm\.co\.jp)/([^/].*)', url) # https만 가정
-                    if match_dmm: url = match_dmm.group(1) + "//" + match_dmm.group(2)
-                return url if url.startswith("http") else ""
+            def finalize_image_url(raw_url_str_input):
+                if not raw_url_str_input or not isinstance(raw_url_str_input, str): return ""
+                url_to_process = raw_url_str_input.strip()
+                
+                is_dmm_pics_url = "pics.dmm.co.jp" in url_to_process.lower()
+
+                # 1. 스킴 처리 (항상 https 사용)
+                final_url_scheme_fixed = url_to_process
+                if url_to_process.startswith("//"):
+                    final_url_scheme_fixed = "https:" + url_to_process
+                elif url_to_process.startswith("http://"):
+                    final_url_scheme_fixed = "https://" + url_to_process[len("http://"):]
+                elif not url_to_process.startswith("https://"):
+                    if url_to_process.startswith("/"): # Jav321 내부 상대 경로
+                        return py_urllib_parse.urljoin(cls.site_base_url, url_to_process)
+                    elif is_dmm_pics_url: # 스킴 없는 DMM URL (예: pics.dmm.co.jp//...)
+                        final_url_scheme_fixed = "https://" + url_to_process
+                    # else: 일반적인 상대경로가 아니면 원본 반환 또는 오류 처리
+                
+                # 2. DMM 이미지 URL의 경우, 도메인 뒤 // 유지 확인 및 경로 대소문자 보존
+                if is_dmm_pics_url and final_url_scheme_fixed.startswith("https://pics.dmm.co.jp"):
+                    path_part_match = re.match(r'(https://pics\.dmm\.co\.jp)(/*)(.*)', final_url_scheme_fixed)
+                    if path_part_match:
+                        domain_part = path_part_match.group(1) # 예: https://pics.dmm.co.jp
+                        slashes_part = path_part_match.group(2) # 예: / 또는 // 또는 없음
+                        actual_path = path_part_match.group(3)  # 예: digital/video/ATFB00305/ATFB00305ps.jpg (대소문자 유지)
+                        
+                        if not slashes_part.startswith("//"): # // 가 아니면 // 로 만들어줌
+                            final_url_scheme_fixed = f"{domain_part}//{actual_path}"
+                            logger.debug(f"  Finalize DMM URL: Corrected slashes: {final_url_scheme_fixed}")
+                        # else: 이미 // 면 그대로 유지 (final_url_scheme_fixed는 이미 // 포함)
+                    return final_url_scheme_fixed # DMM URL은 여기서 반환
+
+                # DMM URL이 아닌 경우, 최종적으로 http로 시작하는지 확인
+                if final_url_scheme_fixed.startswith("http"):
+                    return final_url_scheme_fixed
+                else:
+                    logger.warning(f"Jav321 __img_urls: Finalized URL for '{raw_url_str_input}' is not a valid http(s) URL: '{final_url_scheme_fixed}'")
+                    return ""
 
             # 1. PS 이미지 추출
             ps_xpath = '/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/img'
