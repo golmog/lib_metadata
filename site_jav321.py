@@ -162,7 +162,7 @@ class SiteJav321:
                 logger.warning(f"Jav321: PS 이미지 태그를 찾지 못했습니다. XPath: {ps_xpath}")
 
             # 2. PL 이미지 추출 (오른쪽 첫번째 이미지, onerror 우선)
-            pl_xpath = '/html/body/div[2]/div[2]/div[1]/p/a/img' # img 태그 자체 선택
+            pl_xpath = '/html/body/div[2]/div[2]/div[2]/p/a/img' # img 태그 자체 선택
             pl_img_tags = tree.xpath(pl_xpath)
             if pl_img_tags:
                 img_tag = pl_img_tags[0]
