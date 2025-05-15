@@ -951,11 +951,11 @@ class SiteUtil:
         두 이미지 소스(URL 또는 로컬 경로)가 시각적으로 거의 동일한지 비교합니다.
         Image hashing (dhash + phash)을 사용하여 거리가 임계값 미만인지 확인합니다.
         """
-        logger.debug(f"Comparing visual similarity (threshold: {threshold})...")
-        log_src1 = img_src1 if isinstance(img_src1, str) else "PIL Object 1"
-        log_src2 = img_src2 if isinstance(img_src2, str) else "PIL Object 2"
-        logger.debug(f"  Source 1: {log_src1}")
-        logger.debug(f"  Source 2: {log_src2}")
+        # logger.debug(f"Comparing visual similarity (threshold: {threshold})...")
+        # log_src1 = img_src1 if isinstance(img_src1, str) else "PIL Object 1"
+        # log_src2 = img_src2 if isinstance(img_src2, str) else "PIL Object 2"
+        # logger.debug(f"  Source 1: {log_src1}")
+        # logger.debug(f"  Source 2: {log_src2}")
 
         try:
             if img_src1 is None or img_src2 is None:
@@ -970,7 +970,7 @@ class SiteUtil:
             if im1 is None or im2 is None:
                 logger.debug("  Result: False (Failed to open one or both images)")
                 return False
-            logger.debug("  Images opened successfully.")
+            # logger.debug("  Images opened successfully.")
 
             try:
                 from imagehash import dhash, phash # 한 번에 임포트
@@ -989,13 +989,13 @@ class SiteUtil:
                 p_dist = phash1 - phash2
                 combined_dist = d_dist + p_dist
 
-                logger.debug(f"  dhash distance: {d_dist}")
-                logger.debug(f"  phash distance: {p_dist}")
-                logger.debug(f"  Combined distance: {combined_dist}")
+                # logger.debug(f"  dhash distance: {d_dist}")
+                # logger.debug(f"  phash distance: {p_dist}")
+                # logger.debug(f"  Combined distance: {combined_dist}")
 
                 # 임계값 비교
                 is_same = combined_dist < threshold
-                logger.debug(f"  Result: {is_same} (Combined distance < {threshold})")
+                # logger.debug(f"  Result: {is_same} (Combined distance < {threshold})")
                 return is_same
 
             except ImportError:
