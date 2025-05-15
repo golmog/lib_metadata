@@ -139,31 +139,23 @@ class SiteJav321:
 
     @classmethod
     def __img_urls(cls, tree):
-        """Jav321 페이지에서 PS, PL, Arts 이미지 URL들을 추출합니다."""
         img_urls = {'ps': "", 'pl': "", 'arts': []}
-        
         try:
-            # 함수: URL을 최종 사용할 형태로 변환 (DMM의 // 유지 포함)
+            # finalize_image_url 헬퍼 함수 정의 (위에 제시된 코드)
             def finalize_image_url(raw_url_str):
+                # ... (위에 제시된 finalize_image_url 함수 내용) ...
                 if not raw_url_str or not isinstance(raw_url_str, str): return ""
                 url = raw_url_str.strip()
-                
-                # DMM 이미지 URL의 특수한 이중 슬래시(//) 패턴 유지
-                if url.startswith(("http://pics.dmm.co.jp//", "https://pics.dmm.co.jp//")):
-                    return url # 이미 완전한 형태이고 // 유지
-                elif url.startswith("//pics.dmm.co.jp//"): # 스킴 없고, CDN 주소에 // 있는 경우
-                    return "https:" + url
-                
-                # 일반적인 다른 URL 처리
-                elif url.startswith("//"): # 다른 CDN
-                    return "https:" + url
-                elif not url.startswith("http") and url.startswith("/"): # 사이트 내부 상대 경로
-                    return py_urllib_parse.urljoin(cls.site_base_url, url) # Jav321 기본 URL과 조합
-                elif url.startswith("http"): # 이미 완전한 URL
-                    return url
-                else: # 그 외 (알 수 없는 형태)
-                    logger.warning(f"Jav321 __img_urls: Unexpected URL format, returning as is: {url}")
-                    return url
+                is_dmm_pics_url = "pics.dmm.co.jp" in url
+                if url.startswith("//"): url = "https:" + url
+                elif url.startswith("http://"): url = "https://" + url[len("http://"):]
+                elif not url.startswith("https://") and (url.startswith("/") or is_dmm_pics_url) : 
+                    if url.startswith("/"): return py_urllib_parse.urljoin(cls.site_base_url, url)
+                    else: url = "https://" + url
+                if is_dmm_pics_url:
+                    match_dmm = re.match(r'(https://pics\.dmm\.co\.jp)/([^/].*)', url) # https만 가정
+                    if match_dmm: url = match_dmm.group(1) + "//" + match_dmm.group(2)
+                return url if url.startswith("http") else ""
 
             # 1. PS 이미지 추출
             ps_xpath = '/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/img'
@@ -172,62 +164,49 @@ class SiteJav321:
                 img_tag_ps = ps_img_tags[0]
                 src_url = img_tag_ps.attrib.get('src')
                 onerror_attr_val = img_tag_ps.attrib.get('onerror')
-                
                 ps_candidate = None
                 if src_url and src_url.strip(): ps_candidate = src_url.strip()
-                elif onerror_attr_val: # src가 없을 때만 onerror 고려
+                elif onerror_attr_val:
                     onerror_parsed_url = cls._get_jav321_url_from_onerror(onerror_attr_val)
-                    # _get_jav321_url_from_onerror가 DMM URL도 처리하도록 수정했거나,
-                    # 여기서 DMM URL 패턴을 직접 확인해야 함.
                     if onerror_parsed_url: ps_candidate = onerror_parsed_url
-                    elif "pics.dmm.co.jp" in onerror_attr_val: # onerror에 DMM URL 직접 포함 시
+                    elif "pics.dmm.co.jp" in onerror_attr_val:
                         match_dmm_onerror = re.search(r"this\.src='([^']+)'", onerror_attr_val)
                         if match_dmm_onerror : ps_candidate = match_dmm_onerror.group(1).strip()
-
-                img_urls['ps'] = finalize_image_url(ps_candidate)
-                if not img_urls['ps'] and ps_candidate: logger.warning(f"Jav321: PS URL ('{ps_candidate}') finalization failed.")
-            else: logger.warning(f"Jav321: PS <img> tag not found.")
-
-            # 2. PL 이미지 추출 (사이드바 첫번째)
+                img_urls['ps'] = finalize_image_url(ps_candidate) # finalize 함수 사용
+            # ... (PL 및 Arts도 유사하게 finalize_image_url 사용) ...
             pl_xpath = '/html/body/div[2]/div[2]/div[1]/p/a/img'
             pl_img_tags = tree.xpath(pl_xpath)
             if pl_img_tags:
-                img_tag_pl = pl_img_tags[0]
-                src_url_pl = img_tag_pl.attrib.get('src')
-                onerror_attr_val_pl = img_tag_pl.attrib.get('onerror')
+                # ... (PL 추출 및 finalize_image_url(pl_candidate) 호출) ...
+                img_tag_pl = pl_img_tags[0]; src_url_pl = img_tag_pl.attrib.get('src'); onerror_attr_val_pl = img_tag_pl.attrib.get('onerror')
                 pl_candidate = None
                 if src_url_pl and src_url_pl.strip(): pl_candidate = src_url_pl.strip()
-                elif onerror_attr_val_pl:
+                elif onerror_attr_val_pl: # ... (onerror 처리)
                     onerror_parsed_url_pl = cls._get_jav321_url_from_onerror(onerror_attr_val_pl)
                     if onerror_parsed_url_pl: pl_candidate = onerror_parsed_url_pl
                     elif "pics.dmm.co.jp" in onerror_attr_val_pl:
                         match_dmm_onerror_pl = re.search(r"this\.src='([^']+)'", onerror_attr_val_pl)
                         if match_dmm_onerror_pl : pl_candidate = match_dmm_onerror_pl.group(1).strip()
                 img_urls['pl'] = finalize_image_url(pl_candidate)
-            else: logger.warning(f"Jav321: PL <img> tag not found.")
 
-            # 3. Arts 이미지 추출
             arts_xpath = '/html/body/div[2]/div[2]/div[position()>0]//a[contains(@href, "/snapshot/")]/img'
             arts_img_tags = tree.xpath(arts_xpath)
             temp_arts_list = []
             if arts_img_tags:
                 for img_tag_art in arts_img_tags:
-                    art_candidate_url = None
-                    src_url_art = img_tag_art.attrib.get('src')
-                    onerror_attr_val_art = img_tag_art.attrib.get('onerror')
+                    # ... (Art 추출 및 finalize_image_url(art_candidate_url) 호출) ...
+                    art_candidate_url = None; src_url_art = img_tag_art.attrib.get('src'); onerror_attr_val_art = img_tag_art.attrib.get('onerror')
                     if src_url_art and src_url_art.strip(): art_candidate_url = src_url_art.strip()
-                    elif onerror_attr_val_art:
+                    elif onerror_attr_val_art: # ... (onerror 처리)
                         onerror_parsed_url_art = cls._get_jav321_url_from_onerror(onerror_attr_val_art)
                         if onerror_parsed_url_art: art_candidate_url = onerror_parsed_url_art
                         elif "pics.dmm.co.jp" in onerror_attr_val_art:
                             match_dmm_onerror_art = re.search(r"this\.src='([^']+)'", onerror_attr_val_art)
                             if match_dmm_onerror_art : art_candidate_url = match_dmm_onerror_art.group(1).strip()
-                    
                     final_art_url = finalize_image_url(art_candidate_url)
                     if final_art_url: temp_arts_list.append(final_art_url)
-            
             img_urls['arts'] = list(dict.fromkeys(temp_arts_list)) 
-            
+
         except Exception as e_img:
             logger.exception(f"Jav321: Error extracting image URLs: {e_img}")
         
