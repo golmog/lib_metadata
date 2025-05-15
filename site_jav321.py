@@ -8,6 +8,7 @@ from .entity_av import EntityAVSearch
 from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
 from .plugin import P
 from .site_util import SiteUtil
+import urllib.parse as py_urllib_parse
 
 logger = P.logger
 
@@ -142,69 +143,95 @@ class SiteJav321:
         img_urls = {'ps': "", 'pl': "", 'arts': []}
         
         try:
-            # 1. PS 이미지 추출 (onerror 우선)
-            ps_xpath = '/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/img' # img 태그 자체 선택
+            # 함수: URL을 최종 사용할 형태로 변환 (DMM의 // 유지 포함)
+            def finalize_image_url(raw_url_str):
+                if not raw_url_str or not isinstance(raw_url_str, str): return ""
+                url = raw_url_str.strip()
+                
+                # DMM 이미지 URL의 특수한 이중 슬래시(//) 패턴 유지
+                if url.startswith(("http://pics.dmm.co.jp//", "https://pics.dmm.co.jp//")):
+                    return url # 이미 완전한 형태이고 // 유지
+                elif url.startswith("//pics.dmm.co.jp//"): # 스킴 없고, CDN 주소에 // 있는 경우
+                    return "https:" + url
+                
+                # 일반적인 다른 URL 처리
+                elif url.startswith("//"): # 다른 CDN
+                    return "https:" + url
+                elif not url.startswith("http") and url.startswith("/"): # 사이트 내부 상대 경로
+                    return py_urllib_parse.urljoin(cls.site_base_url, url) # Jav321 기본 URL과 조합
+                elif url.startswith("http"): # 이미 완전한 URL
+                    return url
+                else: # 그 외 (알 수 없는 형태)
+                    logger.warning(f"Jav321 __img_urls: Unexpected URL format, returning as is: {url}")
+                    return url
+
+            # 1. PS 이미지 추출
+            ps_xpath = '/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/img'
             ps_img_tags = tree.xpath(ps_xpath)
             if ps_img_tags:
                 img_tag_ps = ps_img_tags[0]
-                src_url_ps = img_tag_ps.attrib.get('src')
-                onerror_url_ps = cls._get_jav321_url_from_onerror(img_tag_ps.attrib.get('onerror'))
+                src_url = img_tag_ps.attrib.get('src')
+                onerror_attr_val = img_tag_ps.attrib.get('onerror')
+                
+                ps_candidate = None
+                if src_url and src_url.strip(): ps_candidate = src_url.strip()
+                elif onerror_attr_val: # src가 없을 때만 onerror 고려
+                    onerror_parsed_url = cls._get_jav321_url_from_onerror(onerror_attr_val)
+                    # _get_jav321_url_from_onerror가 DMM URL도 처리하도록 수정했거나,
+                    # 여기서 DMM URL 패턴을 직접 확인해야 함.
+                    if onerror_parsed_url: ps_candidate = onerror_parsed_url
+                    elif "pics.dmm.co.jp" in onerror_attr_val: # onerror에 DMM URL 직접 포함 시
+                        match_dmm_onerror = re.search(r"this\.src='([^']+)'", onerror_attr_val)
+                        if match_dmm_onerror : ps_candidate = match_dmm_onerror.group(1).strip()
 
-                if src_url_ps and src_url_ps.strip(): # src가 있고 비어있지 않으면 우선 사용
-                    img_urls['ps'] = src_url_ps.strip()
-                    logger.debug(f"Jav321: Found ps via src: {img_urls['ps']}")
-                elif onerror_url_ps: # src가 없거나 비어있으면 onerror 사용
-                    img_urls['ps'] = onerror_url_ps
-                    logger.debug(f"Jav321: Found ps via onerror (src failed): {img_urls['ps']}")
-                else:
-                    logger.warning(f"Jav321: PS 이미지 URL을 src와 onerror 모두에서 찾지 못했습니다.")
-            else:
-                logger.warning(f"Jav321: PS 이미지 태그를 찾지 못했습니다. XPath: {ps_xpath}")
+                img_urls['ps'] = finalize_image_url(ps_candidate)
+                if not img_urls['ps'] and ps_candidate: logger.warning(f"Jav321: PS URL ('{ps_candidate}') finalization failed.")
+            else: logger.warning(f"Jav321: PS <img> tag not found.")
 
-            # 2. PL 이미지 추출 (오른쪽 첫번째 이미지, onerror 우선)
-            pl_xpath = '/html/body/div[2]/div[2]/div[1]/p/a/img' # img 태그 자체 선택
+            # 2. PL 이미지 추출 (사이드바 첫번째)
+            pl_xpath = '/html/body/div[2]/div[2]/div[1]/p/a/img'
             pl_img_tags = tree.xpath(pl_xpath)
             if pl_img_tags:
                 img_tag_pl = pl_img_tags[0]
                 src_url_pl = img_tag_pl.attrib.get('src')
-                onerror_url_pl = cls._get_jav321_url_from_onerror(img_tag_pl.attrib.get('onerror'))
+                onerror_attr_val_pl = img_tag_pl.attrib.get('onerror')
+                pl_candidate = None
+                if src_url_pl and src_url_pl.strip(): pl_candidate = src_url_pl.strip()
+                elif onerror_attr_val_pl:
+                    onerror_parsed_url_pl = cls._get_jav321_url_from_onerror(onerror_attr_val_pl)
+                    if onerror_parsed_url_pl: pl_candidate = onerror_parsed_url_pl
+                    elif "pics.dmm.co.jp" in onerror_attr_val_pl:
+                        match_dmm_onerror_pl = re.search(r"this\.src='([^']+)'", onerror_attr_val_pl)
+                        if match_dmm_onerror_pl : pl_candidate = match_dmm_onerror_pl.group(1).strip()
+                img_urls['pl'] = finalize_image_url(pl_candidate)
+            else: logger.warning(f"Jav321: PL <img> tag not found.")
 
-                if src_url_pl and src_url_pl.strip():
-                    img_urls['pl'] = src_url_pl.strip()
-                    logger.debug(f"Jav321: Found pl via src: {img_urls['pl']}")
-                elif onerror_url_pl:
-                    img_urls['pl'] = onerror_url_pl
-                    logger.debug(f"Jav321: Found pl via onerror (src failed): {img_urls['pl']}")
-                else:
-                    logger.warning(f"Jav321: PL 이미지 URL(사이드바 첫번째)을 src와 onerror 모두에서 찾지 못했습니다.")
-            else:
-                logger.warning(f"Jav321: PL 이미지 태그(사이드바 첫번째)를 찾지 못했습니다. XPath: {pl_xpath}")
-
-            # 3. Arts 이미지 추출 (사이드바 이미지들, src 우선, onerror는 fallback)
-            arts_xpath = '/html/body/div[2]/div[2]/div[position()>0]//a[contains(@href, "/snapshot/")]/img' 
+            # 3. Arts 이미지 추출
+            arts_xpath = '/html/body/div[2]/div[2]/div[position()>0]//a[contains(@href, "/snapshot/")]/img'
             arts_img_tags = tree.xpath(arts_xpath)
-            
             temp_arts_list = []
             if arts_img_tags:
                 for img_tag_art in arts_img_tags:
-                    current_art_url = None
+                    art_candidate_url = None
                     src_url_art = img_tag_art.attrib.get('src')
-                    onerror_url_art = cls._get_jav321_url_from_onerror(img_tag_art.attrib.get('onerror'))
-
-                    if src_url_art and src_url_art.strip():
-                        current_art_url = src_url_art.strip()
-                    elif onerror_url_art:
-                        current_art_url = onerror_url_art
+                    onerror_attr_val_art = img_tag_art.attrib.get('onerror')
+                    if src_url_art and src_url_art.strip(): art_candidate_url = src_url_art.strip()
+                    elif onerror_attr_val_art:
+                        onerror_parsed_url_art = cls._get_jav321_url_from_onerror(onerror_attr_val_art)
+                        if onerror_parsed_url_art: art_candidate_url = onerror_parsed_url_art
+                        elif "pics.dmm.co.jp" in onerror_attr_val_art:
+                            match_dmm_onerror_art = re.search(r"this\.src='([^']+)'", onerror_attr_val_art)
+                            if match_dmm_onerror_art : art_candidate_url = match_dmm_onerror_art.group(1).strip()
                     
-                    if current_art_url:
-                        temp_arts_list.append(current_art_url)
+                    final_art_url = finalize_image_url(art_candidate_url)
+                    if final_art_url: temp_arts_list.append(final_art_url)
             
             img_urls['arts'] = list(dict.fromkeys(temp_arts_list)) 
             
         except Exception as e_img:
             logger.exception(f"Jav321: Error extracting image URLs: {e_img}")
         
-        logger.debug(f"Jav321 Raw Extracted URLs: PS='{img_urls['ps']}', PL='{img_urls['pl']}', All Arts from sidebar ({len(img_urls['arts'])})='{img_urls['arts'][:3]}...'")
+        logger.debug(f"Jav321 Raw Extracted URLs: PS='{img_urls['ps']}', PL='{img_urls['pl']}', Arts ({len(img_urls['arts'])})='{img_urls['arts'][:3]}...'")
         return img_urls
 
 
