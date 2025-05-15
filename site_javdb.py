@@ -6,6 +6,7 @@ import os
 from framework import path_data
 from PIL import Image
 import urllib.parse as py_urllib_parse
+import requests
 
 from .entity_av import EntityAVSearch
 from .entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
@@ -29,9 +30,9 @@ class SiteJavdb:
             image_mode = kwargs.get('image_mode', '0')
             manual = kwargs.get('manual', False)
 
-            logger.debug(f"JavDB Search: keyword='{keyword}', manual={manual}, do_trans={do_trans}, proxy_url='{proxy_url}'")
+            logger.debug(f"JavDB Search: keyword='{keyword}', manual={manual}, do_trans={do_trans}, proxy_urlSet={'Yes' if proxy_url else 'No'}")
 
-            search_keyword_for_url = keyword
+            search_keyword_for_url = py_urllib_parse.quote_plus(keyword)
             search_url = f"{cls.site_base_url}/search?q={search_keyword_for_url}&f=all"
             logger.debug(f"JavDB Search URL: {search_url}")
             
@@ -39,156 +40,149 @@ class SiteJavdb:
             custom_cookies = { 'over18': '1', 'locale': 'en' }
             if cf_clearance_cookie_value:
                 custom_cookies['cf_clearance'] = cf_clearance_cookie_value
+                logger.debug("JavDB Search: Using provided cf_clearance cookie.")
             else:
-                logger.debug("JavDB Search: cf_clearance cookie not provided via kwargs. Continuing without it.")
+                logger.warning("JavDB Search: cf_clearance cookie not provided. This might lead to Cloudflare challenges.")
             
-            res_for_debug = SiteUtil.get_response_cs(search_url, proxy_url=proxy_url, cookies=custom_cookies)
-            
-            if res_for_debug is None:
-                logger.warning(f"JavDB Search: Failed to get response (SiteUtil.get_response_cs returned None).")
-                return {'ret': 'error', 'data': 'Failed to get response object (cloudscraper)'}
-            
-            html_content_text = res_for_debug.text
+            res_for_search = None # 초기화
+            try:
+                res_for_search = SiteUtil.get_response_cs(search_url, proxy_url=proxy_url, cookies=custom_cookies, timeout=20)
+            except requests.exceptions.HTTPError as http_err: # SiteUtil.get_response_cs 내부의 raise_for_status() 에서 발생 가능
+                if http_err.response.status_code == 403:
+                    logger.warning(f"JavDB Search: Received 403 Forbidden when requesting {search_url}. This is often a Cloudflare block. Message: {http_err}")
+                    # 403 발생 시 'error' 대신 'no_match' 또는 특정 코드 반환, 로그는 남김
+                    return {'ret': 'no_match', 'data': [], 'log': 'JavDB returned 403 Forbidden (Cloudflare block or access denied).'}
+                else: # 다른 HTTP 에러는 그대로 예외 발생시켜서 아래 except 블록에서 잡도록 함
+                    logger.error(f"JavDB Search: HTTPError occurred: {http_err}")
+                    raise http_err 
+            except Exception as e_get_res: # get_response_cs에서 발생할 수 있는 다른 예외 (예: RequestException)
+                logger.error(f"JavDB Search: Exception in SiteUtil.get_response_cs: {e_get_res}")
+                return {'ret': 'error', 'data': f'Failed to get response: {e_get_res}'}
 
-            if res_for_debug.status_code != 200:
-                logger.warning(f"JavDB Search: Status code not 200. Status: {res_for_debug.status_code}, URL: {res_for_debug.url}")
+
+            if res_for_search is None: # 위에서 예외 발생 안 했지만 None일 경우 (SiteUtil에서 None 반환 시)
+                logger.error(f"JavDB Search: Failed to get response (SiteUtil.get_response_cs returned None without exception). Proxy used: {'Yes' if proxy_url else 'No'}")
+                return {'ret': 'error', 'data': 'Failed to get response object (cloudscraper). Check proxy or network.'}
+            
+            html_content_text = res_for_search.text
+
+            # Status code 200이 아닌 경우의 처리 (403은 위에서 이미 처리됨)
+            if res_for_search.status_code != 200:
+                logger.warning(f"JavDB Search: Status code {res_for_search.status_code} for URL: {res_for_search.url}")
+                if "cf-error-details" in html_content_text or "Cloudflare to restrict access" in html_content_text:
+                    logger.error("JavDB Search: Cloudflare restriction page detected (potentially IP block or stricter rules).")
+                    return {'ret': 'error', 'data': 'Cloudflare restriction page (possibly IP block).'}
                 if "Due to copyright restrictions" in html_content_text or "由於版權限制" in html_content_text:
                     logger.error("JavDB Search: Access prohibited (country block).")
-                    return {'ret': 'error', 'data': 'Country block detected.'}
-                if "cf-challenge-running" in html_content_text or "Checking if the site connection is secure" in html_content_text:
-                    logger.error("JavDB Search: Cloudflare challenge page detected.")
-                    return {'ret': 'error', 'data': 'Cloudflare challenge page detected.'}
-                return {'ret': 'error', 'data': f'Status: {res_for_debug.status_code}'}
+                    return {'ret': 'error', 'data': 'Country block detected by JavDB.'}
+                if "cf-challenge-running" in html_content_text or "Checking if the site connection is secure" in html_content_text or "Verifying you are human" in html_content_text:
+                    logger.error("JavDB Search: Cloudflare challenge page detected. cf_clearance cookie might be invalid or missing.")
+                    return {'ret': 'error', 'data': 'Cloudflare JS challenge page detected.'}
+                return {'ret': 'error', 'data': f'HTTP Status: {res_for_search.status_code}.'}
             
             try:
                 tree = html.fromstring(html_content_text)
             except Exception as e_parse:
                 logger.error(f"JavDB Search: Failed to parse HTML: {e_parse}")
                 logger.error(traceback.format_exc())
-                return {'ret': 'error', 'data': 'Failed to parse HTML'}
+                return {'ret': 'error', 'data': 'Failed to parse HTML content.'}
 
             if tree is None:
-                logger.warning("JavDB Search: Tree is None after parsing.")
-                return {'ret': 'error', 'data': 'Parsed tree is None'}
+                logger.warning("JavDB Search: Tree is None after parsing (should have been caught by exception).")
+                return {'ret': 'error', 'data': 'Parsed tree is None.'}
 
             search_results = []
-            item_nodes = tree.xpath('//div[contains(@class, "item")]/a[contains(@class, "box")]')
+            item_nodes = tree.xpath('//div[@class="container"]//div[@class="item-list"]//div[contains(@class, "item")]/a[contains(@class, "box")]')
 
             if not item_nodes:
                 no_results_message_xpath = tree.xpath('//div[contains(@class, "empty-message") and (contains(text(), "No videos found") or contains(text(), "沒有找到影片"))]')
                 if no_results_message_xpath:
-                    logger.info(f"JavDB Search: 'No videos found' message on page for '{keyword}'.")
+                    logger.info(f"JavDB Search: 'No videos found' message on page for keyword '{keyword}'.")
                     return {'ret': 'no_match', 'data': []}
                 title_match = re.search(r'<title>(.*?)</title>', html_content_text, re.IGNORECASE | re.DOTALL)
                 page_title_from_text = title_match.group(1).strip() if title_match else "N/A"
-                logger.warning(f"JavDB Search: No item nodes found with XPath for '{keyword}'. Page title: '{page_title_from_text}'.")
-                return {'ret': 'error', 'data': f"No items found with XPath."}
+                logger.warning(f"JavDB Search: No item nodes found with XPath for keyword '{keyword}'. Page title: '{page_title_from_text}'.")
+                return {'ret': 'error', 'data': f"No items found using primary XPath. Page title: {page_title_from_text}"}
             
-            keyword_lower = keyword.lower()
-            keyword_norm = keyword_lower.replace('-', '')
-            processed_codes = set()
+            keyword_lower_norm = keyword.lower().replace('-', '').replace(' ', '')
+            processed_codes_in_search = set()
 
             for node_a_tag in item_nodes:
                 try:
                     entity = EntityAVSearch(cls.site_name)
-                    
                     detail_link = node_a_tag.attrib.get('href', '').strip()
-                    if not detail_link: continue
+                    if not detail_link or not detail_link.startswith("/v/"): continue
                     item_code_match = re.search(r'/v/([^/?]+)', detail_link)
                     if not item_code_match: continue
                     item_code_raw = item_code_match.group(1).strip()
                     entity.code = cls.module_char + cls.site_char + item_code_raw 
-
-                    if entity.code in processed_codes: continue
-                    processed_codes.add(entity.code)
-
+                    if entity.code in processed_codes_in_search: continue
+                    processed_codes_in_search.add(entity.code)
                     full_title_from_attr = node_a_tag.attrib.get('title', '').strip()
                     video_title_node = node_a_tag.xpath('.//div[@class="video-title"]')
-                    visible_code_on_search = ""
-                    actual_title_part = ""
-
+                    visible_code_on_card = ""
+                    actual_title_on_card = ""
                     if video_title_node:
-                        strong_tag_text = video_title_node[0].xpath('./strong/text()')
-                        if strong_tag_text:
-                            visible_code_on_search = strong_tag_text[0].strip().upper()
-                        
-                        all_texts_in_video_title = video_title_node[0].xpath('.//text()')
-                        combined_text = "".join([t.strip() for t in all_texts_in_video_title]).strip()
-                        
-                        if visible_code_on_search and combined_text.startswith(visible_code_on_search):
-                            actual_title_part = combined_text[len(visible_code_on_search):].strip()
-                        elif combined_text:
-                            actual_title_part = combined_text
-                    
-                    entity.title = actual_title_part if actual_title_part else full_title_from_attr
-                    if not entity.title and visible_code_on_search:
-                        entity.title = visible_code_on_search
-                    elif not entity.title and entity.code:
-                        entity.title = entity.code[len(cls.module_char)+len(cls.site_char):]
-                    
-                    if hasattr(entity, 'ui_code'): 
-                        entity.ui_code = visible_code_on_search if visible_code_on_search else entity.code[len(cls.module_char)+len(cls.site_char):].upper()
-
-                    item_img_tag = node_a_tag.xpath('.//div[contains(@class, "cover")]/img/@src')
-                    entity.image_url = item_img_tag[0].strip() if item_img_tag else ""
-                    if entity.image_url and entity.image_url.startswith("//"):
-                        entity.image_url = "https:" + entity.image_url
-                    
-                    entity.year = 0
-                    date_meta_tag = node_a_tag.xpath('.//div[@class="meta"]/text()')
-                    premiered_for_log = ""
-                    if date_meta_tag:
-                        date_str_raw = date_meta_tag[0].strip()
-                        premiered_for_log = date_str_raw
-                        year_match_ymd = re.match(r'(\d{4})[-/]\d{2}[-/]\d{2}', date_str_raw)
-                        if year_match_ymd:
-                            entity.year = int(year_match_ymd.group(1))
-                        else:
-                            year_match_mdy = re.match(r'\d{2}[-/]\d{2}[-/](\d{4})', date_str_raw)
-                            if year_match_mdy:
-                                entity.year = int(year_match_mdy.group(1))
-                    
-                    code_to_compare_score = visible_code_on_search if visible_code_on_search else entity.code[len(cls.module_char)+len(cls.site_char):]
-                    code_to_compare_score_lower = code_to_compare_score.lower()
-                    code_to_compare_score_norm = code_to_compare_score_lower.replace('-', '')
-                    
+                        strong_tag_node = video_title_node[0].xpath('./strong[1]')
+                        if strong_tag_node and strong_tag_node[0].text:
+                            visible_code_on_card = strong_tag_node[0].text.strip().upper()
+                        temp_title_node = html.fromstring(html.tostring(video_title_node[0]))
+                        for strong_el in temp_title_node.xpath('.//strong'):
+                            strong_el.getparent().remove(strong_el)
+                        actual_title_on_card = temp_title_node.text_content().strip()
+                    if actual_title_on_card: entity.title = actual_title_on_card
+                    elif full_title_from_attr: entity.title = full_title_from_attr
+                    elif visible_code_on_card: entity.title = visible_code_on_card
+                    else: entity.title = item_code_raw.upper()
+                    ui_code_for_score_calc = visible_code_on_card if visible_code_on_card else item_code_raw.upper()
+                    item_img_tag_src = node_a_tag.xpath('.//div[contains(@class, "cover")]/img/@src')
+                    entity.image_url = ""
+                    if item_img_tag_src:
+                        img_url_raw = item_img_tag_src[0].strip()
+                        if img_url_raw.startswith("//"): entity.image_url = "https:" + img_url_raw
+                        elif img_url_raw.startswith("http"): entity.image_url = img_url_raw
+                        elif img_url_raw: logger.warning(f"JavDB Search Item: Unexpected image URL format: {img_url_raw}")
+                    entity.year = 0 
+                    date_meta_text_nodes = node_a_tag.xpath('.//div[@class="meta"]/text()')
+                    premiered_date_str = ""
+                    if date_meta_text_nodes:
+                        for text_node_val in reversed(date_meta_text_nodes):
+                            date_str_candidate = text_node_val.strip()
+                            date_match = re.match(r'(\d{4}-\d{2}-\d{2})', date_str_candidate)
+                            if date_match:
+                                premiered_date_str = date_match.group(1)
+                                try: entity.year = int(premiered_date_str[:4])
+                                except ValueError: pass
+                                break 
+                    ui_code_for_score_norm = ui_code_for_score_calc.lower().replace('-', '').replace(' ', '')
                     current_score = 0
-                    if keyword_norm == code_to_compare_score_norm:
-                        current_score = 100
-                    elif keyword_lower == code_to_compare_score_lower:
-                        current_score = 100
-                    elif keyword_lower in code_to_compare_score_lower:
-                        current_score = 60
-                    elif entity.title and keyword_lower in entity.title.lower():
-                        current_score = 40
-                    else:
-                        current_score = 20
+                    if keyword_lower_norm == ui_code_for_score_norm: current_score = 100
+                    elif keyword.lower() == ui_code_for_score_calc.lower(): current_score = 95
+                    elif keyword_lower_norm in ui_code_for_score_norm : current_score = 85
+                    elif entity.title and keyword.lower() in entity.title.lower(): current_score = 60
+                    else: current_score = 20
                     entity.score = current_score
-                    
-                    if manual: 
-                        entity.title_ko = "(번역 안 함) " + entity.title
-                    elif do_trans and entity.title:
-                        entity.title_ko = SiteUtil.trans(entity.title, source='ja', target='ko')
-                    else:
-                        entity.title_ko = entity.title
-                    
-                    log_ui_code = entity.ui_code if hasattr(entity, 'ui_code') and entity.ui_code else visible_code_on_search
-                    logger.debug(f"  JavDB Parsed item: code={entity.code}, title(orig)='{entity.title}', title(ko)='{entity.title_ko}', score={entity.score}, year={entity.year}, ui_code/visible='{log_ui_code}', date_str='{premiered_for_log}'")
+                    if manual: entity.title_ko = "(NoTrans/Manual) " + entity.title
+                    elif do_trans and entity.title: entity.title_ko = SiteUtil.trans(entity.title, source='ja', target='ko')
+                    else: entity.title_ko = entity.title
+                    logger.debug(f"  JavDB Parsed: code={entity.code}, score={entity.score}, title='{entity.title_ko}', year={entity.year}, ui_code_on_card='{ui_code_for_score_calc}', date='{premiered_date_str}'")
                     search_results.append(entity.as_dict())
-
-                except Exception as e_item:
-                    logger.error(f"JavDB Search: Error parsing item: {e_item}")
+                except Exception as e_item_parse:
+                    logger.error(f"JavDB Search Item: Error parsing item: {e_item_parse}")
                     logger.error(traceback.format_exc())
-            
+
             if search_results:
                 search_results = sorted(search_results, key=lambda k: k.get('score', 0), reverse=True)
             
-            logger.info(f"JavDB Search for '{keyword}' found {len(search_results)} results.")
+            logger.info(f"JavDB Search for '{keyword}' completed. Found {len(search_results)} results.")
             return {'ret': 'success', 'data': search_results}
 
-        except Exception as e_main:
-            logger.exception(f"JavDB Search Main Exception: {e_main}")
-            return {'ret': 'exception', 'data': str(e_main)}
+        except requests.exceptions.HTTPError as http_err_outer: # 위에서 raise된 다른 HTTP 에러 처리
+            logger.error(f"JavDB Search: Outer HTTPError: {http_err_outer}")
+            return {'ret': 'error', 'data': f'HTTP Error: {http_err_outer.response.status_code}'}
+        except Exception as e_main_search:
+            logger.exception(f"JavDB Search Main Exception for keyword '{keyword}': {e_main_search}")
+            return {'ret': 'exception', 'data': str(e_main_search)}
 
     @classmethod
     def __info(cls, code, **kwargs):

@@ -8,7 +8,6 @@ from .entity_av import EntityAVSearch
 from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
 from .plugin import P
 from .site_util import SiteUtil
-import urllib.parse as py_urllib_parse
 
 logger = P.logger
 
@@ -22,87 +21,101 @@ class SiteJav321:
 
     @classmethod
     def __search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
-        if keyword[-3:-1] == "cd":
-            keyword = keyword[:-3]
-        keyword = keyword.lower().replace(" ", "-")
+        search_keyword_for_api = keyword.lower() 
+        if search_keyword_for_api.endswith("cd"):
+            search_keyword_for_api = search_keyword_for_api[:-2]
 
         url = f"{cls.site_base_url}/search"
         headers = SiteUtil.default_headers.copy()
         headers['Referer'] = cls.site_base_url + "/"
         
-        res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, post_data={"sn": keyword.lower()})
+        res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, post_data={"sn": search_keyword_for_api})
 
         if res is None:
-            logger.error(f"Jav321: Failed to get response from {url} (possibly proxy error or network issue).")
+            logger.error(f"Jav321 Search: Failed to get response for API keyword '{search_keyword_for_api}'.")
             return []
 
         if not res.history or not res.url.startswith(cls.site_base_url + "/video/"):
-            logger.debug(f"Jav321: 검색 결과 없음 또는 직접 매칭 안 됨. Keyword: {keyword}, Final URL: {res.url}")
+            logger.debug(f"Jav321 Search: No direct match for API keyword '{search_keyword_for_api}'. Final URL: {res.url}")
             return []
 
         ret = []
         try:
             item = EntityAVSearch(cls.site_name)
-            # URL에서 코드 추출
-            item.code = cls.module_char + cls.site_char + res.url.split("/")[-1]
-            item.score = 100 # 직접 매칭된 경우이므로 100점
-            item.ui_code = keyword.upper()
-
+            
+            code_from_url_path = res.url.split("/")[-1] 
+            item.code = cls.module_char + cls.site_char + code_from_url_path 
+            
+            item.ui_code = keyword
+            
+            # ... (이하 이미지, 날짜, 제목 파싱은 이전과 동일) ...
             base_xpath = "/html/body/div[2]/div[1]/div[1]"
             tree = html.fromstring(res.text)
 
-            # 이미지 URL
-            img_tags = tree.xpath(f"{base_xpath}/div[2]/div[1]/div[1]/img/@src")
-            original_ps_url = img_tags[0] if img_tags else ""
-            if not original_ps_url: 
-                logger.warning(f"Jav321 search: 이미지 URL 없음. Code: {item.code}")
+            img_tag_node = tree.xpath(f"{base_xpath}/div[2]/div[1]/div[1]/img")
+            raw_ps_url = ""
+            # ... (src 우선 이미지 추출 로직은 동일) ...
+            if img_tag_node:
+                src_attr = img_tag_node[0].attrib.get('src')
+                onerror_attr = img_tag_node[0].attrib.get('onerror')
+                if src_attr and src_attr.strip(): 
+                    raw_ps_url = src_attr.strip()
+                elif onerror_attr: 
+                    parsed_onerror_url = cls._process_jav321_url_from_attribute(onerror_attr)
+                    if parsed_onerror_url: raw_ps_url = parsed_onerror_url
+            
+            processed_image_url = ""
+            if raw_ps_url:
+                temp_url = raw_ps_url.lower()
+                if temp_url.startswith("http://"): temp_url = "https://" + temp_url[len("http://"):]
+                processed_image_url = temp_url
+            
+            if not processed_image_url: logger.warning(f"Jav321 Search: Image URL not found for code: {item.code}")
 
-            # 발매일
             date_tags = tree.xpath(f'{base_xpath}/div[2]/div[1]/div[2]/b[contains(text(),"配信開始日")]/following-sibling::text()')
-            date_str = date_tags[0].lstrip(":").strip() if date_tags and date_tags[0].lstrip(":").strip() else "1900-01-01" # 기본값
+            date_str = date_tags[0].lstrip(":").strip() if date_tags and date_tags[0].lstrip(":").strip() else "1900-01-01"
             item.desc = f"발매일: {date_str}"
             try: item.year = int(date_str[:4])
             except ValueError: item.year = 1900
 
-            # 제목
             title_tags = tree.xpath(f"{base_xpath}/div[1]/h3/text()")
             item.title = item.title_ko = title_tags[0].strip() if title_tags else "제목 없음"
-            if item.title == "제목 없음": logger.warning(f"Jav321 search: 제목 없음. Code: {item.code}")
-
+            if item.title == "제목 없음": logger.warning(f"Jav321 Search: Title not found for code: {item.code}")
 
             if manual:
+                # ... (manual 모드 처리 동일) ...
                 _image_mode = "1" if image_mode != "0" else image_mode
-                if original_ps_url: 
-                    item.image_url = SiteUtil.process_image_mode(_image_mode, original_ps_url, proxy_url=proxy_url)
-                else: 
-                    item.image_url = ""
-                if do_trans: 
-                    item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
+                if processed_image_url: item.image_url = SiteUtil.process_image_mode(_image_mode, processed_image_url, proxy_url=proxy_url)
+                else: item.image_url = ""
+                if do_trans: item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
             else:
-                item.image_url = original_ps_url
+                item.image_url = processed_image_url
                 item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
 
-            # 점수 조정
-            if keyword.lower() != item.ui_code.lower(): item.score = 60
-            if original_ps_url and len(original_ps_url.split("//")) > 2:
-                item.score = 60 
-            
-            # 필수 정보 체크 후 추가
-            if item.code and item.title != "제목 없음":
-                if item.code and original_ps_url:
-                    cls._ps_url_cache[item.code] = original_ps_url
-                    logger.debug(f"Jav321 Search: Stored ps_url for {item.code} in cache: {original_ps_url}")
-                ret.append(item.as_dict())
-            else:
-                logger.warning(f"Jav321 search: 필수 정보 부족으로 아이템 제외. Code: {item.code}")
+            normalized_input_keyword = keyword.lower().replace("-","").replace(" ","")
+            normalized_item_uicode = item.ui_code.lower().replace("-","").replace(" ","")
 
-        except Exception as e_item:
-            logger.exception(f"Jav321: 개별 검색 결과 처리 중 예외 (Keyword: {keyword}): {e_item}")
+            if normalized_input_keyword == normalized_item_uicode:
+                item.score = 100
+            else:
+                item.score = 60 
+                logger.warning(f"Jav321 Search Score: Mismatch after normalization. InputKeyword='{keyword}' (norm='{normalized_input_keyword}'), ItemUICode='{item.ui_code}' (norm='{normalized_item_uicode}'). Score set to 60.")
+
+            if item.code and item.title != "제목 없음":
+                if item.code and processed_image_url:
+                    cls._ps_url_cache[item.code] = processed_image_url
+                    logger.debug(f"Jav321 Search: Stored ps_url for {item.code} in cache: {processed_image_url}")
+                ret.append(item.as_dict())
+                logger.debug(f"Jav321 Search Item Added: code={item.code}, ui_code={item.ui_code}, score={item.score}, title='{item.title_ko}'")
+            else:
+                logger.warning(f"Jav321 Search: Item excluded. Code: {item.code}, Title: {item.title}")
+
+        except Exception as e_item_search:
+            logger.exception(f"Jav321 Search: Error processing item for API keyword '{search_keyword_for_api}': {e_item_search}")
         return ret
 
     @classmethod
     def search(cls, keyword, **kwargs):
-        # 원본 search 로직 유지 + kwargs 필터링 (필수)
         ret = {}
         try:
             do_trans_arg = kwargs.get('do_trans', True)
@@ -122,118 +135,104 @@ class SiteJav321:
         return ret
 
     @staticmethod
-    def _get_jav321_url_from_onerror(onerror_attr):
-        """onerror 속성값에서 Jav321 URL을 추출합니다."""
-        if not onerror_attr or "this.src='" not in onerror_attr:
+    def _process_jav321_url_from_attribute(url_attribute_value):
+        """
+        img 태그의 src 또는 onerror 속성값에서 Jav321 관련 URL을 추출하고 처리합니다.
+        onerror의 경우 "this.src='...'" 패턴을 파싱합니다.
+        반환값은 소문자화, https 변환된 URL이거나, 유효하지 않으면 None입니다.
+        """
+        if not url_attribute_value:
             return None
-        try:
-            # this.src='...' 패턴에서 URL 부분만 추출
-            url_match = re.search(r"this\.src='([^']+)'", onerror_attr)
+        
+        raw_url = ""
+        if "this.src='" in url_attribute_value: # onerror 형태
+            url_match = re.search(r"this\.src='([^']+)'", url_attribute_value)
             if url_match:
-                url = url_match.group(1)
-                if "jav321.com" in url:
-                    return url.strip()
-        except Exception as e:
-            logger.warning(f"Jav321: Error parsing onerror attribute '{onerror_attr}': {e}")
-        return None
+                raw_url = url_match.group(1).strip()
+        else: # src 형태 (또는 onerror가 아니지만 URL일 수 있는 경우)
+            raw_url = url_attribute_value.strip()
+
+        if not raw_url:
+            return None
+
+        # jav321.com 또는 pics.dmm.co.jp 등의 유효한 도메인인지 체크 (선택적)
+        # if not ("jav321.com" in raw_url or "pics.dmm.co.jp" in raw_url):
+        #     logger.debug(f"Jav321 URL Process: Skipping non-target domain URL: {raw_url}")
+        #     return None
+            
+        processed_url = raw_url.lower()
+        if processed_url.startswith("http://"):
+            processed_url = "https://" + processed_url[len("http://"):]
+        # //netloc//path 형태의 더블 슬래시는 .lower()나 replace에 의해 변경되지 않음.
+        
+        return processed_url
 
     @classmethod
     def __img_urls(cls, tree):
         img_urls = {'ps': "", 'pl': "", 'arts': []}
-        try:
-            def finalize_image_url(raw_url_str_input, url_type_for_log=""): # 로깅을 위해 타입 추가
-                if not raw_url_str_input or not isinstance(raw_url_str_input, str): return ""
-                url_to_process = raw_url_str_input.strip()
-                logger.debug(f"  Finalize input ({url_type_for_log}): '{url_to_process}'") # 입력값 로깅
-                
-                is_dmm_pics_url = "pics.dmm.co.jp" in url_to_process.lower()
-                final_url_scheme_fixed = url_to_process
-                
-                if url_to_process.startswith("//"):
-                    final_url_scheme_fixed = "https:" + url_to_process
-                elif url_to_process.startswith("http://"):
-                    final_url_scheme_fixed = "https://" + url_to_process[len("http://"):]
-                elif not url_to_process.startswith("https://"):
-                    if url_to_process.startswith("/"):
-                        final_url_scheme_fixed = py_urllib_parse.urljoin(cls.site_base_url, url_to_process)
-                    elif is_dmm_pics_url:
-                        final_url_scheme_fixed = "https://" + url_to_process
-                
-                if is_dmm_pics_url and final_url_scheme_fixed.startswith("https://pics.dmm.co.jp"):
-                    path_part_match = re.match(r'(https://pics\.dmm\.co\.jp)(/*)(.*)', final_url_scheme_fixed)
-                    if path_part_match:
-                        domain_part, slashes_part, actual_path = path_part_match.groups()
-                        if not slashes_part.startswith("//"):
-                            final_url_scheme_fixed = f"{domain_part}//{actual_path}"
-                            logger.debug(f"    Finalize DMM URL ({url_type_for_log}): Corrected slashes: '{final_url_scheme_fixed}' (original path: '{actual_path}')")
-                
-                logger.debug(f"  Finalize output ({url_type_for_log}): '{final_url_scheme_fixed}'")
-                return final_url_scheme_fixed if final_url_scheme_fixed.startswith("http") else ""
-
-            # 1. PS 이미지 추출
-            ps_xpath = '/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/img'
-            ps_img_tags = tree.xpath(ps_xpath)
-            if ps_img_tags:
-                img_tag_ps = ps_img_tags[0]
-                src_url_raw = img_tag_ps.attrib.get('src')
-                onerror_attr_val = img_tag_ps.attrib.get('onerror')
-                logger.debug(f"Jav321 PS raw: src='{src_url_raw}', onerror_attr='{onerror_attr_val}'")
-                ps_candidate_raw = None
-                if src_url_raw and src_url_raw.strip(): ps_candidate_raw = src_url_raw.strip()
-                elif onerror_attr_val:
-                    onerror_parsed_url = cls._get_jav321_url_from_onerror(onerror_attr_val)
-                    if onerror_parsed_url: ps_candidate_raw = onerror_parsed_url
-                    elif "pics.dmm.co.jp" in onerror_attr_val:
-                        match_dmm_onerror = re.search(r"this\.src='([^']+)'", onerror_attr_val)
-                        if match_dmm_onerror : ps_candidate_raw = match_dmm_onerror.group(1).strip()
-                logger.debug(f"Jav321 PS candidate_raw: '{ps_candidate_raw}'")
-                img_urls['ps'] = finalize_image_url(ps_candidate_raw, "PS")
-            # ... (PL 및 Arts도 유사하게 src_url_raw, onerror_attr_val, candidate_raw 로깅 추가) ...
-            # 2. PL 이미지 추출
-            pl_xpath = '/html/body/div[2]/div[2]/div[1]/p/a/img'
-            pl_img_tags = tree.xpath(pl_xpath)
-            if pl_img_tags:
-                img_tag_pl = pl_img_tags[0]
-                src_url_raw_pl = img_tag_pl.attrib.get('src')
-                onerror_attr_val_pl = img_tag_pl.attrib.get('onerror')
-                logger.debug(f"Jav321 PL raw: src='{src_url_raw_pl}', onerror_attr='{onerror_attr_val_pl}'")
-                pl_candidate_raw = None
-                if src_url_raw_pl and src_url_raw_pl.strip(): pl_candidate_raw = src_url_raw_pl.strip()
-                elif onerror_attr_val_pl:
-                    onerror_parsed_url_pl = cls._get_jav321_url_from_onerror(onerror_attr_val_pl)
-                    if onerror_parsed_url_pl: pl_candidate_raw = onerror_parsed_url_pl
-                    elif "pics.dmm.co.jp" in onerror_attr_val_pl:
-                        match_dmm_onerror_pl = re.search(r"this\.src='([^']+)'", onerror_attr_val_pl)
-                        if match_dmm_onerror_pl : pl_candidate_raw = match_dmm_onerror_pl.group(1).strip()
-                logger.debug(f"Jav321 PL candidate_raw: '{pl_candidate_raw}'")
-                img_urls['pl'] = finalize_image_url(pl_candidate_raw, "PL")
-
-            # 3. Arts 이미지 추출
-            arts_xpath = '/html/body/div[2]/div[2]/div[position()>0]//a[contains(@href, "/snapshot/")]/img'
-            arts_img_tags = tree.xpath(arts_xpath)
-            temp_arts_list = []
-            if arts_img_tags:
-                for i, img_tag_art in enumerate(arts_img_tags):
-                    art_candidate_raw_url = None
-                    src_url_raw_art = img_tag_art.attrib.get('src')
-                    onerror_attr_val_art = img_tag_art.attrib.get('onerror')
-                    logger.debug(f"Jav321 Art raw [{i}]: src='{src_url_raw_art}', onerror_attr='{onerror_attr_val_art}'")
-                    if src_url_raw_art and src_url_raw_art.strip(): art_candidate_raw_url = src_url_raw_art.strip()
-                    elif onerror_attr_val_art:
-                        onerror_parsed_url_art = cls._get_jav321_url_from_onerror(onerror_attr_val_art)
-                        if onerror_parsed_url_art: art_candidate_raw_url = onerror_parsed_url_art
-                        elif "pics.dmm.co.jp" in onerror_attr_val_art:
-                            match_dmm_onerror_art = re.search(r"this\.src='([^']+)'", onerror_attr_val_art)
-                            if match_dmm_onerror_art : art_candidate_raw_url = match_dmm_onerror_art.group(1).strip()
-                    logger.debug(f"Jav321 Art candidate_raw [{i}]: '{art_candidate_raw_url}'")
-                    final_art_url = finalize_image_url(art_candidate_raw_url, f"Art[{i}]")
-                    if final_art_url: temp_arts_list.append(final_art_url)
-            img_urls['arts'] = list(dict.fromkeys(temp_arts_list)) 
-            
-        except Exception as e_img:
-            logger.exception(f"Jav321: Error extracting image URLs: {e_img}")
         
-        logger.debug(f"Jav321 Raw Extracted URLs (After Finalize): PS='{img_urls['ps']}', PL='{img_urls['pl']}', Arts ({len(img_urls['arts'])})='{img_urls['arts'][:3]}...'")
+        try:
+            # 1. PS 이미지 추출 (src 우선, 없으면 onerror)
+            ps_xpath = '/html/body/div[2]/div[1]/div[1]/div[2]/div[1]/div[1]/img'
+            ps_img_node = tree.xpath(ps_xpath)
+            if ps_img_node:
+                src_val = ps_img_node[0].attrib.get('src')
+                onerror_val = ps_img_node[0].attrib.get('onerror')
+                
+                url_candidate_ps = None
+                if src_val and src_val.strip(): # src 값 우선
+                    url_candidate_ps = cls._process_jav321_url_from_attribute(src_val)
+                if not url_candidate_ps and onerror_val: # src 없거나 처리 실패 시 onerror
+                    url_candidate_ps = cls._process_jav321_url_from_attribute(onerror_val)
+                
+                if url_candidate_ps: 
+                    img_urls['ps'] = url_candidate_ps
+                    logger.debug(f"Jav321 ImgUrls: PS URL='{img_urls['ps']}' (From src: {bool(src_val and src_val.strip() and img_urls['ps'] == cls._process_jav321_url_from_attribute(src_val))})")
+                else: logger.warning(f"Jav321 ImgUrls: PS URL not found.")
+            else: logger.warning(f"Jav321 ImgUrls: PS tag not found.")
+
+            # 2. PL 이미지 추출 (사이드바 첫번째, src 우선)
+            pl_xpath = '/html/body/div[2]/div[2]/div[1]/p/a/img'
+            pl_img_node = tree.xpath(pl_xpath)
+            if pl_img_node:
+                src_val = pl_img_node[0].attrib.get('src')
+                onerror_val = pl_img_node[0].attrib.get('onerror')
+                
+                url_candidate_pl = None
+                if src_val and src_val.strip():
+                    url_candidate_pl = cls._process_jav321_url_from_attribute(src_val)
+                if not url_candidate_pl and onerror_val:
+                    url_candidate_pl = cls._process_jav321_url_from_attribute(onerror_val)
+
+                if url_candidate_pl:
+                    img_urls['pl'] = url_candidate_pl
+                    logger.debug(f"Jav321 ImgUrls: PL URL='{img_urls['pl']}' (From src: {bool(src_val and src_val.strip() and img_urls['pl'] == cls._process_jav321_url_from_attribute(src_val))})")
+                else: logger.warning(f"Jav321 ImgUrls: PL (sidebar first) URL not found.")
+            else: logger.warning(f"Jav321 ImgUrls: PL (sidebar first) tag not found.")
+
+            # 3. Arts 이미지 추출 (사이드바 두 번째 이후, src 우선)
+            arts_xpath = '/html/body/div[2]/div[2]/div[position()>1]//a[contains(@href, "/snapshot/")]/img'
+            arts_img_nodes = tree.xpath(arts_xpath)
+            temp_arts_list = []
+            if arts_img_nodes:
+                for img_node in arts_img_nodes:
+                    src_val = img_node.attrib.get('src')
+                    onerror_val = img_node.attrib.get('onerror')
+                    
+                    url_candidate_art = None
+                    if src_val and src_val.strip():
+                        url_candidate_art = cls._process_jav321_url_from_attribute(src_val)
+                    if not url_candidate_art and onerror_val:
+                        url_candidate_art = cls._process_jav321_url_from_attribute(onerror_val)
+                    
+                    if url_candidate_art: temp_arts_list.append(url_candidate_art)
+            
+            img_urls['arts'] = list(dict.fromkeys(temp_arts_list)) # 중복 제거
+            
+        except Exception as e_img_extract:
+            logger.exception(f"Jav321 ImgUrls: Error extracting image URLs: {e_img_extract}")
+        
+        logger.debug(f"Jav321 ImgUrls Final: PS='{img_urls['ps']}', PL='{img_urls['pl']}', Arts({len(img_urls['arts'])})='{img_urls['arts'][:3]}...'")
         return img_urls
 
 
@@ -334,18 +333,18 @@ class SiteJav321:
                         pid_value_raw = pid_value_nodes[0].strip() if pid_value_nodes else ""
                         pid_value_cleaned = cls._clean_value(pid_value_raw)
                         if pid_value_cleaned:
-                            formatted_pid = pid_value_cleaned
+                            formatted_pid = pid_value_cleaned.upper()
                             try: 
                                 label_pid_val, num_pid_val = formatted_pid.split('-', 1)
-                                ui_code_for_image = f"{label_pid_val}-{num_pid_val}"
+                                ui_code_for_image = f"{label_pid_val.upper()}-{num_pid_val}"
                             except ValueError: 
                                 ui_code_for_image = formatted_pid
                             entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image 
                             entity.ui_code = ui_code_for_image; identifier_parsed = True
                             logger.info(f"Jav321: Identifier (ui_code_for_image) parsed: {ui_code_for_image}")
                             if entity.tag is None: entity.tag = []
-                            if '-' in ui_code_for_image and ui_code_for_image.split('-',1)[0] not in entity.tag:
-                                entity.tag.append(ui_code_for_image.split('-',1)[0])
+                            if '-' in ui_code_for_image and ui_code_for_image.split('-',1)[0].upper() not in entity.tag:
+                                entity.tag.append(ui_code_for_image.split('-',1)[0].upper())
                     
                     elif current_key == "出演者":
                         if entity.actor is None: entity.actor = []
@@ -451,7 +450,7 @@ class SiteJav321:
 
             if not identifier_parsed:
                 logger.error(f"Jav321: CRITICAL - Identifier parse failed for {code} from any source.")
-                ui_code_for_image = code[2:].replace("_", "-") 
+                ui_code_for_image = code[2:].upper().replace("_", "-") 
                 entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image
                 entity.ui_code = ui_code_for_image
             
