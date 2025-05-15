@@ -44,7 +44,8 @@ class SiteJav321:
         try:
             item = EntityAVSearch(cls.site_name)
             # URL에서 코드 추출
-            item.code = cls.module_char + cls.site_char + res.url.split("/")[-1].upper() # 대문자 통일
+            item_id_from_url = res.url.split("/")[-1]
+            item.code = cls.module_char + cls.site_char + item_id_from_url
             item.score = 100 # 직접 매칭된 경우이므로 100점
             item.ui_code = keyword.upper() # 검색어를 UI 코드로 사용
 
