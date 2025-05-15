@@ -44,10 +44,9 @@ class SiteJav321:
         try:
             item = EntityAVSearch(cls.site_name)
             # URL에서 코드 추출
-            item_id_from_url = res.url.split("/")[-1]
-            item.code = cls.module_char + cls.site_char + item_id_from_url
+            item.code = cls.module_char + cls.site_char + res.url.split("/")[-1]
             item.score = 100 # 직접 매칭된 경우이므로 100점
-            item.ui_code = keyword.upper() # 검색어를 UI 코드로 사용
+            item.ui_code = keyword.upper()
 
             base_xpath = "/html/body/div[2]/div[1]/div[1]"
             tree = html.fromstring(res.text)
@@ -145,7 +144,7 @@ class SiteJav321:
             def finalize_image_url(raw_url_str_input, url_type_for_log=""): # 로깅을 위해 타입 추가
                 if not raw_url_str_input or not isinstance(raw_url_str_input, str): return ""
                 url_to_process = raw_url_str_input.strip()
-                logger.debug(f"  Finalize input ({url_type_for_log}): '{url_to_process}'")
+                logger.debug(f"  Finalize input ({url_type_for_log}): '{url_to_process}'") # 입력값 로깅
                 
                 is_dmm_pics_url = "pics.dmm.co.jp" in url_to_process.lower()
                 final_url_scheme_fixed = url_to_process
@@ -335,18 +334,18 @@ class SiteJav321:
                         pid_value_raw = pid_value_nodes[0].strip() if pid_value_nodes else ""
                         pid_value_cleaned = cls._clean_value(pid_value_raw)
                         if pid_value_cleaned:
-                            formatted_pid = pid_value_cleaned.upper()
+                            formatted_pid = pid_value_cleaned
                             try: 
                                 label_pid_val, num_pid_val = formatted_pid.split('-', 1)
-                                ui_code_for_image = f"{label_pid_val()}-{num_pid_val}"
+                                ui_code_for_image = f"{label_pid_val}-{num_pid_val}"
                             except ValueError: 
                                 ui_code_for_image = formatted_pid
                             entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image 
                             entity.ui_code = ui_code_for_image; identifier_parsed = True
                             logger.info(f"Jav321: Identifier (ui_code_for_image) parsed: {ui_code_for_image}")
                             if entity.tag is None: entity.tag = []
-                            if '-' in ui_code_for_image and ui_code_for_image.split('-',1)[0]() not in entity.tag:
-                                entity.tag.append(ui_code_for_image.split('-',1)[0]())
+                            if '-' in ui_code_for_image and ui_code_for_image.split('-',1)[0] not in entity.tag:
+                                entity.tag.append(ui_code_for_image.split('-',1)[0])
                     
                     elif current_key == "出演者":
                         if entity.actor is None: entity.actor = []
@@ -452,7 +451,7 @@ class SiteJav321:
 
             if not identifier_parsed:
                 logger.error(f"Jav321: CRITICAL - Identifier parse failed for {code} from any source.")
-                ui_code_for_image = code[2:].upper().replace("_", "-") 
+                ui_code_for_image = code[2:].replace("_", "-") 
                 entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image
                 entity.ui_code = ui_code_for_image
             
