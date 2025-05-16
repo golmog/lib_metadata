@@ -84,8 +84,8 @@ class SiteUtil:
         """cloudscraper를 사용하여 HTTP GET 요청을 보내고 응답 객체를 반환합니다."""
         method = kwargs.pop("method", "GET").upper()
         proxy_url = kwargs.pop("proxy_url", None)
-        cookies = kwargs.pop("cookies", None) # requests와 동일한 방식으로 쿠키 전달 가능
-        headers = kwargs.pop("headers", cls.default_headers.copy()) # 헤더 전달
+        cookies = kwargs.pop("cookies", None)
+        headers = kwargs.pop("headers", cls.default_headers.copy())
 
         scraper = cls.get_cloudscraper_instance()
         if scraper is None:
@@ -94,20 +94,10 @@ class SiteUtil:
 
         current_proxies = None
         if proxy_url:
-            # cloudscraper는 requests와 동일한 프록시 형식을 사용합니다.
-            # {"http": "http://...", "https": "https://..."}
-            # 만약 http 프록시 하나만 있다면, 양쪽에 모두 설정해주는 것이 일반적입니다.
-            # 또는 proxy_url이 http:// 또는 https:// 로 시작하는지 확인하여 그에 맞게 설정.
-            # parsed_proxy = urlparse(proxy_url)
-            # if parsed_proxy.scheme:
-            #    current_proxies = {parsed_proxy.scheme: proxy_url}
-            # else: # 스킴 없으면 http, https 모두 시도
             current_proxies = {"http": proxy_url, "https": proxy_url}
             scraper.proxies.update(current_proxies)
 
         logger.debug(f"SiteUtil.get_response_cs: Making {method} request to URL='{url}'")
-        # if current_proxies: logger.debug(f"  Using proxies for cloudscraper: {current_proxies}")
-        # if cookies: logger.debug(f"  Using cookies for cloudscraper: {list(cookies.keys())}")
         if headers: scraper.headers.update(headers)
 
         try:
@@ -117,13 +107,18 @@ class SiteUtil:
             else: # GET
                 res = scraper.get(url, cookies=cookies, **kwargs)
             
-            # logger.debug(f"  Cloudscraper response status: {res.status_code}, URL: {res.url}")
-            res.raise_for_status()
+            if res.status_code != 200:
+                logger.warning(f"SiteUtil.get_response_cs: Received status code {res.status_code} for URL='{url}'. Proxy='{proxy_url}'.")
+                if res.status_code == 403:
+                    logger.error(f"SiteUtil.get_response_cs: Received 403 Forbidden for URL='{url}'. Proxy='{proxy_url}'. Response text: {res.text[:500]}")
+                return None #
+
             return res
         except cloudscraper.exceptions.CloudflareChallengeError as e_cf_challenge:
             logger.error(f"SiteUtil.get_response_cs: Cloudflare challenge error for URL='{url}'. Error: {e_cf_challenge}")
+            return None
         except requests.exceptions.RequestException as e_req:
-            logger.error(f"SiteUtil.get_response_cs: RequestException for URL='{url}'. Proxy='{proxy_url}'. Error: {e_req}")
+            logger.error(f"SiteUtil.get_response_cs: RequestException (not related to status code) for URL='{url}'. Proxy='{proxy_url}'. Error: {e_req}")
             logger.error(traceback.format_exc())
             return None
         except Exception as e_general:
