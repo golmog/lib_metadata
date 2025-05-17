@@ -93,7 +93,7 @@ class SiteDmm:
 
         search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': dmm_keyword }
         search_url = f"{cls.site_base_url}/search/?{py_urllib_parse.urlencode(search_params)}"
-        logger.info(f"Using search URL: {search_url}")
+        logger.debug(f"Using search URL: {search_url}")
         search_headers = cls._get_request_headers(referer=cls.fanza_av_url)
         tree = None
         try:

@@ -42,6 +42,7 @@ class SiteMgstage:
         module_query = "&type=top"
 
         url = f"{cls.site_base_url}/search/cSearch.php?search_word={keyword}&x=0&y=0{module_query}"
+        logger.debug(f"Using search URL: {url}")
         tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.headers)
         lists = tree.xpath('//div[@class="search_list"]/div/ul/li')
         logger.debug("mgs search kwd=%s len=%d", keyword, len(lists))

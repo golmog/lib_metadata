@@ -2958,7 +2958,7 @@ MGS_CODE_LEN = {
     "065LWSD": 2,
     "065ZBSD": 2,
     "071MXDLP": 4,
-    "071MXGS": 4,
+    "071MXGS": 3,
     "072KING": 2,
     "072SEN": 2,
     "073AMABAN": 2,
