@@ -231,7 +231,11 @@ class SiteDmm:
 
                 # --- 점수 계산 ---
                 match_real_no = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
-                item_ui_code_base = match_real_no.group("real") + match_real_no.group("no") if match_real_no else item.code[2:]
+                if match_real_no:
+                    item_ui_code_base = match_real_no.group("real").lower() + match_real_no.group("no")
+                else:
+                    item_ui_code_base = item.code[2:].lower() 
+
                 current_score = 0
                 # 검색 키워드와 품번 비교하여 점수 산정
                 if len(keyword_tmps) == 2:
