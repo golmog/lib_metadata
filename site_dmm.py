@@ -698,7 +698,7 @@ class SiteDmm:
                 
                 info_table_xpath_d_meta = '//div[@class="wrapper-product"]//table//tr'
                 tags_d_meta = tree.xpath(info_table_xpath_d_meta)
-                premiered_shouhin_d_meta = None; premiered_hatsubai_d_meta = None; premiered_haishin_d_meta = None
+                premiered_d_shouhin_meta = None; premiered_d_hatsubai_meta = None; premiered_d_haishin_meta = None
                 for tag_d_meta in tags_d_meta:
                     td_tags_d_meta = tag_d_meta.xpath(".//td")
                     if len(td_tags_d_meta) != 2: continue
