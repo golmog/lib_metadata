@@ -284,6 +284,12 @@ class SiteJav321:
         entity.thumb = []; entity.fanart = []; entity.extras = []
         ui_code_for_image = ""
 
+        ps_url_from_search_cache = cls._ps_url_cache.get(code)
+        if ps_url_from_search_cache:
+            logger.debug(f"Jav321: Found PS URL in cache for {code}: {ps_url_from_search_cache}")
+        else:
+            logger.debug(f"Jav321: No PS URL found in cache for {code}.")
+
         # === 2. 전체 메타데이터 파싱 (ui_code_for_image 확정 포함) ===
         identifier_parsed = False 
         raw_h3_title_text = "" # H3 제목 저장용
@@ -515,6 +521,11 @@ class SiteJav321:
         # 플레이스홀더 이미지("now_printing.jpg")의 로컬 경로
         now_printing_path = None
 
+        # 유효 후보 변수 초기화
+        valid_ps_candidate = None
+        valid_pl_candidate = None
+        jav321_special_poster_filepath = None
+
         # 기본 이미지 로직 실행 조건 결정
         # 사용자 지정 포스터/랜드스케이프가 없거나, 필요한 팬아트 수가 부족할 때
         needs_default_image_processing = not skip_default_poster_logic or \
@@ -534,14 +545,10 @@ class SiteJav321:
                 if use_image_server and image_server_local_path:
                     now_printing_path = os.path.join(image_server_local_path, "now_printing.jpg")
                     if not os.path.exists(now_printing_path): 
-                        logger.debug(f"Jav321: now_printing.jpg not found at {now_printing_path}. Placeholder check will be limited.")
                         now_printing_path = None 
-                else:
-                    logger.debug(f"Jav321: Image server not configured, placeholder check will be skipped or limited.")
 
                 # --- A. 포스터 소스 결정 ---
                 if not skip_default_poster_logic:
-                    # 임시 포스터 후보 및 크롭 모드 (일반 로직 결과)
                     temp_poster_step1 = None 
                     temp_crop_step1 = None 
                     
@@ -550,8 +557,6 @@ class SiteJav321:
                     if ps_from_detail_page and now_printing_path and SiteUtil.are_images_visually_same(ps_from_detail_page, now_printing_path, proxy_url=proxy_url):
                         is_ps_detail_placeholder = True
                     
-                    valid_ps_candidate = None
-                    ps_url_from_search_cache = cls._ps_url_cache.get(code) 
                     if ps_from_detail_page and not is_ps_detail_placeholder:
                         valid_ps_candidate = ps_from_detail_page
                     elif ps_url_from_search_cache:
@@ -559,18 +564,15 @@ class SiteJav321:
                         if now_printing_path and SiteUtil.are_images_visually_same(ps_url_from_search_cache, now_printing_path, proxy_url=proxy_url):
                             is_search_ps_placeholder = True
                         if not is_search_ps_placeholder: valid_ps_candidate = ps_url_from_search_cache
-                        elif ps_from_detail_page : valid_ps_candidate = ps_from_detail_page # 둘 다 플레이스홀더면 상세 PS (어쩔 수 없이)
-                    logger.debug(f"Jav321: Valid PS candidate: {valid_ps_candidate}")
+                        elif ps_from_detail_page : valid_ps_candidate = ps_from_detail_page
 
                     # 4-A-2. 유효한 PL 후보 결정 (플레이스홀더 아닌 것)
-                    valid_pl_candidate = None
                     if pl_from_detail_page:
                         is_pl_detail_placeholder = False
                         if now_printing_path and SiteUtil.are_images_visually_same(pl_from_detail_page, now_printing_path, proxy_url=proxy_url):
                             is_pl_detail_placeholder = True
                         if not is_pl_detail_placeholder: valid_pl_candidate = pl_from_detail_page
-                    logger.debug(f"Jav321: Valid PL candidate: {valid_pl_candidate}")
-                    
+
                     # 4-A-3. 일반적인 포스터 결정 로직 (MGStage 방식 기반)
                     if ps_to_poster_setting and valid_ps_candidate: 
                         temp_poster_step1 = valid_ps_candidate
@@ -597,10 +599,9 @@ class SiteJav321:
                     if not temp_poster_step1 and valid_ps_candidate:
                         temp_poster_step1 = valid_ps_candidate
                     logger.debug(f"Jav321: After general poster logic: temp_poster_step1='{temp_poster_step1}', temp_crop_step1='{temp_crop_step1}'")
-                    
+
                     # 4-A-6. MGS 스타일 특별 처리 시도
-                    jav321_special_poster_filepath = None # MGS 스타일 처리 결과 (임시 파일 경로)
-                    attempt_special_local = False        # MGS 스타일 처리 시도 여부 플래그
+                    attempt_special_local = False
                     
                     # 조건: 일반 로직 결과 PS가 포스터로 선택되었는가?
                     general_logic_chose_ps = (temp_poster_step1 == valid_ps_candidate)
@@ -619,31 +620,25 @@ class SiteJav321:
 
                                     # 조건 A: 원본 PL이 "충분히 가로로 긴가?" (임계값 1.7)
                                     is_original_pl_very_wide = (original_pl_ratio >= 1.7)
-                                    
+
                                     # 조건 B: (임계값 1.2 적용) 원본 PL을 반으로 잘랐을 때, 그 조각의 높이가 너비의 1.2배를 넘지 않는가?
                                     is_half_cut_shape_acceptable = False 
                                     if half_pl_width > 0: 
                                         is_half_cut_shape_acceptable = (pl_height <= half_pl_width * 1.2)
-                                    
+
                                     if is_original_pl_very_wide and is_half_cut_shape_acceptable:
-                                        logger.debug(f"Jav321: PL ('{valid_pl_candidate}') is wide enough (orig_ratio {original_pl_ratio:.2f} >= 1.7) AND its half-cut shape is acceptable (height {pl_height} <= half_width {half_pl_width} * 1.2). Eligible for MGS style.")
                                         attempt_special_local = True
-                                    elif is_original_pl_very_wide: 
-                                        logger.debug(f"Jav321: PL ('{valid_pl_candidate}') is wide enough (orig_ratio {original_pl_ratio:.2f} >= 1.7), but its half-cut shape is NOT acceptable (height {pl_height} > half_width {half_pl_width} * 1.2). MGS style not attempted.")
-                                    else: 
-                                        logger.debug(f"Jav321: PL ('{valid_pl_candidate}') is not wide enough (orig_ratio {original_pl_ratio:.2f} < 1.7). Not attempting MGS style.")
                             else:
                                 logger.warning(f"Jav321: Could not open PL ('{valid_pl_candidate}') for MGS style eligibility check.")
                         except Exception as e_ratio_check:
                             logger.error(f"Jav321: Error during PL MGS style eligibility check: {e_ratio_check}")
-                    
+
                     if attempt_special_local:
                         logger.debug(f"Jav321: Attempting MGS style processing for PL ('{valid_pl_candidate}').")
-                        _temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url) # 반환값 중 첫번째만 사용
+                        _temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url)
                         if _temp_filepath and os.path.exists(_temp_filepath): 
                             jav321_special_poster_filepath = _temp_filepath
-                            logger.info(f"Jav321: MGS style processing successful. Using temp file: {jav321_special_poster_filepath}")
-                    
+
                     # 4-A-7. 최종 포스터 소스 및 크롭 모드 결정
                     if jav321_special_poster_filepath: 
                         final_poster_source = jav321_special_poster_filepath
@@ -652,11 +647,10 @@ class SiteJav321:
                         final_poster_source = temp_poster_step1
                         final_poster_crop_mode = temp_crop_step1
                     logger.debug(f"Jav321: Final poster decision: source='{final_poster_source}', crop='{final_poster_crop_mode}'")
-                
+
                 # --- B. 랜드스케이프 소스 결정 ---
                 if not skip_default_landscape_logic: 
-                    final_landscape_url_source = valid_pl_candidate # 플레이스홀더가 아닌 PL 사용
-                logger.debug(f"Jav321: Final landscape decision: source='{final_landscape_url_source}'")
+                    final_landscape_url_source = valid_pl_candidate
                 
                 # --- C. 팬아트 목록 결정 ---
                 temp_fanart_list = []
@@ -664,7 +658,7 @@ class SiteJav321:
                     sources_to_exclude_for_fanart = set() # 팬아트에서 제외할 URL 집합
                     if final_landscape_url_source: 
                         sources_to_exclude_for_fanart.add(final_landscape_url_source)
-                    if final_poster_source and isinstance(final_poster_source, str) and final_poster_source.startswith("http"): # URL 형태의 포스터 소스만 제외
+                    if final_poster_source and isinstance(final_poster_source, str) and final_poster_source.startswith("http"):
                         sources_to_exclude_for_fanart.add(final_poster_source)
                     
                     # MGS 스타일 처리로 포스터가 생성된 경우, 원본 PL도 팬아트에서 제외
