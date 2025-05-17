@@ -231,24 +231,44 @@ class SiteDmm:
 
                 # --- 점수 계산 ---
                 match_real_no = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
-                if match_real_no:
-                    item_ui_code_base = match_real_no.group("real").lower() + match_real_no.group("no")
-                else:
-                    item_ui_code_base = item.code[2:].lower() 
 
+                item_label_part_from_item = ""
+                item_number_part_from_item = ""
+                if match_real_no:
+                    item_label_part_from_item = match_real_no.group("real").lower()
+                    item_number_part_from_item = match_real_no.group("no")
+                else:
+                    temp_code_for_fallback = item.code[2:].lower()
+                    m_fallback = re.match(r"([a-z]+)(\d+.*)", temp_code_for_fallback)
+                    if m_fallback:
+                        item_label_part_from_item = m_fallback.group(1)
+                        item_number_part_from_item = re.match(r"(\d+)", m_fallback.group(2)).group(1) if re.match(r"(\d+)", m_fallback.group(2)) else ""
+                    else:
+                        item_label_part_from_item = temp_code_for_fallback
+                    logger.warning(f"DMM Score: PTN_SEARCH_REAL_NO failed for item.code[2:]: {item.code[2:]}. Fallback to: label='{item_label_part_from_item}', num='{item_number_part_from_item}'")
+
+                item_code_for_strict_compare = ""
+                if item_label_part_from_item and item_number_part_from_item:
+                    item_code_for_strict_compare = item_label_part_from_item + item_number_part_from_item.zfill(5)
+                elif item_label_part_from_item :
+                    item_code_for_strict_compare = item_label_part_from_item
+                
+                current_score = 0
+                
+                # item_ui_code_base_original_padding = item_label_part_from_item + item_number_part_from_item
+                # logger.debug(f"DMM Score: Comparing dmm_keyword='{dmm_keyword}' with item_code_for_strict_compare='{item_code_for_strict_compare}' and item_ui_code_base_original_padding='{item_ui_code_base_original_padding}'")
+
+                item_ui_code_base = match_real_no.group("real") + match_real_no.group("no") if match_real_no else item.code[2:]
                 current_score = 0
                 # 검색 키워드와 품번 비교하여 점수 산정
-                if len(keyword_tmps) == 2:
-                    if item_ui_code_base == dmm_keyword: current_score = 100
-                    elif item_ui_code_base.replace("0", "") == dmm_keyword.replace("0", ""): current_score = 60
-                    elif dmm_keyword in item_ui_code_base: current_score = score
-                    elif keyword_tmps[0] in item.code and keyword_tmps[1] in item.code: current_score = score
-                    elif keyword_tmps[0] in item.code or keyword_tmps[1] in item.code: current_score = 60
-                    else: current_score = 20
-                else: # 검색어가 하나일 때
-                    if item_ui_code_base == dmm_keyword: current_score = 100
-                    elif dmm_keyword in item_ui_code_base: current_score = score
-                    else: current_score = 20
+                if dmm_keyword and item_code_for_strict_compare and dmm_keyword == item_code_for_strict_compare: current_score = 100
+                elif item_ui_code_base == dmm_keyword: current_score = 100
+                elif item_ui_code_base.replace("0", "") == dmm_keyword.replace("0", ""): current_score = 60
+                elif dmm_keyword in item_ui_code_base: current_score = score
+                elif keyword_tmps[0] in item.code and keyword_tmps[1] in item.code: current_score = score
+                elif keyword_tmps[0] in item.code or keyword_tmps[1] in item.code: current_score = 60
+                else: current_score = 20
+
                 item.score = current_score # 계산된 점수 저장
                 # 점수 감소 로직 (100점 아니면 다음 아이템 기본 점수 감소)
                 if current_score < 100 and score > 20: score -= 5
