@@ -720,7 +720,7 @@ class SiteDmm:
                 title_node_d_info_meta = tree.xpath('//h1[@id="title"]')
                 if title_node_d_info_meta: entity.tagline = SiteUtil.trans(title_node_d_info_meta[0].text_content().strip(), do_trans=do_trans)
                 
-                info_table_xpath_d_meta = '//div[@class="wrapper-product"]//table//tr'
+                info_table_xpath_d_meta = '//div[contains(@class, "wrapper-product")]//table[contains(@class, "mg-b20")]/tbody/tr'
                 tags_d_meta = tree.xpath(info_table_xpath_d_meta)
                 premiered_d_shouhin_meta = None; premiered_d_hatsubai_meta = None; premiered_d_haishin_meta = None
                 for tag_d_meta in tags_d_meta:
@@ -769,7 +769,7 @@ class SiteDmm:
                 # dvd/bluray 출시일: 상품일 > 발매일 > 배신일 순
                 entity.premiered = premiered_d_shouhin_meta or premiered_d_hatsubai_meta or premiered_d_haishin_meta
                 if entity.premiered: entity.year = int(entity.premiered[:4]) if len(entity.premiered) >=4 else None
-                
+
                 # dvd/bluray 줄거리
                 plot_xpath_d_meta_info = '//div[@class="mg-b20 lh4"]/p[@class="mg-b20"]/text()'
                 plot_tags_d_meta_info = tree.xpath(plot_xpath_d_meta_info)
