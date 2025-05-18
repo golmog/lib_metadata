@@ -421,7 +421,6 @@ class SiteDmm:
                 img_urls_dict['pl'] = processed_pl_v if processed_pl_v else ""
                 img_urls_dict['specific_poster_candidate'] = processed_specific_v if processed_specific_v else ""
                 img_urls_dict['arts'] = list(dict.fromkeys(remaining_arts_v))
-                if processed_pl_v : img_urls_dict['ps'] = processed_pl_v
 
             elif content_type == 'dvd' or content_type == 'bluray':
                 # --- DVD/Blu-ray 타입 이미지 추출 로직 ---
@@ -435,8 +434,7 @@ class SiteDmm:
                     elif not raw_pl.startswith("http"): temp_pl_dvd = py_urllib_parse.urljoin(cls.site_base_url, raw_pl)
                     else: temp_pl_dvd = raw_pl
                     img_urls_dict['pl'] = temp_pl_dvd
-                    img_urls_dict['ps'] = temp_pl_dvd
-                    logger.debug(f"DMM __img_urls ({content_type}): PL/PS extracted using fn-sampleImage-imagebox: {temp_pl_dvd}")
+                    logger.debug(f"DMM __img_urls ({content_type}): PL extracted: {temp_pl_dvd}. 'ps' will rely on search cache.")
 
                 # 2. Arts (샘플 이미지들) 추출 시도 (제한적)
                 #    ul#sample-image-block 내부의 썸네일 이미지를 가져오려고 시도.
@@ -473,7 +471,7 @@ class SiteDmm:
         except Exception as e:
             logger.exception(f"DMM __img_urls ({content_type}): Error extracting image URLs: {e}")
         
-        logger.debug(f"DMM __img_urls ({content_type}): Extracted PS='{img_urls_dict['ps']}', PL='{img_urls_dict['pl']}', Specific='{img_urls_dict['specific_poster_candidate']}', ArtsCount={len(img_urls_dict['arts'])}")
+        logger.debug(f"DMM __img_urls ({content_type}) returning: PL='{img_urls_dict['pl']}', Specific='{img_urls_dict['specific_poster_candidate']}', ArtsCount={len(img_urls_dict['arts'])}.")
         return img_urls_dict
 
 
