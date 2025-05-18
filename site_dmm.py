@@ -918,10 +918,10 @@ class SiteDmm:
                     else : final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting 
                 elif ps_url_from_search_cache : final_poster_source = ps_url_from_search_cache
                 else: final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting
-            
+
             elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
                 logger.debug(f"DMM DVD/BR: Determining poster. PS_cache='{ps_url_from_search_cache is not None}', PL_page='{pl_on_page is not None}', PS_to_Poster_Setting='{ps_to_poster_setting}'")
-                
+
                 if ps_to_poster_setting and ps_url_from_search_cache:
                     final_poster_source = ps_url_from_search_cache
                     logger.debug(f"DMM DVD/BR: Using PS from cache due to ps_to_poster_setting: {final_poster_source}")
@@ -940,11 +940,11 @@ class SiteDmm:
                 else:
                     logger.warning(f"DMM DVD/BR: No valid PS_cache or PL_page found for poster.")
                     final_poster_source = None
-        
+
         # 4. 팬아트 목록 결정 (arts_urls_for_processing)
         #    - 초기 후보: specific_on_page (videoa/vr 경우) + other_arts_on_page
         #    - 제외 대상: final_landscape_source, final_poster_source
-        
+
         potential_fanart_candidates = []
         if entity.content_type == 'videoa' or entity.content_type == 'vr':
             if specific_on_page: # specific 후보가 있다면 팬아트 후보 목록의 가장 앞에 추가
@@ -956,7 +956,7 @@ class SiteDmm:
             urls_used_as_thumb.add(final_landscape_source)
         if final_poster_source and not skip_default_poster_logic:
             urls_used_as_thumb.add(final_poster_source)
-        
+
         # 순서 유지를 위해 list와 set을 함께 사용한 중복 제거
         temp_unique_fanarts = []
         seen_for_temp_unique = set()
@@ -964,10 +964,10 @@ class SiteDmm:
             if art_url and art_url not in urls_used_as_thumb and art_url not in seen_for_temp_unique:
                 temp_unique_fanarts.append(art_url)
                 seen_for_temp_unique.add(art_url)
-        
+
         # max_arts 제한 적용
         arts_urls_for_processing = temp_unique_fanarts[:max_arts]
-        
+
         logger.debug(f"DMM ({entity.content_type}): Final Images Decision - Poster='{final_poster_source}' (Crop='{final_poster_crop_mode}'), Landscape='{final_landscape_source}', Fanarts_to_process({len(arts_urls_for_processing)})='{arts_urls_for_processing[:3]}...'")
 
         # 5. entity.thumb 및 entity.fanart 채우기
@@ -976,12 +976,12 @@ class SiteDmm:
                 if not any(t.aspect == 'poster' for t in entity.thumb):
                     processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
                     if processed_poster: entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
-            
+
             if final_landscape_source and not skip_default_landscape_logic:
                 if not any(t.aspect == 'landscape' for t in entity.thumb):
                     processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_source, proxy_url=proxy_url) # 랜드스케이프는 크롭 없음
                     if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
-            
+
             for art_url_item in arts_urls_for_processing: # 여기서 최종 팬아트 목록 사용
                 processed_art = SiteUtil.process_image_mode(image_mode, art_url_item, proxy_url=proxy_url)
                 if processed_art: entity.fanart.append(processed_art)
@@ -991,12 +991,12 @@ class SiteDmm:
                 if not any(t.aspect == 'poster' for t in entity.thumb):
                     p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
                     if p_path: entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
-            
+
             if final_landscape_source and not skip_default_landscape_logic:
                 if not any(t.aspect == 'landscape' for t in entity.thumb):
                     pl_path = SiteUtil.save_image_to_server_path(final_landscape_source, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
                     if pl_path: entity.thumb.append(EntityThumb(aspect="landscape", value=f"{image_server_url}/{pl_path}"))
-            
+
             for idx, art_url_item_server in enumerate(arts_urls_for_processing): # 여기서 최종 팬아트 목록 사용
                 art_relative_path = SiteUtil.save_image_to_server_path(art_url_item_server, 'art', image_server_local_path, image_path_segment, ui_code_for_image, art_index=idx + 1, proxy_url=proxy_url)
                 if art_relative_path: entity.fanart.append(f"{image_server_url}/{art_relative_path}")
@@ -1019,7 +1019,7 @@ class SiteDmm:
                         logger.info(f"DMM VR Trailer: New method failed for {cid_part}. Trying fallback (old sampleUrl method).")
                         trailer_url_final = cls._get_dmm_vr_trailer_fallback(cid_part, detail_url, proxy_url)
                         # Fallback에서는 JSON 제목이 없으므로 default_trailer_title 사용
-                
+
                 elif entity.content_type == 'videoa':
                     trailer_url_final, title_from_json = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url, proxy_url, entity.content_type)
                     if title_from_json: trailer_title_to_use = title_from_json
