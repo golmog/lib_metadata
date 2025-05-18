@@ -606,21 +606,22 @@ class SiteUtil:
             allowed_exts = ['jpg', 'png', 'webp']
 
             if ext not in allowed_exts:
-                logger.warning(f"save_image_to_server_path: 지원하지 않는 이미지 포맷 '{ext}' from {log_source_info}. JPG로 변환 시도.")
-                try:
-                    # 변환 로직 (RGBA, P 모드 등 고려)
-                    if im.mode == 'P':
-                        im = im.convert('RGBA' if 'transparency' in im.info else 'RGB')
-                    if im.mode == 'RGBA' and ext != 'png': # PNG 외에는 알파 채널 제거
-                        im = im.convert('RGB')
-                    elif im.mode not in ('RGB', 'L', 'RGBA'): # L(흑백)도 일단 통과
-                        im = im.convert('RGB')
-
-                    ext = 'jpg' # JPG로 강제 변환 시 확장자 변경
-                    logger.info(f"save_image_to_server_path: 이미지 변환 성공 (to RGB/JPG) for {log_source_info}.")
-                except Exception as e_convert:
-                    logger.error(f"save_image_to_server_path: 이미지 변환 실패 for {log_source_info}: {e_convert}")
-                    return None # 변환 실패 시 저장 불가
+                logger.debug(f"save_image_to_server_path: 지원하지 않는 이미지 포맷 '{ext}' from {log_source_info}.")
+                #logger.warning(f"save_image_to_server_path: 지원하지 않는 이미지 포맷 '{ext}' from {log_source_info}. JPG로 변환 시도.")
+                #try:
+                #    # 변환 로직 (RGBA, P 모드 등 고려)
+                #    if im.mode == 'P':
+                #        im = im.convert('RGBA' if 'transparency' in im.info else 'RGB')
+                #    if im.mode == 'RGBA' and ext != 'png': # PNG 외에는 알파 채널 제거
+                #        im = im.convert('RGB')
+                #    elif im.mode not in ('RGB', 'L', 'RGBA'): # L(흑백)도 일단 통과
+                #        im = im.convert('RGB')
+                #    ext = 'jpg' # JPG로 강제 변환 시 확장자 변경
+                #    logger.info(f"save_image_to_server_path: 이미지 변환 성공 (to RGB/JPG) for {log_source_info}.")
+                #except Exception as e_convert:
+                #    logger.error(f"save_image_to_server_path: 이미지 변환 실패 for {log_source_info}: {e_convert}")
+                #    return None # 변환 실패 시 저장 불가
+                return None
 
             # 5. 저장 경로 및 파일명 결정
             ui_code_parts = ui_code.split('-')
