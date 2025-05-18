@@ -871,7 +871,7 @@ class SiteDmm:
         except Exception as e_meta_dmm_main_detail_full:
             logger.exception(f"DMM ({entity.content_type}): Meta parsing error for {code}: {e_meta_dmm_main_detail_full}")
             if not ui_code_for_image: return None
-        
+
         # === 3. 사용자 지정 포스터 확인 ===
         user_custom_poster_url = None; user_custom_landscape_url = None
         skip_default_poster_logic = False; skip_default_landscape_logic = False
@@ -911,7 +911,7 @@ class SiteDmm:
                 try:
                     pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_on_page, proxy_url=proxy_url)
                     if pl_image_obj_for_fixed_crop and pl_image_obj_for_fixed_crop.size == (800, 442):
-                        logger.info(f"DMM Blu-ray: Detected 800x442 PL ('{pl_on_page}'). Attempting fixed crop (right 380px).")
+                        logger.debug(f"DMM Blu-ray: Detected 800x442 PL ('{pl_on_page}'). Attempting fixed crop (right 380px).")
                         crop_box_fixed = (800 - 380, 0, 800, 442) # 오른쪽 380x442
                         final_poster_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
                         if final_poster_pil_object:
@@ -920,13 +920,12 @@ class SiteDmm:
                             final_poster_source = final_poster_pil_object 
                             final_poster_crop_mode = None # 이미 원하는 대로 잘렸으므로 추가 크롭 불필요
                             fixed_crop_applied_for_bluray = True
-                            logger.info(f"DMM Blu-ray: Successfully applied fixed crop. Poster source is now a PIL object.")
+                            logger.debug(f"DMM Blu-ray: Successfully applied fixed crop. Poster source is now a PIL object.")
                         else:
                             logger.warning(f"DMM Blu-ray: Failed to apply fixed crop to 800x442 image ('{pl_on_page}').")
                     # 800x442가 아닌 다른 Blu-ray PL은 일반 로직으로 넘어감
                 except Exception as e_fixed_crop_bluray:
                     logger.error(f"DMM Blu-ray: Error during 800x442 fixed crop attempt for '{pl_on_page}': {e_fixed_crop_bluray}")
-            # --- 특수 Blu-ray 처리 로직 끝 ---
 
             # 특수 고정 크롭이 적용되지 않았다면, 일반적인 포스터 결정 로직 실행
             if not fixed_crop_applied_for_bluray:
@@ -978,8 +977,10 @@ class SiteDmm:
         urls_used_as_thumb = set() # 포스터 또는 랜드스케이프로 사용된 URL
         if final_landscape_source and not skip_default_landscape_logic:
             urls_used_as_thumb.add(final_landscape_source)
+
         if final_poster_source and not skip_default_poster_logic:
-            urls_used_as_thumb.add(final_poster_source)
+            if isinstance(final_poster_source, str): # 문자열(URL 또는 파일 경로)인 경우에만 추가
+                urls_used_as_thumb.add(final_poster_source)
 
         # 순서 유지를 위해 list와 set을 함께 사용한 중복 제거
         temp_unique_fanarts = []
