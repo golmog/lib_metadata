@@ -925,30 +925,20 @@ class SiteDmm:
                 if ps_to_poster_setting and ps_url_from_search_cache:
                     final_poster_source = ps_url_from_search_cache
                     logger.debug(f"DMM DVD/BR: Using PS from cache due to ps_to_poster_setting: {final_poster_source}")
-                elif pl_on_page and ps_url_from_search_cache:
-                    logger.debug(f"DMM DVD/BR: Both PL and PS exist. Applying HQ logic.")
+                elif pl_on_page and ps_url_from_search_cache: # PS_cache와 PL_page 모두 존재
                     crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
                     if crop_pos:
-                        final_poster_source = pl_on_page
-                        final_poster_crop_mode = crop_pos
-                        logger.debug(f"DMM DVD/BR: Using PL with crop_pos '{crop_pos}' from has_hq_poster: {final_poster_source}")
+                        final_poster_source = pl_on_page; final_poster_crop_mode = crop_pos
                     elif SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url):
-                        final_poster_source = pl_on_page
-                        final_poster_crop_mode = None
-                        logger.debug(f"DMM DVD/BR: Using PL from is_hq_poster (no specific crop): {final_poster_source}")
-                    else:
+                        final_poster_source = pl_on_page 
+                    else: # HQ 로직 모두 실패 시 PS_cache 사용
                         final_poster_source = ps_url_from_search_cache
-                        logger.debug(f"DMM DVD/BR: HQ logic failed. Using PS from cache: {final_poster_source}")
-                
-                elif ps_url_from_search_cache:
+                elif ps_url_from_search_cache: # PL_page 없고 PS_cache만 존재
                     final_poster_source = ps_url_from_search_cache
-                    logger.debug(f"DMM DVD/BR: Only PS from cache available: {final_poster_source}")
-                elif pl_on_page:
-                    final_poster_source = pl_on_page
-                    final_poster_crop_mode = crop_mode_setting
-                    logger.debug(f"DMM DVD/BR: Only PL from page available. Using crop_mode_setting '{crop_mode_setting}': {final_poster_source}")
+                elif pl_on_page: # PS_cache 없고 PL_page만 존재
+                    final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting
                 else:
-                    logger.warning(f"DMM DVD/BR: No valid PS or PL found for poster.")
+                    logger.warning(f"DMM DVD/BR: No valid PS_cache or PL_page found for poster.")
                     final_poster_source = None
         
         # 4. 팬아트 목록 결정 (arts_urls_for_processing)
