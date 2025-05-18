@@ -695,8 +695,8 @@ class SiteMgstageDvd(SiteMgstage):
 
         if use_image_server and image_mode == '4' and ui_code_for_image:
             logger.info(f"MGStage ({cls.module_char}): Saving images to Image Server for {ui_code_for_image}...")
-            if ps_url_detail_page_default:
-                SiteUtil.save_image_to_server_path(ps_url_detail_page_default, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
+            #if ps_url_detail_page_default:
+            #    SiteUtil.save_image_to_server_path(ps_url_detail_page_default, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
             if not skip_default_poster_logic and final_poster_source:
                 p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
                 if p_path and not any(t.aspect == 'poster' and t.value.endswith(p_path) for t in entity.thumb): entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
