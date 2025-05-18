@@ -904,40 +904,66 @@ class SiteDmm:
 
         # 3. 포스터 이미지 결정
         if not skip_default_poster_logic:
-            if entity.content_type == 'videoa' or entity.content_type == 'vr':
-                if pl_on_page and ps_url_from_search_cache and SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url):
-                    final_poster_source = pl_on_page
-                elif specific_on_page and ps_url_from_search_cache and SiteUtil.is_hq_poster(ps_url_from_search_cache, specific_on_page, proxy_url=proxy_url):
-                    final_poster_source = specific_on_page
-                elif pl_on_page and ps_url_from_search_cache and not ps_to_poster_setting : 
-                    crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
-                    if crop_pos : final_poster_source = pl_on_page; final_poster_crop_mode = crop_pos
-                    elif ps_url_from_search_cache : final_poster_source = ps_url_from_search_cache
-                    else : final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting 
-                elif ps_url_from_search_cache : final_poster_source = ps_url_from_search_cache
-                else: final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting
+            fixed_crop_applied_for_bluray = False # 특수 Blu-ray 고정 크롭 적용 여부
 
-            elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
-                logger.debug(f"DMM DVD/BR: Determining poster. PS_cache='{ps_url_from_search_cache is not None}', PL_page='{pl_on_page is not None}', PS_to_Poster_Setting='{ps_to_poster_setting}'")
+            # --- 특수 Blu-ray 800x442 처리 로직 (가장 먼저 시도) ---
+            if entity.content_type == 'bluray' and pl_on_page:
+                try:
+                    pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_on_page, proxy_url=proxy_url)
+                    if pl_image_obj_for_fixed_crop and pl_image_obj_for_fixed_crop.size == (800, 442):
+                        logger.info(f"DMM Blu-ray: Detected 800x442 PL ('{pl_on_page}'). Attempting fixed crop (right 380px).")
+                        crop_box_fixed = (800 - 380, 0, 800, 442) # 오른쪽 380x442
+                        final_poster_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
+                        if final_poster_pil_object:
+                            # PIL 객체를 직접 final_poster_source로 사용
+                            # 후속 process_image_mode 또는 save_image_to_server_path가 PIL 객체를 처리할 수 있어야 함
+                            final_poster_source = final_poster_pil_object 
+                            final_poster_crop_mode = None # 이미 원하는 대로 잘렸으므로 추가 크롭 불필요
+                            fixed_crop_applied_for_bluray = True
+                            logger.info(f"DMM Blu-ray: Successfully applied fixed crop. Poster source is now a PIL object.")
+                        else:
+                            logger.warning(f"DMM Blu-ray: Failed to apply fixed crop to 800x442 image ('{pl_on_page}').")
+                    # 800x442가 아닌 다른 Blu-ray PL은 일반 로직으로 넘어감
+                except Exception as e_fixed_crop_bluray:
+                    logger.error(f"DMM Blu-ray: Error during 800x442 fixed crop attempt for '{pl_on_page}': {e_fixed_crop_bluray}")
+            # --- 특수 Blu-ray 처리 로직 끝 ---
 
-                if ps_to_poster_setting and ps_url_from_search_cache:
-                    final_poster_source = ps_url_from_search_cache
-                    logger.debug(f"DMM DVD/BR: Using PS from cache due to ps_to_poster_setting: {final_poster_source}")
-                elif pl_on_page and ps_url_from_search_cache: # PS_cache와 PL_page 모두 존재
-                    crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
-                    if crop_pos:
-                        final_poster_source = pl_on_page; final_poster_crop_mode = crop_pos
-                    elif SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url):
-                        final_poster_source = pl_on_page 
-                    else: # HQ 로직 모두 실패 시 PS_cache 사용
+            # 특수 고정 크롭이 적용되지 않았다면, 일반적인 포스터 결정 로직 실행
+            if not fixed_crop_applied_for_bluray:
+                # videoa 또는 vr 타입일 경우
+                if entity.content_type == 'videoa' or entity.content_type == 'vr':
+                    # 우선순위: PS강제 > (PL+PS & is_hq) > (Specific+PS & is_hq) > (PL+PS & has_hq) > PS > PL > Specific
+                    if ps_to_poster_setting and ps_url_from_search_cache:
                         final_poster_source = ps_url_from_search_cache
-                elif ps_url_from_search_cache: # PL_page 없고 PS_cache만 존재
-                    final_poster_source = ps_url_from_search_cache
-                elif pl_on_page: # PS_cache 없고 PL_page만 존재
-                    final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting
-                else:
-                    logger.warning(f"DMM DVD/BR: No valid PS_cache or PL_page found for poster.")
-                    final_poster_source = None
+                    elif pl_on_page and ps_url_from_search_cache and SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url):
+                        final_poster_source = pl_on_page
+                    elif specific_on_page and ps_url_from_search_cache and SiteUtil.is_hq_poster(ps_url_from_search_cache, specific_on_page, proxy_url=proxy_url):
+                        final_poster_source = specific_on_page
+                    elif pl_on_page and ps_url_from_search_cache:
+                        crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
+                        if crop_pos : final_poster_source = pl_on_page; final_poster_crop_mode = crop_pos
+                        else: final_poster_source = ps_url_from_search_cache
+                    elif ps_url_from_search_cache : final_poster_source = ps_url_from_search_cache
+                    elif pl_on_page: final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting 
+                    elif specific_on_page: final_poster_source = specific_on_page
+                    else: final_poster_source = None
+                
+                # dvd 또는 일반 bluray (800x442 아닌 경우) 타입일 경우
+                elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
+                    # 우선순위: PS강제 > (PL+PS & has_hq) > (PL+PS & is_hq) > PS > PL
+                    if ps_to_poster_setting and ps_url_from_search_cache:
+                        final_poster_source = ps_url_from_search_cache
+                    elif pl_on_page and ps_url_from_search_cache:
+                        crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
+                        if crop_pos: final_poster_source = pl_on_page; final_poster_crop_mode = crop_pos
+                        elif SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url): final_poster_source = pl_on_page 
+                        else: final_poster_source = ps_url_from_search_cache
+                    elif ps_url_from_search_cache: final_poster_source = ps_url_from_search_cache
+                    elif pl_on_page: final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting
+                    else: final_poster_source = None
+            
+            if final_poster_source is None: # 모든 시도 후에도 포스터 소스가 없다면 로깅
+                logger.warning(f"DMM ({entity.content_type}): No poster source could be determined for {code}.")
 
         # 4. 팬아트 목록 결정 (arts_urls_for_processing)
         #    - 초기 후보: specific_on_page (videoa/vr 경우) + other_arts_on_page
