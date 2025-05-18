@@ -604,8 +604,8 @@ class SiteUtil:
                     if hl_orig > 0:
                         aspect_ratio_orig = wl_orig / hl_orig
                         if 1.30 <= aspect_ratio_orig <= 1.36: # 4:3 비율 근처
-                            top_crop_ratio = 0.0533 
-                            bottom_crop_ratio = 0.0533
+                            top_crop_ratio = 0.0555
+                            bottom_crop_ratio = 0.0555
                             top_pixels = int(hl_orig * top_crop_ratio)
                             bottom_y_coord = hl_orig - int(hl_orig * bottom_crop_ratio)
                             
