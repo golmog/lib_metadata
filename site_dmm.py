@@ -425,68 +425,47 @@ class SiteDmm:
 
             elif content_type == 'dvd' or content_type == 'bluray':
                 # --- DVD/Blu-ray 타입 이미지 추출 로직 ---
-                image_list_container_dvd = tree.xpath('//ul[@id="sample-image-block"]')
                 
-                if not image_list_container_dvd:
-                    logger.warning(f"DMM __img_urls ({content_type}): Image list container (ul#sample-image-block) not found.")
-                    return img_urls_dict
+                # 1. PL (메인 큰 이미지) 추출 시도
+                pl_xpath = '//div[@id="fn-sampleImage-imagebox"]/img/@src'
+                pl_tags = tree.xpath(pl_xpath)
+                raw_pl = pl_tags[0].strip() if pl_tags else ""
+                if raw_pl:
+                    if raw_pl.startswith("//"): temp_pl_dvd = "https:" + raw_pl
+                    elif not raw_pl.startswith("http"): temp_pl_dvd = py_urllib_parse.urljoin(cls.site_base_url, raw_pl)
+                    else: temp_pl_dvd = raw_pl
+                    img_urls_dict['pl'] = temp_pl_dvd
+                    img_urls_dict['ps'] = temp_pl_dvd
+                    logger.debug(f"DMM __img_urls ({content_type}): PL/PS extracted using fn-sampleImage-imagebox: {temp_pl_dvd}")
 
-                all_list_items_dvd = image_list_container_dvd[0].xpath('./div[@class="slick-list draggable"]/div[@class="slick-track"]/li[contains(@class, "slick-slide")]')
-                
-                if not all_list_items_dvd:
-                    logger.warning(f"DMM __img_urls ({content_type}): No slick-slide <li> items found.")
-                    return img_urls_dict
-
-                temp_ps_dvd = None
-                temp_pl_dvd = None
+                # 2. Arts (샘플 이미지들) 추출 시도 (제한적)
+                #    ul#sample-image-block 내부의 썸네일 이미지를 가져오려고 시도.
+                #    AJAX로 완전히 동적으로 로드된다면 이 방법도 실패할 수 있음.
                 temp_arts_list_dvd = []
-
-                for idx, li_item in enumerate(all_list_items_dvd):
-                    a_tag = li_item.xpath('./a[contains(@class, "fn-sample-image")]')
-                    if not a_tag: continue
-                    
-                    name_attribute = a_tag[0].attrib.get("name", "sample-image")
-                    
-                    img_tag = a_tag[0].xpath('./img')
-                    if not img_tag: continue
-
-                    img_url_raw = img_tag[0].attrib.get("data-lazy") or img_tag[0].attrib.get("src")
-                    if not img_url_raw: continue
-
-                    img_url = img_url_raw.strip()
-                    if not img_url.startswith("http"):
-                        img_url = py_urllib_parse.urljoin(cls.site_base_url, img_url)
-                    
-                    if not img_url: continue
-
-                    # 첫 번째 이미지를 PS 및 PL 후보로 우선 고려 (패키지샷일 가능성 높음)
-                    # 특히 name="package-image" 속성을 가진 것을 우선
-                    if idx == 0 or name_attribute == "package-image":
-                        if not temp_ps_dvd: # 아직 PS가 설정되지 않았다면
-                            temp_ps_dvd = img_url
-                        if not temp_pl_dvd: # 아직 PL이 설정되지 않았거나, package-image를 찾았다면 PL로 업데이트
-                            temp_pl_dvd = img_url
-
-                    # PL로 사용된 이미지가 아니라면 아트 후보로 추가
-                    # (PL이 최종적으로 어떤 URL이 될지 모르므로, 일단 모든 sample-image를 수집 후 __info에서 필터링)
-                    if name_attribute == "sample-image":
-                        if img_url not in temp_arts_list_dvd: # 중복 방지
-                            temp_arts_list_dvd.append(img_url)
+                sample_thumbs_container = tree.xpath('//ul[@id="sample-image-block"]')
+                if sample_thumbs_container:
+                    thumb_img_tags = sample_thumbs_container[0].xpath('.//li[contains(@class, "slick-slide")]//a[contains(@class, "fn-sample-image")]/img')
+                    for img_tag in thumb_img_tags:
+                        art_url_raw = img_tag.attrib.get("data-lazy") or img_tag.attrib.get("src")
+                        if art_url_raw:
+                            art_url = art_url_raw.strip()
+                            if art_url.lower().endswith("dummy_ps.gif"):
+                                continue
+                            if not art_url.startswith("http"):
+                                art_url = py_urllib_parse.urljoin(cls.site_base_url, art_url)
+                            
+                            if art_url == img_urls_dict['pl']:
+                                continue
+                            
+                            if art_url not in temp_arts_list_dvd:
+                                temp_arts_list_dvd.append(art_url)
+                    logger.debug(f"DMM __img_urls ({content_type}): Found {len(temp_arts_list_dvd)} potential art thumbnails from ul#sample-image-block.")
+                else:
+                    logger.warning(f"DMM __img_urls ({content_type}): Art thumbnail container (ul#sample-image-block) not found.")
                 
-                # 만약 루프 후에도 PL이 없다면 (예: package-image 없고 sample-image만 여러개), 첫번째 sample-image를 PL로 간주
-                if not temp_pl_dvd and temp_arts_list_dvd:
-                    temp_pl_dvd = temp_arts_list_dvd[0] 
-                    # 이 경우, temp_arts_list_dvd에서 temp_pl_dvd를 제거할 필요는 없음.
-                    # __info에서 최종 팬아트 목록 만들 때 PL과 중복되는 것을 어차피 제외함.
-
-                # PS가 여전히 없다면 PL로 채움 (최후의 수단)
-                if not temp_ps_dvd and temp_pl_dvd:
-                    temp_ps_dvd = temp_pl_dvd
-
-                img_urls_dict['ps'] = temp_ps_dvd if temp_ps_dvd else ""
-                img_urls_dict['pl'] = temp_pl_dvd if temp_pl_dvd else ""
-                img_urls_dict['arts'] = temp_arts_list_dvd # 중복 제거는 __info에서 최종적으로
-                # DVD/Blu-ray는 specific_poster_candidate 개념이 없으므로 None 유지
+                img_urls_dict['arts'] = temp_arts_list_dvd
+                # DVD/Blu-ray는 specific_poster_candidate 개념 사용 안 함
+                img_urls_dict['specific_poster_candidate'] = None
             
             else: # 알 수 없는 content_type
                 logger.error(f"DMM __img_urls: Unknown content type '{content_type}' for image extraction.")
