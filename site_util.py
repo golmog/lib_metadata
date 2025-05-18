@@ -552,11 +552,14 @@ class SiteUtil:
         """
         이미지를 다운로드하거나 로컬 파일로부터 지정된 로컬 경로에 저장하고, 웹 서버 접근용 상대 경로를 반환합니다.
         기존 파일이 존재하면 덮어씁니다.
-        image_source는 URL 문자열 또는 로컬 파일 경로여야 합니다.
+        image_source는 URL 문자열, 로컬 파일 경로, 또는 PIL Image 객체일 수 있습니다.
         """
-        # 1. 필수 인자 유효성 검사
-        if not all([image_source, image_type, base_path, path_segment, ui_code]):
-            logger.warning("save_image_to_server_path: 필수 인자 누락.")
+        # 1. 필수 인자 유효성 검사 (image_source는 PIL 객체일 수도 있으므로 all() 검사에서 제외 후 타입 체크)
+        if not all([image_type, base_path, path_segment, ui_code]): # image_source는 아래에서 별도 체크
+            logger.warning("save_image_to_server_path: 기본 필수 인자 누락.")
+            return None
+        if not image_source: # image_source가 None이나 빈 문자열 등 Falsy 값일 때
+            logger.warning("save_image_to_server_path: image_source가 유효하지 않습니다.")
             return None
         if image_type not in ['ps', 'pl', 'p', 'art']:
             logger.warning(f"save_image_to_server_path: 유효하지 않은 image_type: {image_type}")
@@ -565,65 +568,113 @@ class SiteUtil:
             logger.warning("save_image_to_server_path: image_type='art'일 때 art_index 필요.")
             return None
 
-        # 2. 입력 소스 타입 판별 및 로깅 정보 설정
-        source_is_local_file = isinstance(image_source, str) and os.path.exists(image_source)
-        source_is_url = not source_is_local_file and isinstance(image_source, str)
-
-        im = None
+        im_opened_original = None # 원본으로 열리거나 전달된 이미지
         log_source_info = ""
-        if source_is_url:
-            log_source_info = image_source
-        elif source_is_local_file:
+
+        source_is_pil_object = isinstance(image_source, Image.Image)
+        source_is_local_file = not source_is_pil_object and isinstance(image_source, str) and os.path.exists(image_source)
+        source_is_url = not source_is_pil_object and not source_is_local_file and isinstance(image_source, str)
+
+        # 2. 입력 소스 타입 판별 및 이미지 로드
+        if isinstance(image_source, Image.Image): # 이미 PIL Image 객체로 전달된 경우
+            im_opened_original = image_source
+            log_source_info = "PIL Image Object"
+        elif isinstance(image_source, str) and os.path.exists(image_source): # 로컬 파일 경로인 경우
+            im_opened_original = cls.imopen(image_source)
             log_source_info = f"localfile:{os.path.basename(image_source)}"
-        else: # URL이나 로컬 파일 경로가 아닌 경우
-            logger.warning(f"save_image_to_server_path: 지원하지 않는 image_source 타입: {type(image_source)}. URL 또는 로컬 파일 경로여야 합니다.")
+        elif isinstance(image_source, str): # URL 문자열인 경우
+            im_opened_original = cls.imopen(image_source, proxy_url=proxy_url)
+            log_source_info = image_source
+        else:
+            logger.warning(f"save_image_to_server_path: 지원하지 않는 image_source 타입: {type(image_source)}.")
+            return None
+
+        if im_opened_original is None:
+            logger.warning(f"save_image_to_server_path: 이미지 열기/로드 실패: {log_source_info}")
             return None
 
         try:
-            # 3. 이미지 열기 (URL 또는 로컬 파일)
-            if source_is_url:
-                im = cls.imopen(image_source, proxy_url=proxy_url)
-            elif source_is_local_file:
-                im = cls.imopen(image_source) # 로컬 파일
+            # 3. 실제 처리 대상 이미지 준비 (초기에는 원본과 동일)
+            im_to_process = im_opened_original
 
-            if im is None:
-                logger.warning(f"save_image_to_server_path: 이미지 열기 실패: {log_source_info}")
-                return None
+            # 4. 레터박스 제거 (image_type='p'이고 crop_mode가 있을 때, 4:3 비율이면 시도)
+            if image_type == 'p' and crop_mode:
+                try:
+                    wl_orig, hl_orig = im_to_process.size # 현재 처리 대상 이미지의 크기
+                    if hl_orig > 0:
+                        aspect_ratio_orig = wl_orig / hl_orig
+                        if 1.30 <= aspect_ratio_orig <= 1.36: # 4:3 비율 근처
+                            top_crop_ratio = 0.0533 
+                            bottom_crop_ratio = 0.0533
+                            top_pixels = int(hl_orig * top_crop_ratio)
+                            bottom_y_coord = hl_orig - int(hl_orig * bottom_crop_ratio)
+                            
+                            if top_pixels < bottom_y_coord and top_pixels >= 0 and bottom_y_coord <= hl_orig:
+                                box_for_lb_removal = (0, top_pixels, wl_orig, bottom_y_coord)
+                                im_no_lb = im_to_process.crop(box_for_lb_removal) # 현재 im_to_process에서 crop
+                                if im_no_lb:
+                                    # 레터박스 제거 성공 시, 처리 대상을 이 이미지로 교체
+                                    im_to_process = im_no_lb 
+                                    wl_new, hl_new = im_to_process.size
+                                    logger.info(f"save_image_to_server_path: Letterbox removed from '{log_source_info}'. Original: {wl_orig}x{hl_orig}, Now: {wl_new}x{hl_new}")
+                                else:
+                                    logger.warning(f"save_image_to_server_path: Failed to crop letterbox from '{log_source_info}'.")
+                            else:
+                                logger.debug(f"save_image_to_server_path: Invalid letterbox crop pixels for '{log_source_info}'.")
+                        else:
+                            logger.debug(f"save_image_to_server_path: Image '{log_source_info}' ratio ({aspect_ratio_orig:.2f}) not in 4:3 range. No letterbox removal.")
+                except Exception as e_letterbox:
+                    logger.error(f"save_image_to_server_path: Error during letterbox removal for '{log_source_info}': {e_letterbox}")
+                    # 레터박스 제거 실패 시에도 원본 im_to_process로 계속 진행
 
-            # 4. 확장자 결정 및 지원 포맷 확인/변환
-            original_format = im.format
-            if not original_format: # format 정보 없을 시 추론
+            # 5. 최종 크롭 적용 (image_type='p'이고 crop_mode가 있을 때)
+            if image_type == 'p' and crop_mode:
+                logger.debug(f"save_image_to_server_path: Applying final crop_mode '{crop_mode}' to image for {log_source_info}")
+                cropped_im_final = cls.imcrop(im_to_process, position=crop_mode) # 레터박스가 제거되었을 수 있는 im_to_process 사용
+                if cropped_im_final is None:
+                    logger.error(f"save_image_to_server_path: 최종 크롭 실패 (crop_mode: {crop_mode}) for {log_source_info}")
+                    return None 
+                im_to_process = cropped_im_final # 최종 저장할 이미지는 크롭까지 완료된 이미지
+            
+            # 6. 확장자 결정 및 저장 경로 설정 (im_to_process 기준, 원본 포맷 정보 활용)
+            #    original_format은 im_opened_original.format에서 가져왔으므로,
+            #    im_to_process.format이 crop 등으로 변경되었을 수 있으니 주의.
+            #    가장 안전한 것은 ext를 미리 결정하고, 저장 시 format을 명시하는 것.
+            current_format_for_ext = im_to_process.format if im_to_process.format else (im_opened_original.format if im_opened_original.format else "JPEG")
+
+            # PIL 객체로 직접 전달된 경우 original_format이 없을 수 있으므로, im_to_process.format 우선 사용
+            if isinstance(image_source, Image.Image) and not im_opened_original.format: # PIL 객체인데 format 정보가 없다면
+                current_format_for_ext = "JPEG" # 기본값으로 JPEG 사용 또는 다른 방식으로 추론
+
+            if not current_format_for_ext: # 그래도 format 정보가 없다면 (매우 드문 경우)
                 if source_is_url:
                     ext_match = re.search(r'\.(jpg|jpeg|png|webp|gif)(\?|$)', image_source.lower())
-                    if ext_match: original_format = ext_match.group(1).upper()
+                    if ext_match: current_format_for_ext = ext_match.group(1).upper()
                 elif source_is_local_file:
-                    _, file_ext = os.path.splitext(image_source)
-                    if file_ext: original_format = file_ext[1:].upper()
-                if not original_format: original_format = "JPEG" # 최후 기본값
-                logger.debug(f"PIL format missing for '{log_source_info}', deduced/defaulted to: {original_format}")
-
-            ext = original_format.lower().replace("jpeg", "jpg")
+                    _, file_ext_val = os.path.splitext(image_source) # 변수명 변경
+                    if file_ext_val: current_format_for_ext = file_ext_val[1:].upper()
+                if not current_format_for_ext: current_format_for_ext = "JPEG"
+            
+            ext = current_format_for_ext.lower().replace("jpeg", "jpg")
             allowed_exts = ['jpg', 'png', 'webp']
 
             if ext not in allowed_exts:
-                logger.debug(f"save_image_to_server_path: 지원하지 않는 이미지 포맷 '{ext}' from {log_source_info}.")
-                #logger.warning(f"save_image_to_server_path: 지원하지 않는 이미지 포맷 '{ext}' from {log_source_info}. JPG로 변환 시도.")
+                # 지원하지 않는 포맷이면 JPG로 변환 시도
+                #logger.warning(f"save_image_to_server_path: Original/Detected format '{ext}' not in allowed_exts for '{log_source_info}'. Attempting to save as JPG.")
                 #try:
-                #    # 변환 로직 (RGBA, P 모드 등 고려)
-                #    if im.mode == 'P':
-                #        im = im.convert('RGBA' if 'transparency' in im.info else 'RGB')
-                #    if im.mode == 'RGBA' and ext != 'png': # PNG 외에는 알파 채널 제거
-                #        im = im.convert('RGB')
-                #    elif im.mode not in ('RGB', 'L', 'RGBA'): # L(흑백)도 일단 통과
-                #        im = im.convert('RGB')
+                #    if im_to_process.mode == 'P':
+                #        im_to_process = im_to_process.convert('RGBA' if 'transparency' in im_to_process.info else 'RGB')
+                #    if im_to_process.mode == 'RGBA': im_to_process = im_to_process.convert('RGB')
+                #    elif im_to_process.mode not in ('RGB', 'L'): im_to_process = im_to_process.convert('RGB')
                 #    ext = 'jpg' # JPG로 강제 변환 시 확장자 변경
-                #    logger.info(f"save_image_to_server_path: 이미지 변환 성공 (to RGB/JPG) for {log_source_info}.")
-                #except Exception as e_convert:
-                #    logger.error(f"save_image_to_server_path: 이미지 변환 실패 for {log_source_info}: {e_convert}")
-                #    return None # 변환 실패 시 저장 불가
+                #    logger.info(f"save_image_to_server_path: Image for '{log_source_info}' converted to RGB/JPG for saving.")
+                #except Exception as e_convert_save:
+                #    logger.error(f"save_image_to_server_path: Image conversion to JPG failed for '{log_source_info}': {e_convert_save}")
+                #    return None
+
+                logger.warning(f"save_image_to_server_path: Unsupported image format '{ext}' from '{log_source_info}'. Skipping save.")
                 return None
 
-            # 5. 저장 경로 및 파일명 결정
             ui_code_parts = ui_code.split('-')
             label_part = ui_code_parts[0].upper() if ui_code_parts else "UNKNOWN"
             first_char = label_part[0] if label_part and label_part[0].isalpha() else '09'
@@ -631,59 +682,58 @@ class SiteUtil:
 
             if image_type == 'art':
                 filename = f"{ui_code.lower()}_art_{art_index}.{ext}"
-            else: # ps, pl, p
+            else: 
                 filename = f"{ui_code.lower()}_{image_type}.{ext}"
             save_filepath = os.path.join(save_dir, filename)
-
-            # 6. 디렉토리 생성 (덮어쓰므로 파일 존재 검사 불필요)
             os.makedirs(save_dir, exist_ok=True)
 
-            # 7. 이미지 크롭 (필요 시)
-            if image_type == 'p' and crop_mode:
-                logger.debug(f"save_image_to_server_path: Applying crop_mode '{crop_mode}' to image for {log_source_info}")
-                cropped_im = cls.imcrop(im, position=crop_mode)
-                if cropped_im is None:
-                    logger.error(f"save_image_to_server_path: 크롭 실패 (crop_mode: {crop_mode}) for {log_source_info}")
-                    return None # 크롭 실패 시 저장 불가
-                im = cropped_im # 크롭된 이미지로 대체
-
-            # 8. 이미지 저장 (덮어쓰기)
-            logger.debug(f"Saving image to {save_filepath} (will overwrite if exists).")
+            # 7. 이미지 저장 (im_to_process 사용)
+            logger.debug(f"Saving final image to {save_filepath} (will overwrite if exists).")
             save_options = {}
             if ext == 'jpg': save_options['quality'] = 95
-            elif ext == 'webp': save_options.update({'quality': 95, 'lossless': False})
+            elif ext == 'webp': save_options.update({'quality': 95, 'lossless': False}) # 예시, 실제론 필요에 따라 조정
             elif ext == 'png': save_options['optimize'] = True
 
             try:
-                im.save(save_filepath, **save_options)
-            except OSError as e_os_save:
-                # OSError 발생 시 RGB 변환 후 JPG로 저장 재시도
-                logger.warning(f"save_image_to_server_path: OSError on save ({save_filepath}): {str(e_os_save)}. Retrying as RGB/JPG.")
+                # 저장 전 최종적으로 모드 확인 및 변환 (특히 JPEG 저장 시)
+                if ext == 'jpg' and im_to_process.mode not in ('RGB', 'L'):
+                    logger.debug(f"Converting final image mode from {im_to_process.mode} to RGB for JPG saving.")
+                    im_to_process = im_to_process.convert('RGB')
+                im_to_process.save(save_filepath, **save_options)
+            except OSError as e_os_save_final:
+                logger.warning(f"save_image_to_server_path: OSError on final save ({save_filepath}): {str(e_os_save_final)}. Retrying as RGB/JPG if not already.")
                 try:
-                    if im.mode != 'RGB':
-                        logger.debug(f"Converting image mode from {im.mode} to RGB for saving.")
-                        im_rgb = im.convert("RGB")
+                    if im_to_process.mode != 'RGB': # 이미 위에서 JPG면 RGB로 변환했을 수 있음
+                        im_rgb_retry = im_to_process.convert("RGB")
                     else:
-                        im_rgb = im # 이미 RGB였다면 그대로 사용
+                        im_rgb_retry = im_to_process
+                    
+                    # 파일명 확장자가 .jpg가 아니었다면 .jpg로 변경 시도
+                    save_filepath_jpg_retry = save_filepath
+                    current_file_ext = os.path.splitext(save_filepath)[1].lower()
+                    if current_file_ext != '.jpg':
+                        save_filepath_jpg_retry = f"{os.path.splitext(save_filepath)[0]}.jpg"
+                        logger.info(f"Retrying save with .jpg extension: {save_filepath_jpg_retry}")
+                        filename = os.path.basename(save_filepath_jpg_retry) # 파일명도 업데이트!
+                        ext = 'jpg' # 확장자도 업데이트!
+                        save_options = {'quality': 95} # JPG 저장 옵션으로 강제
 
-                    save_filepath_jpg = f"{os.path.splitext(save_filepath)[0]}.jpg" # 파일명 확장자 .jpg로 변경
-                    im_rgb.save(save_filepath_jpg, quality=95) # JPG로 저장
-                    logger.info(f"save_image_to_server_path: Saved as JPG after retry: {save_filepath_jpg}")
-                    filename = os.path.basename(save_filepath_jpg) # 최종 파일명 업데이트!
-                except Exception as e_retry_save:
-                    logger.exception(f"save_image_to_server_path: RGB conversion or save retry failed: {e_retry_save}")
-                    return None # 재시도 실패
-            except Exception as e_main_save: # 기타 저장 예외
-                logger.exception(f"save_image_to_server_path: Main image save failed for {save_filepath}: {e_main_save}")
-                return None # 최종 실패
+                    im_rgb_retry.save(save_filepath_jpg_retry, **save_options) 
+                    logger.info(f"save_image_to_server_path: Saved as JPG after final retry: {save_filepath_jpg_retry}")
+                except Exception as e_retry_save_final:
+                    logger.exception(f"save_image_to_server_path: RGB conversion or final save retry failed: {e_retry_save_final}")
+                    return None
+            except Exception as e_main_save_final:
+                logger.exception(f"save_image_to_server_path: Main final image save failed for {save_filepath}: {e_main_save_final}")
+                return None
 
-            # 9. 성공 시 상대 경로 반환
-            relative_path = os.path.join(path_segment, first_char, label_part, filename).replace("\\", "/") # 최종 filename 사용
+            # 8. 성공 시 상대 경로 반환
+            relative_path = os.path.join(path_segment, first_char, label_part, filename).replace("\\", "/")
             logger.info(f"save_image_to_server_path: 저장 성공: {relative_path}")
             return relative_path
 
-        except Exception as e: # 함수 전체를 감싸는 예외 처리
-            logger.exception(f"save_image_to_server_path: 처리 중 예외 발생 ({log_source_info}): {e}")
+        except Exception as e_outer: 
+            logger.exception(f"save_image_to_server_path: 전체 처리 중 예외 발생 ({log_source_info}): {e_outer}")
             return None
 
 
@@ -1005,6 +1055,51 @@ class SiteUtil:
             logger.exception(f"  Error in are_images_visually_same: {e}")
             return False # 전체 함수 오류
 
+
+    @classmethod
+    def _internal_has_hq_poster_comparison(cls, im_sm_obj, im_lg_to_compare, function_name_for_log="has_hq_poster"):
+        try:
+            from imagehash import average_hash, phash
+        except ImportError:
+            logger.warning(f"{function_name_for_log}: ImageHash library not found.")
+            return None
+
+        ws, hs = im_sm_obj.size
+        wl, hl = im_lg_to_compare.size
+        if ws > wl or hs > hl:
+            logger.debug(f"{function_name_for_log}: Small image ({ws}x{hs}) > large image ({wl}x{hl}).")
+            return None
+
+        positions = ["r", "l", "c"]
+        ahash_threshold = 10
+        for pos in positions:
+            try:
+                cropped_im = cls.imcrop(im_lg_to_compare, position=pos)
+                if cropped_im is None: continue
+                if average_hash(im_sm_obj) - average_hash(cropped_im) <= ahash_threshold:
+                    logger.debug(f"{function_name_for_log}: Found similar (ahash) at pos '{pos}'.")
+                    return pos
+            except Exception as e_ahash:
+                logger.error(f"{function_name_for_log}: Exception during ahash for pos '{pos}': {e_ahash}")
+                continue
+        
+        logger.debug(f"{function_name_for_log}: Primary check (ahash) failed. Trying phash.")
+        phash_threshold = 10
+        for pos in positions:
+            try:
+                cropped_im = cls.imcrop(im_lg_to_compare, position=pos)
+                if cropped_im is None: continue
+                if phash(im_sm_obj) - phash(cropped_im) <= phash_threshold:
+                    logger.debug(f"{function_name_for_log}: Found similar (phash) at pos '{pos}'.")
+                    return pos
+            except Exception as e_phash:
+                logger.error(f"{function_name_for_log}: Exception during phash for pos '{pos}': {e_phash}")
+                continue
+        
+        logger.debug(f"{function_name_for_log}: No similar region found (ahash & phash).")
+        return None
+
+
     @classmethod
     def is_hq_poster(cls, im_sm_source, im_lg_source, proxy_url=None):
         logger.debug(f"--- is_hq_poster called ---")
@@ -1075,89 +1170,79 @@ class SiteUtil:
             logger.debug(f"--- is_hq_poster finished ---")
 
     @classmethod
-    def has_hq_poster(cls, im_sm, im_lg, proxy_url=None):
+    def has_hq_poster(cls, im_sm_url, im_lg_url, proxy_url=None):
         try:
-            # --- URL 유효성 검사 ---
-            if not im_sm or not isinstance(im_sm, str) or not im_lg or not isinstance(im_lg, str):
-                logger.debug("has_hq_poster: Invalid or empty URL provided.")
+            if not im_sm_url or not isinstance(im_sm_url, str) or \
+               not im_lg_url or not isinstance(im_lg_url, str):
+                logger.debug("has_hq_poster: Invalid or empty URL(s) provided.")
                 return None
 
-            im_sm_obj = cls.imopen(im_sm, proxy_url=proxy_url)
-            im_lg_obj = cls.imopen(im_lg, proxy_url=proxy_url)
+            im_sm_obj = cls.imopen(im_sm_url, proxy_url=proxy_url)
+            im_lg_obj_original = cls.imopen(im_lg_url, proxy_url=proxy_url)
 
-            # --- 이미지 열기 확인 ---
-            if im_sm_obj is None or im_lg_obj is None:
+            if im_sm_obj is None or im_lg_obj_original is None:
                 logger.debug("has_hq_poster: Failed to open one or both images.")
                 return None
 
+            # 1단계: 원본 PL 이미지로 비교 시도
+            logger.debug(f"has_hq_poster: Attempting comparison with original PL ('{im_lg_url}').")
+            found_pos = cls._internal_has_hq_poster_comparison(im_sm_obj, im_lg_obj_original, 
+                                                               function_name_for_log="has_hq_poster_original_pl")
+
+            if found_pos:
+                logger.info(f"has_hq_poster: Found position '{found_pos}' using original PL.")
+                return found_pos
+
+            # 2단계: 1단계 실패 시, PL이 4:3 비율이면 레터박스 제거 후 재시도
+            logger.debug("has_hq_poster: Original PL comparison failed. Checking for letterbox removal eligibility.")
+            im_lg_no_letterbox = None
             try:
-                # --- imagehash 함수 임포트 ---
-                try:
-                    # average_hash 와 phash 를 함께 임포트
-                    from imagehash import average_hash, phash
-                except ImportError:
-                    logger.warning("ImageHash library not found, cannot perform similarity checks.")
-                    return None # 라이브러리 없으면 비교 불가
-
-                ws, hs = im_sm_obj.size
-                wl, hl = im_lg_obj.size
-                # 작은 이미지가 큰 이미지보다 클 수 없음
-                if ws > wl or hs > hl:
-                    logger.debug("has_hq_poster: Small image dimensions exceed large image.")
-                    return None
-
-                found_pos = None # 최종 찾은 위치 저장 변수
-                positions = ["r", "l", "c"] # 비교할 위치
-
-                # --- 1차 시도: average_hash ---
-                logger.debug("has_hq_poster: Performing primary check using average_hash.")
-                ahash_threshold = 10 # average_hash 임계값
-                for pos in positions:
-                    try:
-                        cropped_im = cls.imcrop(im_lg_obj, position=pos)
-                        if cropped_im is None: continue
-                        # average_hash 비교
-                        val = average_hash(im_sm_obj) - average_hash(cropped_im)
-                        logger.debug(f"  ahash comparison for pos '{pos}': distance = {val}")
-                        if val <= ahash_threshold:
-                            logger.debug(f"has_hq_poster: Found similar region (ahash <= {ahash_threshold}) at position '{pos}'.")
-                            found_pos = pos
-                            break # 찾으면 루프 종료
-                    except Exception as crop_comp_e:
-                        logger.warning(f"Error comparing cropped image (ahash) at pos '{pos}': {crop_comp_e}")
-                        continue
-
-                # --- 2차 시도: phash (1차 실패 시) ---
-                if found_pos is None:
-                    logger.debug("has_hq_poster: Primary check (ahash) failed. Performing secondary check using phash.")
-                    phash_threshold = 10 # phash 임계값 (ahash와 동일하게 시작, 조정 가능)
-                    for pos in positions:
-                        try:
-                            cropped_im = cls.imcrop(im_lg_obj, position=pos)
-                            if cropped_im is None: continue
-                            # phash 비교
-                            val = phash(im_sm_obj) - phash(cropped_im)
-                            logger.debug(f"  phash comparison for pos '{pos}': distance = {val}")
-                            if val <= phash_threshold:
-                                logger.debug(f"has_hq_poster: Found similar region (phash <= {phash_threshold}) at position '{pos}'.")
-                                found_pos = pos
-                                break # 찾으면 루프 종료
-                        except Exception as crop_comp_e:
-                            logger.warning(f"Error comparing cropped image (phash) at pos '{pos}': {crop_comp_e}")
-                            continue
-
-                # --- 최종 결과 반환 ---
-                if found_pos:
-                    return found_pos # 찾은 위치 반환 ('r', 'l', 'c')
+                wl_orig, hl_orig = im_lg_obj_original.size
+                if hl_orig > 0:
+                    aspect_ratio_lg = wl_orig / hl_orig
+                    # 4:3 비율 근처인지 확인 (예: 1.30 ~ 1.36 범위)
+                    if 1.30 <= aspect_ratio_lg <= 1.36:
+                        top_crop_ratio = 0.0533 
+                        bottom_crop_ratio = 0.0533 # 상하 동일 비율로 가정
+                        
+                        top_pixels = int(hl_orig * top_crop_ratio)
+                        # bottom_pixels는 잘라낼 하단 영역의 시작점이 아니라, 남길 영역의 끝 y좌표
+                        bottom_y_coord = hl_orig - int(hl_orig * bottom_crop_ratio) 
+                        
+                        if top_pixels < bottom_y_coord and top_pixels >= 0 and bottom_y_coord <= hl_orig :
+                            box_for_lb_removal = (0, top_pixels, wl_orig, bottom_y_coord)
+                            cropped_candidate = im_lg_obj_original.crop(box_for_lb_removal)
+                            if cropped_candidate:
+                                im_lg_no_letterbox = cropped_candidate
+                                wl_new, hl_new = im_lg_no_letterbox.size
+                                logger.debug(f"has_hq_poster: PL ('{im_lg_url}') is 4:3 like. Letterbox removed. Original: {wl_orig}x{hl_orig}, Cropped for retry: {wl_new}x{hl_new}")
+                            else:
+                                logger.warning(f"has_hq_poster: Failed to crop letterbox from 4:3 PL ('{im_lg_url}').")
+                        else:
+                            logger.debug(f"has_hq_poster: Invalid letterbox crop pixels for 4:3 PL ('{im_lg_url}'). Top: {top_pixels}, Bottom_Y: {bottom_y_coord}, Height: {hl_orig}.")
+                    else:
+                        logger.debug(f"has_hq_poster: PL ('{im_lg_url}') aspect ratio ({aspect_ratio_lg:.2f}) not in 4:3 range for letterbox removal retry.")
                 else:
-                    logger.debug("has_hq_poster: No similar region found using ahash or phash.")
-                    return None # 최종적으로 못 찾으면 None 반환
+                    logger.warning(f"has_hq_poster: PL ('{im_lg_url}') height is 0. Cannot calculate aspect ratio.")
+            except Exception as e_letterbox_check:
+                logger.error(f"has_hq_poster: Error during letterbox check/removal for PL ('{im_lg_url}'): {e_letterbox_check}")
 
-            except Exception as hash_e: # 해시 계산 자체의 오류 처리
-                logger.exception(f"Error during image hash comparison in has_hq_poster: {hash_e}")
-                return None
-        except Exception as e: # 이미지 열기 등 외부 오류 처리
-            logger.exception(f"Error in has_hq_poster function: {e}")
+            # 레터박스 제거된 이미지가 있다면, 그것으로 다시 비교 시도
+            if im_lg_no_letterbox:
+                logger.debug(f"has_hq_poster: Retrying comparison with letterbox-removed PL ('{im_lg_url}').")
+                found_pos_retry = cls._internal_has_hq_poster_comparison(im_sm_obj, im_lg_no_letterbox, 
+                                                                        function_name_for_log="has_hq_poster_letterbox_removed")
+                if found_pos_retry:
+                    logger.info(f"has_hq_poster: Found position '{found_pos_retry}' using letterbox-removed PL.")
+                    # 중요: 여기서 반환되는 found_pos_retry는 레터박스 제거된 이미지 기준의 크롭 위치.
+                    # 호출부에서 이 PL URL을 사용할 때는 레터박스 제거를 다시 수행해야 함.
+                    return found_pos_retry 
+            
+            logger.debug(f"has_hq_poster: All comparison attempts failed for PL ('{im_lg_url}').")
+            return None
+
+        except Exception as e: 
+            logger.exception(f"Error in has_hq_poster function for PL ('{im_lg_url if isinstance(im_lg_url, str) else 'Non-URL_LG'}'): {e}")
             return None
 
     @classmethod
