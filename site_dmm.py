@@ -920,14 +920,36 @@ class SiteDmm:
                 else: final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting
             
             elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
-                if ps_to_poster_setting and ps_url_from_search_cache: final_poster_source = ps_url_from_search_cache
+                logger.debug(f"DMM DVD/BR: Determining poster. PS_cache='{ps_url_from_search_cache is not None}', PL_page='{pl_on_page is not None}', PS_to_Poster_Setting='{ps_to_poster_setting}'")
+                
+                if ps_to_poster_setting and ps_url_from_search_cache:
+                    final_poster_source = ps_url_from_search_cache
+                    logger.debug(f"DMM DVD/BR: Using PS from cache due to ps_to_poster_setting: {final_poster_source}")
                 elif pl_on_page and ps_url_from_search_cache:
+                    logger.debug(f"DMM DVD/BR: Both PL and PS exist. Applying HQ logic.")
                     crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
-                    if crop_pos : final_poster_source = pl_on_page; final_poster_crop_mode = crop_pos
-                    elif ps_url_from_search_cache : final_poster_source = ps_url_from_search_cache
-                    else : final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting
-                elif ps_url_from_search_cache: final_poster_source = ps_url_from_search_cache
-                else: final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting
+                    if crop_pos:
+                        final_poster_source = pl_on_page
+                        final_poster_crop_mode = crop_pos
+                        logger.debug(f"DMM DVD/BR: Using PL with crop_pos '{crop_pos}' from has_hq_poster: {final_poster_source}")
+                    elif SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url):
+                        final_poster_source = pl_on_page
+                        final_poster_crop_mode = None
+                        logger.debug(f"DMM DVD/BR: Using PL from is_hq_poster (no specific crop): {final_poster_source}")
+                    else:
+                        final_poster_source = ps_url_from_search_cache
+                        logger.debug(f"DMM DVD/BR: HQ logic failed. Using PS from cache: {final_poster_source}")
+                
+                elif ps_url_from_search_cache:
+                    final_poster_source = ps_url_from_search_cache
+                    logger.debug(f"DMM DVD/BR: Only PS from cache available: {final_poster_source}")
+                elif pl_on_page:
+                    final_poster_source = pl_on_page
+                    final_poster_crop_mode = crop_mode_setting
+                    logger.debug(f"DMM DVD/BR: Only PL from page available. Using crop_mode_setting '{crop_mode_setting}': {final_poster_source}")
+                else:
+                    logger.warning(f"DMM DVD/BR: No valid PS or PL found for poster.")
+                    final_poster_source = None
         
         # 4. 팬아트 목록 결정 (arts_urls_for_processing)
         #    - 초기 후보: specific_on_page (videoa/vr 경우) + other_arts_on_page
