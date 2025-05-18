@@ -371,14 +371,14 @@ class SiteDmm:
         
         try:
             if content_type == 'videoa' or content_type == 'vr':
+                # --- Videoa/VR 타입 이미지 추출 로직 ---
                 sample_image_links = tree.xpath('//div[@id="sample-image-block"]//a[.//img]')
                 if not sample_image_links:
                     all_img_tags = tree.xpath('//div[@id="sample-image-block"]//img/@src')
                     if not all_img_tags: return img_urls_dict
                     img_urls_dict['pl'] = py_urllib_parse.urljoin(cls.site_base_url, all_img_tags[0].strip()) if all_img_tags else ""
-                    # 여기서도 순서 유지 중복 제거
                     temp_arts = [py_urllib_parse.urljoin(cls.site_base_url, src.strip()) for src in all_img_tags[1:] if src.strip()]
-                    img_urls_dict['arts'] = list(dict.fromkeys(temp_arts)) # 순서 유지하며 중복 제거
+                    img_urls_dict['arts'] = list(dict.fromkeys(temp_arts))
                     return img_urls_dict
 
                 temp_arts_list = []
@@ -396,65 +396,105 @@ class SiteDmm:
                     if final_image_url:
                         temp_arts_list.append(final_image_url)
                 
-                processed_pl = None
-                processed_specific = None
-                remaining_arts = [] # 순서 유지를 위해 list 사용
+                processed_pl_v = None
+                processed_specific_v = None
+                remaining_arts_v = []
 
-                for url in temp_arts_list: # temp_arts_list는 이미 순서대로 수집됨
+                for url in temp_arts_list:
                     filename = url.split('/')[-1].lower()
                     is_pl_type = filename.endswith("pl.jpg") or filename.endswith("jp-0.jpg")
-                    is_specific_type = re.match(r".*jp-(\d+)\.jpg$", filename) and not is_pl_type
+                    is_specific_type = re.match(r".*jp-(?!0)\d+\.jpg$", filename)
 
-                    if is_pl_type and processed_pl is None:
-                        processed_pl = url
-                    elif is_specific_type and processed_specific is None:
-                        processed_specific = url
-                        # specific도 arts 후보에 일단 포함 (나중에 __info에서 사용 여부 결정)
-                        if url not in remaining_arts: remaining_arts.append(url) 
+                    if is_pl_type and processed_pl_v is None:
+                        processed_pl_v = url
+                    elif is_specific_type and processed_specific_v is None:
+                        processed_specific_v = url
+                        if url not in remaining_arts_v: remaining_arts_v.append(url) 
                     else:
-                        if url not in remaining_arts: remaining_arts.append(url) # 중복 피하며 순서대로 추가
+                        if url not in remaining_arts_v: remaining_arts_v.append(url)
                 
-                if not processed_pl and temp_arts_list:
-                    processed_pl = temp_arts_list[0] # 첫 이미지 사용
-                    # remaining_arts에서 processed_pl을 제거해야 함 (만약 포함되어 있다면)
-                    if processed_pl in remaining_arts: remaining_arts.remove(processed_pl)
-                    if processed_specific == processed_pl: processed_specific = None
+                if not processed_pl_v and temp_arts_list:
+                    processed_pl_v = temp_arts_list[0]
+                    if processed_pl_v in remaining_arts_v: remaining_arts_v.remove(processed_pl_v)
+                    if processed_specific_v == processed_pl_v: processed_specific_v = None
 
-                img_urls_dict['pl'] = processed_pl if processed_pl else ""
-                img_urls_dict['specific_poster_candidate'] = processed_specific if processed_specific else ""
-                
-                # arts 최종 결정: remaining_arts는 이미 순서가 있고, 중복도 어느정도 제거됨.
-                # __info에서 pl, specific을 제외할 것이므로 여기서는 모든 후보를 순서대로 전달.
-                # 여기서 추가적인 중복 제거 (dict.fromkeys 사용)
-                img_urls_dict['arts'] = list(dict.fromkeys(remaining_arts))
-
+                img_urls_dict['pl'] = processed_pl_v if processed_pl_v else ""
+                img_urls_dict['specific_poster_candidate'] = processed_specific_v if processed_specific_v else ""
+                img_urls_dict['arts'] = list(dict.fromkeys(remaining_arts_v))
+                if processed_pl_v : img_urls_dict['ps'] = processed_pl_v
 
             elif content_type == 'dvd' or content_type == 'bluray':
-                pl_xpath = '//div[@id="fn-sampleImage-imagebox"]/img/@src'
-                pl_tags = tree.xpath(pl_xpath)
-                raw_pl = pl_tags[0].strip() if pl_tags else ""
-                if raw_pl: img_urls_dict['pl'] = ("https:" + raw_pl) if not raw_pl.startswith("http") else raw_pl
+                # --- DVD/Blu-ray 타입 이미지 추출 로직 ---
+                image_list_container_dvd = tree.xpath('//ul[@id="sample-image-block"]')
                 
-                arts_xpath = '//li[contains(@class, "fn-sampleImage__zoom") and not(@data-slick-index="0")]//img'
-                arts_tags = tree.xpath(arts_xpath)
+                if not image_list_container_dvd:
+                    logger.warning(f"DMM __img_urls ({content_type}): Image list container (ul#sample-image-block) not found.")
+                    return img_urls_dict
+
+                all_list_items_dvd = image_list_container_dvd[0].xpath('./div[@class="slick-list draggable"]/div[@class="slick-track"]/li[contains(@class, "slick-slide")]')
+                
+                if not all_list_items_dvd:
+                    logger.warning(f"DMM __img_urls ({content_type}): No slick-slide <li> items found.")
+                    return img_urls_dict
+
+                temp_ps_dvd = None
+                temp_pl_dvd = None
                 temp_arts_list_dvd = []
-                if arts_tags:
-                    for tag_in_arts_tags in arts_tags: # 변수명 변경
-                        src = tag_in_arts_tags.attrib.get("src") or tag_in_arts_tags.attrib.get("data-lazy")
-                        if src:
-                            src = src.strip()
-                            if not src.startswith("http"): src = "https:" + src
-                            temp_arts_list_dvd.append(src)
+
+                for idx, li_item in enumerate(all_list_items_dvd):
+                    a_tag = li_item.xpath('./a[contains(@class, "fn-sample-image")]')
+                    if not a_tag: continue
+                    
+                    name_attribute = a_tag[0].attrib.get("name", "sample-image")
+                    
+                    img_tag = a_tag[0].xpath('./img')
+                    if not img_tag: continue
+
+                    img_url_raw = img_tag[0].attrib.get("data-lazy") or img_tag[0].attrib.get("src")
+                    if not img_url_raw: continue
+
+                    img_url = img_url_raw.strip()
+                    if not img_url.startswith("http"):
+                        img_url = py_urllib_parse.urljoin(cls.site_base_url, img_url)
+                    
+                    if not img_url: continue
+
+                    # 첫 번째 이미지를 PS 및 PL 후보로 우선 고려 (패키지샷일 가능성 높음)
+                    # 특히 name="package-image" 속성을 가진 것을 우선
+                    if idx == 0 or name_attribute == "package-image":
+                        if not temp_ps_dvd: # 아직 PS가 설정되지 않았다면
+                            temp_ps_dvd = img_url
+                        if not temp_pl_dvd: # 아직 PL이 설정되지 않았거나, package-image를 찾았다면 PL로 업데이트
+                            temp_pl_dvd = img_url
+
+                    # PL로 사용된 이미지가 아니라면 아트 후보로 추가
+                    # (PL이 최종적으로 어떤 URL이 될지 모르므로, 일단 모든 sample-image를 수집 후 __info에서 필터링)
+                    if name_attribute == "sample-image":
+                        if img_url not in temp_arts_list_dvd: # 중복 방지
+                            temp_arts_list_dvd.append(img_url)
                 
-                # 순서 유지하며 중복 제거
-                img_urls_dict['arts'] = list(dict.fromkeys(temp_arts_list_dvd))
-            else:
+                # 만약 루프 후에도 PL이 없다면 (예: package-image 없고 sample-image만 여러개), 첫번째 sample-image를 PL로 간주
+                if not temp_pl_dvd and temp_arts_list_dvd:
+                    temp_pl_dvd = temp_arts_list_dvd[0] 
+                    # 이 경우, temp_arts_list_dvd에서 temp_pl_dvd를 제거할 필요는 없음.
+                    # __info에서 최종 팬아트 목록 만들 때 PL과 중복되는 것을 어차피 제외함.
+
+                # PS가 여전히 없다면 PL로 채움 (최후의 수단)
+                if not temp_ps_dvd and temp_pl_dvd:
+                    temp_ps_dvd = temp_pl_dvd
+
+                img_urls_dict['ps'] = temp_ps_dvd if temp_ps_dvd else ""
+                img_urls_dict['pl'] = temp_pl_dvd if temp_pl_dvd else ""
+                img_urls_dict['arts'] = temp_arts_list_dvd # 중복 제거는 __info에서 최종적으로
+                # DVD/Blu-ray는 specific_poster_candidate 개념이 없으므로 None 유지
+            
+            else: # 알 수 없는 content_type
                 logger.error(f"DMM __img_urls: Unknown content type '{content_type}' for image extraction.")
 
         except Exception as e:
-            logger.exception(f"DMM __img_urls: Error extracting image URLs: {e}")
+            logger.exception(f"DMM __img_urls ({content_type}): Error extracting image URLs: {e}")
         
-        logger.debug(f"DMM __img_urls: Extracted: pl={bool(img_urls_dict['pl'])}, specific={bool(img_urls_dict['specific_poster_candidate'])}, arts_count={len(img_urls_dict['arts'])}")
+        logger.debug(f"DMM __img_urls ({content_type}): Extracted PS='{img_urls_dict['ps']}', PL='{img_urls_dict['pl']}', Specific='{img_urls_dict['specific_poster_candidate']}', ArtsCount={len(img_urls_dict['arts'])}")
         return img_urls_dict
 
 
@@ -715,69 +755,137 @@ class SiteDmm:
                     plot_text_v_meta_info = "\n".join([p_v_info.strip() for p_v_info in plot_nodes_v_meta_info if p_v_info.strip()]).split("※")[0].strip()
                     if plot_text_v_meta_info: entity.plot = SiteUtil.trans(plot_text_v_meta_info, do_trans=do_trans)
                 else: logger.warning(f"DMM ({entity.content_type}): Plot not found for {code}.")
-            
+
             elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
-                title_node_d_info_meta = tree.xpath('//h1[@id="title"]')
-                if title_node_d_info_meta: entity.tagline = SiteUtil.trans(title_node_d_info_meta[0].text_content().strip(), do_trans=do_trans)
-                
-                info_table_xpath_d_meta = '//div[contains(@class, "wrapper-product")]//table[contains(@class, "mg-b20")]/tbody/tr'
-                tags_d_meta = tree.xpath(info_table_xpath_d_meta)
-                premiered_d_shouhin_meta = None; premiered_d_hatsubai_meta = None; premiered_d_haishin_meta = None
-                for tag_d_meta in tags_d_meta:
-                    td_tags_d_meta = tag_d_meta.xpath(".//td")
-                    if len(td_tags_d_meta) != 2: continue
+                title_node_dvd = tree.xpath('//h1[@id="title"]')
+                if title_node_dvd: 
+                    entity.tagline = SiteUtil.trans(title_node_dvd[0].text_content().strip(), do_trans=do_trans)
 
-                    key_d_meta = td_tags_d_meta[0].text_content().strip().replace("：", "")
-                    value_node_d_meta = td_tags_d_meta[1]; value_text_all_d_meta = value_node_d_meta.text_content().strip()
-                    if value_text_all_d_meta == "----" or not value_text_all_d_meta: continue
+                info_table_xpath_dvd = '//div[contains(@class, "wrapper-product")]//table[contains(@class, "mg-b20")]//tr'
+                table_rows_dvd = tree.xpath(info_table_xpath_dvd)
 
-                    if "品番" in key_d_meta:
-                        value_pid_d_meta = value_text_all_d_meta; match_id_d_meta = cls.PTN_ID.search(value_pid_d_meta); id_before_d_meta = None
-                        if match_id_d_meta: id_before_d_meta = match_id_d_meta.group(0); value_pid_d_meta = value_pid_d_meta.lower().replace(id_before_d_meta.lower(), "zzid")
-                        match_real_d_meta = cls.PTN_SEARCH_REAL_NO.match(value_pid_d_meta); formatted_code_d_meta = value_text_all_d_meta.upper()
-                        if match_real_d_meta:
-                            label_d_meta = match_real_d_meta.group("real").upper()
-                            if id_before_d_meta is not None: label_d_meta = label_d_meta.replace("ZZID", id_before_d_meta.upper())
-                            num_str_d_meta = str(int(match_real_d_meta.group("no"))).zfill(3)
-                            formatted_code_d_meta = f"{label_d_meta}-{num_str_d_meta}"
+                premiered_shouhin_dvd = None 
+                premiered_hatsubai_dvd = None  
+                premiered_haishin_dvd = None   
+
+                if not table_rows_dvd:
+                    logger.warning(f"DMM ({entity.content_type}): No <tr> tags found in the info table using XPath: {info_table_xpath_dvd}")
+
+                for row_dvd in table_rows_dvd: 
+                    tds_dvd = row_dvd.xpath("./td") 
+                    if len(tds_dvd) != 2: 
+                        continue
+
+                    key_dvd = tds_dvd[0].text_content().strip().replace("：", "")
+                    value_node_dvd = tds_dvd[1]
+                    value_text_all_dvd = value_node_dvd.text_content().strip()
+
+                    if value_text_all_dvd == "----" or not value_text_all_dvd: 
+                        continue
+
+                    # --- 테이블 내부 항목 파싱 (videoa/vr 로직을 여기에 적용) ---
+                    if "品番" in key_dvd:
+                        value_pid_dvd = value_text_all_dvd; match_id_dvd = cls.PTN_ID.search(value_pid_dvd); id_before_dvd = None
+                        if match_id_dvd: id_before_dvd = match_id_dvd.group(0); value_pid_dvd = value_pid_dvd.lower().replace(id_before_dvd.lower(), "zzid")
+                        match_real_dvd = cls.PTN_SEARCH_REAL_NO.match(value_pid_dvd); formatted_code_dvd = value_text_all_dvd.upper()
+                        if match_real_dvd:
+                            label_dvd = match_real_dvd.group("real").upper()
+                            if id_before_dvd is not None: label_dvd = label_dvd.replace("ZZID", id_before_dvd.upper())
+                            num_str_dvd = str(int(match_real_dvd.group("no"))).zfill(3)
+                            formatted_code_dvd = f"{label_dvd}-{num_str_dvd}"
                             if entity.tag is None: entity.tag = []
-                            if label_d_meta not in entity.tag: entity.tag.append(label_d_meta)
-                        ui_code_for_image = formatted_code_d_meta
+                            if label_dvd not in entity.tag: entity.tag.append(label_dvd)
+                        ui_code_for_image = formatted_code_dvd
                         entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image
                         entity.ui_code = ui_code_for_image
                         identifier_parsed = True
+                    elif "収録時間" in key_dvd: 
+                        m_rt_dvd = re.search(r"(\d+)",value_text_all_dvd)
+                        if m_rt_dvd: entity.runtime = int(m_rt_dvd.group(1))
+                    elif "出演者" in key_dvd:
+                        actors_dvd = [a.strip() for a in value_node_dvd.xpath('.//a/text()') if a.strip()]
+                        if actors_dvd: entity.actor = [EntityActor(name) for name in actors_dvd]
+                        elif value_text_all_dvd != '----': entity.actor = [EntityActor(n.strip()) for n in value_text_all_dvd.split('/') if n.strip()]
+                    elif "監督" in key_dvd:
+                        directors_dvd = [d.strip() for d in value_node_dvd.xpath('.//a/text()') if d.strip()]
+                        if directors_dvd: entity.director = directors_dvd[0] 
+                        elif value_text_all_dvd != '----': entity.director = value_text_all_dvd
+                    elif "シリーズ" in key_dvd:
+                        if entity.tag is None: entity.tag = []
+                        series_dvd = [s.strip() for s in value_node_dvd.xpath('.//a/text()') if s.strip()]
+                        s_name_dvd = None
+                        if series_dvd: s_name_dvd = series_dvd[0]
+                        elif value_text_all_dvd != '----': s_name_dvd = value_text_all_dvd
+                        if s_name_dvd:
+                            trans_s_name_dvd = SiteUtil.trans(s_name_dvd, do_trans=do_trans)
+                            if trans_s_name_dvd not in entity.tag: entity.tag.append(trans_s_name_dvd)
+                    elif "メーカー" in key_dvd:
+                        if entity.studio is None: 
+                            makers_dvd = [mk.strip() for mk in value_node_dvd.xpath('.//a/text()') if mk.strip()]
+                            m_name_dvd = None
+                            if makers_dvd: m_name_dvd = makers_dvd[0]
+                            elif value_text_all_dvd != '----': m_name_dvd = value_text_all_dvd
+                            if m_name_dvd: entity.studio = SiteUtil.trans(m_name_dvd, do_trans=do_trans)
+                    elif "レーベル" in key_dvd:
+                        labels_dvd = [lb.strip() for lb in value_node_dvd.xpath('.//a/text()') if lb.strip()]
+                        l_name_dvd = None
+                        if labels_dvd: l_name_dvd = labels_dvd[0]
+                        elif value_text_all_dvd != '----': l_name_dvd = value_text_all_dvd
+                        if l_name_dvd:
+                            if do_trans: entity.studio = SiteUtil.av_studio.get(l_name_dvd, SiteUtil.trans(l_name_dvd))
+                            else: entity.studio = l_name_dvd
+                    elif "ジャンル" in key_dvd:
+                        if entity.genre is None: entity.genre = []
+                        for genre_ja_tag_dvd in value_node_dvd.xpath('.//a'):
+                            genre_ja_dvd = genre_ja_tag_dvd.text_content().strip()
+                            if not genre_ja_dvd or "％OFF" in genre_ja_dvd or genre_ja_dvd in SiteUtil.av_genre_ignore_ja: continue
+                            if genre_ja_dvd in SiteUtil.av_genre: 
+                                if SiteUtil.av_genre[genre_ja_dvd] not in entity.genre: entity.genre.append(SiteUtil.av_genre[genre_ja_dvd])
+                            else:
+                                genre_ko_dvd = SiteUtil.trans(genre_ja_dvd, do_trans=do_trans).replace(" ", "")
+                                if genre_ko_dvd not in SiteUtil.av_genre_ignore_ko and genre_ko_dvd not in entity.genre : entity.genre.append(genre_ko_dvd)
 
-                    elif "商品発売日" in key_d_meta: premiered_d_shouhin_meta = value_text_all_d_meta.replace("/", "-")
-                    elif "発売日" in key_d_meta: premiered_d_hatsubai_meta = value_text_all_d_meta.replace("/", "-")
-                    elif "配信開始日" in key_d_meta: premiered_d_haishin_meta = value_text_all_d_meta.replace("/", "-")
+                    # 출시일 관련 정보 수집
+                    elif "商品発売日" in key_dvd: premiered_shouhin_dvd = value_text_all_dvd.replace("/", "-")
+                    elif "発売日" in key_dvd: premiered_hatsubai_dvd = value_text_all_dvd.replace("/", "-")
+                    elif "配信開始日" in key_dvd: premiered_haishin_dvd = value_text_all_dvd.replace("/", "-")
 
-                # 평점 추출               
-                rating_text_node_dvd = tree.xpath('//p[contains(@class, "dcd-review__average")]/strong/text()')
-                if rating_text_node_dvd:
-                    rating_text_dvd = rating_text_node_dvd[0].strip() # 예: "4.31"
-                    # 숫자만 있는지 직접 float 변환 시도
+                # 평점 추출
+                rating_text_node_dvd_specific = tree.xpath('//p[contains(@class, "dcd-review__average")]/strong/text()')
+                if rating_text_node_dvd_specific:
+                    rating_text = rating_text_node_dvd_specific[0].strip()
                     try:
-                        rate_val_text_dvd = float(rating_text_dvd)
-                        if 0 <= rate_val_text_dvd <= 5: # DMM 평점은 5점 만점
-                            if not entity.ratings: # 아직 평점 정보가 없다면 추가
-                                entity.ratings.append(EntityRatings(rate_val_text_dvd, max=5, name="dmm"))
+                        rate_val = float(rating_text)
+                        if 0 <= rate_val <= 5: 
+                            if not entity.ratings: entity.ratings.append(EntityRatings(rate_val, max=5, name="dmm"))
                     except ValueError:
-                        logger.warning(f"DMM ({entity.content_type}): DVD/BR Text-based rating conversion error: {rating_text_dvd}")
+                        rating_match = re.search(r'([\d\.]+)\s*点?', rating_text)
+                        if rating_match:
+                            try:
+                                rate_val = float(rating_match.group(1))
+                                if 0 <= rate_val <= 5: 
+                                    if not entity.ratings: entity.ratings.append(EntityRatings(rate_val, max=5, name="dmm"))
+                            except ValueError:
+                                logger.warning(f"DMM ({entity.content_type}): Rating conversion error (after regex): {rating_text}")
                 else:
-                    logger.debug(f"DMM ({entity.content_type}): DVD/BR Text-based rating element (dcd-review__average) not found.")
+                    logger.debug(f"DMM ({entity.content_type}): DVD/BR specific rating element (dcd-review__average) not found.")
 
-                # dvd/bluray 출시일: 상품일 > 발매일 > 배신일 순
-                entity.premiered = premiered_d_shouhin_meta or premiered_d_hatsubai_meta or premiered_d_haishin_meta
-                if entity.premiered: entity.year = int(entity.premiered[:4]) if len(entity.premiered) >=4 else None
+                # 출시일 최종 결정
+                entity.premiered = premiered_shouhin_dvd or premiered_hatsubai_dvd or premiered_haishin_dvd
+                if entity.premiered: 
+                    try: entity.year = int(entity.premiered[:4])
+                    except ValueError: logger.warning(f"DMM ({entity.content_type}): Year parse error from '{entity.premiered}'")
+                else:
+                    logger.warning(f"DMM ({entity.content_type}): Premiered date not found for {code}.")
 
-                # dvd/bluray 줄거리
-                plot_xpath_d_meta_info = '//div[@class="mg-b20 lh4"]/p[@class="mg-b20"]/text()'
-                plot_tags_d_meta_info = tree.xpath(plot_xpath_d_meta_info)
-                if plot_tags_d_meta_info:
-                    plot_text_d_meta_info = "\n".join([p_d_info.strip() for p_d_info in plot_tags_d_meta_info if p_d_info.strip()]).split("※")[0].strip()
-                    entity.plot = SiteUtil.trans(plot_text_d_meta_info, do_trans=do_trans)
-                else: logger.warning(f"DMM ({entity.content_type}): Plot not found for {code}.")
-            
+                plot_xpath_dvd_specific = '//div[@class="mg-b20 lh4"]/p[@class="mg-b20"]/text()'
+                plot_nodes_dvd_specific = tree.xpath(plot_xpath_dvd_specific)
+                if plot_nodes_dvd_specific:
+                    plot_text = "\n".join([p.strip() for p in plot_nodes_dvd_specific if p.strip()]).split("※")[0].strip()
+                    if plot_text: entity.plot = SiteUtil.trans(plot_text, do_trans=do_trans)
+                else: 
+                    logger.warning(f"DMM ({entity.content_type}): Plot not found for {code} using XPath: {plot_xpath_dvd_specific}")
+
             if not identifier_parsed:
                 logger.error(f"DMM ({entity.content_type}): CRITICAL - Identifier parse failed for {code} after all attempts.")
                 ui_code_for_image = code[2:].upper().replace("_","-"); entity.title=entity.originaltitle=entity.sorttitle=ui_code_for_image; entity.ui_code=ui_code_for_image
