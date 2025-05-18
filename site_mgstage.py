@@ -364,7 +364,7 @@ class SiteMgstageAma(SiteMgstage):
                         if ps_url_detail_page_default and SiteUtil.is_hq_poster(ps_url_detail_page_default, arts_urls_page_default[0], proxy_url=proxy_url): resolved_poster_url_step1 = arts_urls_page_default[0]
                         elif ps_url_detail_page_default and len(arts_urls_page_default) > 1 and SiteUtil.is_hq_poster(ps_url_detail_page_default, arts_urls_page_default[-1], proxy_url=proxy_url): resolved_poster_url_step1 = arts_urls_page_default[-1]
                     if not resolved_poster_url_step1 and ps_url_detail_page_default: resolved_poster_url_step1 = ps_url_detail_page_default
-                    
+
                     mgs_special_poster_filepath = None
                     attempt_mgs_special_local = False
                     if pl_url_detail_page_default and ps_url_detail_page_default and not ps_to_poster_setting and resolved_poster_url_step1 == ps_url_detail_page_default:
@@ -372,13 +372,13 @@ class SiteMgstageAma(SiteMgstage):
                     if attempt_mgs_special_local:
                         temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
                         if temp_filepath and os.path.exists(temp_filepath): mgs_special_poster_filepath = temp_filepath
-                    
+
                     if mgs_special_poster_filepath: final_poster_source = mgs_special_poster_filepath; final_poster_crop_mode = None
                     else: final_poster_source = resolved_poster_url_step1; final_poster_crop_mode = resolved_crop_mode_step1
-                
+
                 if not skip_default_landscape_logic: final_landscape_url_source = pl_url_detail_page_default
                 arts_urls_for_processing = arts_urls_page_default
-                
+
                 if not (use_image_server and image_mode == '4'):
                     if final_poster_source and not skip_default_poster_logic:
                         processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
@@ -400,8 +400,8 @@ class SiteMgstageAma(SiteMgstage):
 
         if use_image_server and image_mode == '4' and ui_code_for_image:
             logger.info(f"MGStage ({cls.module_char}): Saving images to Image Server for {ui_code_for_image}...")
-            if ps_url_detail_page_default:
-                SiteUtil.save_image_to_server_path(ps_url_detail_page_default, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
+            #if ps_url_detail_page_default:
+            #    SiteUtil.save_image_to_server_path(ps_url_detail_page_default, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
             if not skip_default_poster_logic and final_poster_source:
                 p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
                 if p_path and not any(t.aspect == 'poster' and t.value.endswith(p_path) for t in entity.thumb): entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))

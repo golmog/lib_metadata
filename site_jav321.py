@@ -719,10 +719,10 @@ class SiteJav321:
                 if not is_search_ps_placeholder_for_save: 
                     ps_to_save_on_server = ps_url_from_search_cache
             
-            if ps_to_save_on_server:
-                SiteUtil.save_image_to_server_path(ps_to_save_on_server, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
-            else:
-                logger.debug(f"Jav321 ImgServ: No valid PS image to save for {ui_code_for_image}.")
+            #if ps_to_save_on_server:
+            #    SiteUtil.save_image_to_server_path(ps_to_save_on_server, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
+            #else:
+            #    logger.debug(f"Jav321 ImgServ: No valid PS image to save for {ui_code_for_image}.")
 
             # 포스터 저장
             if not skip_default_poster_logic and final_poster_source and not any(t.aspect == 'poster' for t in entity.thumb):

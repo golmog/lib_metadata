@@ -340,7 +340,7 @@ class SiteJavbus:
             if not img_urls_from_page: img_urls_from_page = cls.__img_urls(tree) # 위에서 스킵되었을 경우 대비
             if 'poster' not in img_urls_from_page: SiteUtil.resolve_jav_imgs(img_urls_from_page, ps_to_poster=ps_to_poster_setting, proxy_url=proxy_url, crop_mode=crop_mode_setting)
 
-            if img_urls_from_page.get('ps'): SiteUtil.save_image_to_server_path(img_urls_from_page['ps'], 'ps', image_server_local_path, image_path_segment, current_ui_code_for_image, proxy_url=proxy_url)
+            #if img_urls_from_page.get('ps'): SiteUtil.save_image_to_server_path(img_urls_from_page['ps'], 'ps', image_server_local_path, image_path_segment, current_ui_code_for_image, proxy_url=proxy_url)
             resolved_poster_for_server = img_urls_from_page.get('poster')
             resolved_poster_crop_for_server = img_urls_from_page.get('poster_crop')
             if not skip_default_poster_logic and resolved_poster_for_server:
