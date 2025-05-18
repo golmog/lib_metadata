@@ -31,7 +31,7 @@ class SiteDmm:
     }
 
     PTN_SEARCH_CID = re.compile(r"\/cid=(?P<code>.*?)\/")
-    PTN_SEARCH_REAL_NO = re.compile(r"^(h_)?\d*(?P<real>[a-zA-Z]+)(?P<no>\d+)([a-zA-Z]+)?$")
+    PTN_SEARCH_REAL_NO = re.compile(r"^([hn]_)?\d*(?P<real>[a-zA-Z]+)(?P<no>\d+)([a-zA-Z]+)?$")
     PTN_ID = re.compile(r"\d{2}id", re.I)
     PTN_RATING = re.compile(r"(?P<rating>[\d|_]+)\.gif") # v_old 패턴
 
