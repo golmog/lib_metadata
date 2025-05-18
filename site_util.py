@@ -636,22 +636,18 @@ class SiteUtil:
                     return None 
                 im_to_process = cropped_im_final # 최종 저장할 이미지는 크롭까지 완료된 이미지
             
-            # 6. 확장자 결정 및 저장 경로 설정 (im_to_process 기준, 원본 포맷 정보 활용)
-            #    original_format은 im_opened_original.format에서 가져왔으므로,
-            #    im_to_process.format이 crop 등으로 변경되었을 수 있으니 주의.
-            #    가장 안전한 것은 ext를 미리 결정하고, 저장 시 format을 명시하는 것.
-            current_format_for_ext = im_to_process.format if im_to_process.format else (im_opened_original.format if im_opened_original.format else "JPEG")
-
-            # PIL 객체로 직접 전달된 경우 original_format이 없을 수 있으므로, im_to_process.format 우선 사용
-            if isinstance(image_source, Image.Image) and not im_opened_original.format: # PIL 객체인데 format 정보가 없다면
-                current_format_for_ext = "JPEG" # 기본값으로 JPEG 사용 또는 다른 방식으로 추론
-
-            if not current_format_for_ext: # 그래도 format 정보가 없다면 (매우 드문 경우)
-                if source_is_url:
-                    ext_match = re.search(r'\.(jpg|jpeg|png|webp|gif)(\?|$)', image_source.lower())
+            current_format_for_ext = None
+            if im_to_process.format: 
+                current_format_for_ext = im_to_process.format
+            elif im_opened_original.format: 
+                current_format_for_ext = im_opened_original.format
+            
+            if not current_format_for_ext: 
+                if source_is_url: 
+                    ext_match = re.search(r'\.(jpg|jpeg|png|webp|gif)(\?|$)', image_source.lower()) 
                     if ext_match: current_format_for_ext = ext_match.group(1).upper()
-                elif source_is_local_file:
-                    _, file_ext_val = os.path.splitext(image_source) # 변수명 변경
+                elif source_is_local_file: 
+                    _, file_ext_val = os.path.splitext(image_source) 
                     if file_ext_val: current_format_for_ext = file_ext_val[1:].upper()
                 if not current_format_for_ext: current_format_for_ext = "JPEG"
             
@@ -659,19 +655,6 @@ class SiteUtil:
             allowed_exts = ['jpg', 'png', 'webp']
 
             if ext not in allowed_exts:
-                # 지원하지 않는 포맷이면 JPG로 변환 시도
-                #logger.warning(f"save_image_to_server_path: Original/Detected format '{ext}' not in allowed_exts for '{log_source_info}'. Attempting to save as JPG.")
-                #try:
-                #    if im_to_process.mode == 'P':
-                #        im_to_process = im_to_process.convert('RGBA' if 'transparency' in im_to_process.info else 'RGB')
-                #    if im_to_process.mode == 'RGBA': im_to_process = im_to_process.convert('RGB')
-                #    elif im_to_process.mode not in ('RGB', 'L'): im_to_process = im_to_process.convert('RGB')
-                #    ext = 'jpg' # JPG로 강제 변환 시 확장자 변경
-                #    logger.info(f"save_image_to_server_path: Image for '{log_source_info}' converted to RGB/JPG for saving.")
-                #except Exception as e_convert_save:
-                #    logger.error(f"save_image_to_server_path: Image conversion to JPG failed for '{log_source_info}': {e_convert_save}")
-                #    return None
-
                 logger.warning(f"save_image_to_server_path: Unsupported image format '{ext}' from '{log_source_info}'. Skipping save.")
                 return None
 
@@ -688,41 +671,26 @@ class SiteUtil:
             os.makedirs(save_dir, exist_ok=True)
 
             # 7. 이미지 저장 (im_to_process 사용)
-            logger.debug(f"Saving final image to {save_filepath} (will overwrite if exists).")
+            logger.debug(f"Saving final image (format: {ext}) to {save_filepath} (will overwrite if exists).")
             save_options = {}
             if ext == 'jpg': save_options['quality'] = 95
-            elif ext == 'webp': save_options.update({'quality': 95, 'lossless': False}) # 예시, 실제론 필요에 따라 조정
+            elif ext == 'webp': save_options.update({'quality': 95, 'lossless': False}) 
             elif ext == 'png': save_options['optimize'] = True
 
             try:
-                # 저장 전 최종적으로 모드 확인 및 변환 (특히 JPEG 저장 시)
                 if ext == 'jpg' and im_to_process.mode not in ('RGB', 'L'):
                     logger.debug(f"Converting final image mode from {im_to_process.mode} to RGB for JPG saving.")
-                    im_to_process = im_to_process.convert('RGB')
-                im_to_process.save(save_filepath, **save_options)
+                    im_to_process_save = im_to_process.convert('RGB')
+                elif ext == 'png' and im_to_process.mode == 'P': # PNG인데 팔레트 모드면 RGBA 또는 RGB로 변환
+                    logger.debug(f"Converting final PNG image mode from P to RGBA/RGB for saving.")
+                    im_to_process_save = im_to_process.convert('RGBA' if 'transparency' in im_to_process.info else 'RGB')
+                else:
+                    im_to_process_save = im_to_process
+                
+                im_to_process_save.save(save_filepath, **save_options)
             except OSError as e_os_save_final:
-                logger.warning(f"save_image_to_server_path: OSError on final save ({save_filepath}): {str(e_os_save_final)}. Retrying as RGB/JPG if not already.")
-                try:
-                    if im_to_process.mode != 'RGB': # 이미 위에서 JPG면 RGB로 변환했을 수 있음
-                        im_rgb_retry = im_to_process.convert("RGB")
-                    else:
-                        im_rgb_retry = im_to_process
-                    
-                    # 파일명 확장자가 .jpg가 아니었다면 .jpg로 변경 시도
-                    save_filepath_jpg_retry = save_filepath
-                    current_file_ext = os.path.splitext(save_filepath)[1].lower()
-                    if current_file_ext != '.jpg':
-                        save_filepath_jpg_retry = f"{os.path.splitext(save_filepath)[0]}.jpg"
-                        logger.info(f"Retrying save with .jpg extension: {save_filepath_jpg_retry}")
-                        filename = os.path.basename(save_filepath_jpg_retry) # 파일명도 업데이트!
-                        ext = 'jpg' # 확장자도 업데이트!
-                        save_options = {'quality': 95} # JPG 저장 옵션으로 강제
-
-                    im_rgb_retry.save(save_filepath_jpg_retry, **save_options) 
-                    logger.info(f"save_image_to_server_path: Saved as JPG after final retry: {save_filepath_jpg_retry}")
-                except Exception as e_retry_save_final:
-                    logger.exception(f"save_image_to_server_path: RGB conversion or final save retry failed: {e_retry_save_final}")
-                    return None
+                logger.warning(f"save_image_to_server_path: OSError on final save ({save_filepath}): {str(e_os_save_final)}. If not JPG, consider retrying as JPG or check permissions/disk space.")
+                return None
             except Exception as e_main_save_final:
                 logger.exception(f"save_image_to_server_path: Main final image save failed for {save_filepath}: {e_main_save_final}")
                 return None
