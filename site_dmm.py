@@ -134,9 +134,20 @@ class SiteDmm:
                 title_link_href = title_link_tag.attrib.get("href", "").lower() # 제목 링크 (타입 판별 및 코드 추출 주 사용)
 
                 # 최종 사용할 href 결정 (제목 링크 우선)
-                href = title_link_href if title_link_href else img_link_href
+                primary_href_for_check = title_link_href if title_link_href else img_link_href
+                if not primary_href_for_check:
+                    logger.debug("DMM Search: No valid href found for item. Skipping.")
+                    continue
 
-                # --- ★★★ 블루레이 및 컨텐츠 타입 판별 로직 추가 ★★★ ---
+                # --- 경로 필터링 조건 추가 ---
+                is_videoa_path = "/digital/videoa/" in primary_href_for_check
+                is_dvd_path = "/mono/dvd/" in primary_href_for_check
+                
+                if not (is_videoa_path or is_dvd_path):
+                    # logger.debug(f"DMM Search: Item href ('{primary_href_for_check}') does not match allowed paths (/digital/videoa/ or /mono/dvd/). Skipping.")
+                    continue
+
+                # --- 블루레이 및 컨텐츠 타입 판별 ---
                 is_bluray = False
                 # 블루레이 스팬 태그 확인 (텍스트 내용과 클래스 동시 확인)
                 bluray_span = node.xpath('.//span[contains(@class, "text-blue-600") and contains(text(), "Blu-ray")]')
