@@ -139,12 +139,15 @@ class SiteDmm:
                     logger.debug("DMM Search: No valid href found for item. Skipping.")
                     continue
 
-                # --- 경로 필터링 조건 추가 ---
-                is_videoa_path = "/digital/videoa/" in primary_href_for_check
-                is_dvd_path = "/mono/dvd/" in primary_href_for_check
+                # --- 경로 필터링 조건 ---
+                parsed_url = py_urllib_parse.urlparse(primary_href_for_check)
+                path_from_url = parsed_url.path
+                
+                is_videoa_path = path_from_url.startswith("/digital/videoa/")
+                is_dvd_path = path_from_url.startswith("/mono/dvd/")
                 
                 if not (is_videoa_path or is_dvd_path):
-                    # logger.debug(f"DMM Search: Item href ('{primary_href_for_check}') does not match allowed paths (/digital/videoa/ or /mono/dvd/). Skipping.")
+                    # logger.debug(f"DMM Search: Item path ('{path_from_url}' from href '{primary_href_for_check}') does not match allowed paths. Skipping.")
                     continue
 
                 # --- 블루레이 및 컨텐츠 타입 판별 ---
