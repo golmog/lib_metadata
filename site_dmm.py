@@ -910,22 +910,32 @@ class SiteDmm:
             if entity.content_type == 'bluray' and pl_on_page:
                 try:
                     pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_on_page, proxy_url=proxy_url)
-                    if pl_image_obj_for_fixed_crop and pl_image_obj_for_fixed_crop.size == (800, 442):
-                        logger.debug(f"DMM Blu-ray: Detected 800x442 PL ('{pl_on_page}'). Attempting fixed crop (right 380px).")
-                        crop_box_fixed = (800 - 380, 0, 800, 442) # 오른쪽 380x442
-                        final_poster_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
-                        if final_poster_pil_object:
-                            # PIL 객체를 직접 final_poster_source로 사용
-                            # 후속 process_image_mode 또는 save_image_to_server_path가 PIL 객체를 처리할 수 있어야 함
-                            final_poster_source = final_poster_pil_object 
-                            final_poster_crop_mode = None # 이미 원하는 대로 잘렸으므로 추가 크롭 불필요
-                            fixed_crop_applied_for_bluray = True
-                            logger.debug(f"DMM Blu-ray: Successfully applied fixed crop. Poster source is now a PIL object.")
-                        else:
-                            logger.warning(f"DMM Blu-ray: Failed to apply fixed crop to 800x442 image ('{pl_on_page}').")
-                    # 800x442가 아닌 다른 Blu-ray PL은 일반 로직으로 넘어감
+                    if pl_image_obj_for_fixed_crop:
+                        img_width, img_height = pl_image_obj_for_fixed_crop.size
+                        # 조건: 너비가 800이고, 높이가 438에서 442 사이일 때
+                        if img_width == 800 and 438 <= img_height <= 442:
+                            logger.info(f"DMM Blu-ray: Detected {img_width}x{img_height} PL ('{pl_on_page}'). Attempting fixed crop (right 380px width, full height).")
+                            
+                            # 크롭 박스: 오른쪽 380px, 높이는 원본 이미지의 높이(img_height)를 그대로 사용
+                            # left = img_width - 380 
+                            # top = 0
+                            # right = img_width
+                            # bottom = img_height
+                            crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
+                            
+                            final_poster_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
+                            if final_poster_pil_object:
+                                final_poster_source = final_poster_pil_object 
+                                final_poster_crop_mode = None 
+                                fixed_crop_applied_for_bluray = True
+                                logger.info(f"DMM Blu-ray: Successfully applied fixed crop. Poster source is PIL object ({final_poster_pil_object.size[0]}x{final_poster_pil_object.size[1]}).")
+                            else:
+                                logger.warning(f"DMM Blu-ray: Failed to apply fixed crop to {img_width}x{img_height} image ('{pl_on_page}').")
+                        # elif img_width == 800: # 너비는 맞지만 높이가 범위 밖인 경우 로깅 (선택적)
+                        #    logger.debug(f"DMM Blu-ray: PL ('{pl_on_page}') has width 800 but height {img_height} (not in 438-442 range). Skipping fixed crop.")
+                    # pl_image_obj_for_fixed_crop이 None인 경우는 imopen 실패 (이미 SiteUtil에서 로깅)
                 except Exception as e_fixed_crop_bluray:
-                    logger.error(f"DMM Blu-ray: Error during 800x442 fixed crop attempt for '{pl_on_page}': {e_fixed_crop_bluray}")
+                    logger.error(f"DMM Blu-ray: Error during fixed crop attempt for '{pl_on_page}': {e_fixed_crop_bluray}")
 
             # 특수 고정 크롭이 적용되지 않았다면, 일반적인 포스터 결정 로직 실행
             if not fixed_crop_applied_for_bluray:
@@ -996,7 +1006,7 @@ class SiteDmm:
         logger.debug(f"DMM ({entity.content_type}): Final Images Decision - Poster='{final_poster_source}' (Crop='{final_poster_crop_mode}'), Landscape='{final_landscape_source}', Fanarts_to_process({len(arts_urls_for_processing)})='{arts_urls_for_processing[:3]}...'")
 
         # 5. entity.thumb 및 entity.fanart 채우기
-        if not (use_image_server and image_mode == '4'): # 일반 모드 (디스코드, SJVA 프록시 등)
+        if not (use_image_server and image_mode == '4'):
             if final_poster_source and not skip_default_poster_logic:
                 if not any(t.aspect == 'poster' for t in entity.thumb):
                     processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
@@ -1004,14 +1014,14 @@ class SiteDmm:
 
             if final_landscape_source and not skip_default_landscape_logic:
                 if not any(t.aspect == 'landscape' for t in entity.thumb):
-                    processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_source, proxy_url=proxy_url) # 랜드스케이프는 크롭 없음
+                    processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_source, proxy_url=proxy_url)
                     if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
 
-            for art_url_item in arts_urls_for_processing: # 여기서 최종 팬아트 목록 사용
+            for art_url_item in arts_urls_for_processing:
                 processed_art = SiteUtil.process_image_mode(image_mode, art_url_item, proxy_url=proxy_url)
                 if processed_art: entity.fanart.append(processed_art)
 
-        elif use_image_server and image_mode == '4' and ui_code_for_image: # 이미지 서버 저장 모드
+        elif use_image_server and image_mode == '4' and ui_code_for_image:
             if final_poster_source and not skip_default_poster_logic:
                 if not any(t.aspect == 'poster' for t in entity.thumb):
                     p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
@@ -1022,28 +1032,27 @@ class SiteDmm:
                     pl_path = SiteUtil.save_image_to_server_path(final_landscape_source, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
                     if pl_path: entity.thumb.append(EntityThumb(aspect="landscape", value=f"{image_server_url}/{pl_path}"))
 
-            for idx, art_url_item_server in enumerate(arts_urls_for_processing): # 여기서 최종 팬아트 목록 사용
+            for idx, art_url_item_server in enumerate(arts_urls_for_processing):
                 art_relative_path = SiteUtil.save_image_to_server_path(art_url_item_server, 'art', image_server_local_path, image_path_segment, ui_code_for_image, art_index=idx + 1, proxy_url=proxy_url)
                 if art_relative_path: entity.fanart.append(f"{image_server_url}/{art_relative_path}")
 
-        if use_extras: # 예고편 처리
+        if use_extras:
             entity.extras = [] 
             # 기본 트레일러 제목 설정 (JSON에서 못 가져올 경우 사용)
             default_trailer_title = entity.tagline if entity.tagline and entity.tagline != entity.ui_code else entity.ui_code
             trailer_url_final = None
-            trailer_title_to_use = default_trailer_title # 기본값
+            trailer_title_to_use = default_trailer_title
 
             try:
                 if entity.content_type == 'vr':
                     # 1차 시도: 새로운 args JSON 방식
                     trailer_url_final, title_from_json = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url, proxy_url, entity.content_type)
-                    if title_from_json: trailer_title_to_use = title_from_json # JSON 제목 우선
+                    if title_from_json: trailer_title_to_use = title_from_json
 
                     # 2차 시도 (Fallback): 이전 sampleUrl 방식
                     if not trailer_url_final:
                         logger.info(f"DMM VR Trailer: New method failed for {cid_part}. Trying fallback (old sampleUrl method).")
                         trailer_url_final = cls._get_dmm_vr_trailer_fallback(cid_part, detail_url, proxy_url)
-                        # Fallback에서는 JSON 제목이 없으므로 default_trailer_title 사용
 
                 elif entity.content_type == 'videoa':
                     trailer_url_final, title_from_json = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url, proxy_url, entity.content_type)
@@ -1054,19 +1063,14 @@ class SiteDmm:
                     if onclick_trailer:
                         match_json = re.search(r"gaEventVideoStart\s*\(\s*'(\{.*?\})'\s*,\s*'(\{.*?\})'\s*\)", onclick_trailer[0])
                         if match_json:
-                            video_data_str = match_json.group(1).replace('\\"', '"') # 첫 번째 JSON 그룹이 비디오 정보
+                            video_data_str = match_json.group(1).replace('\\"', '"')
                             try:
                                 video_data = json.loads(video_data_str)
                                 if video_data.get("video_url"):
                                     trailer_url_final = video_data["video_url"]
-                                    # 이 방식은 JSON에 제목 정보가 없을 수 있음
                             except json.JSONDecodeError as e_json_dvd:
                                 logger.error(f"DMM DVD/BR Trailer: JSONDecodeError - {e_json_dvd}. Data: {video_data_str[:100]}")
                 if trailer_url_final:
-                    # 최종 트레일러 제목 번역 (이미 번역된 tagline 등을 사용했다면 중복 번역될 수 있으므로 주의)
-                    # trailer_title_to_use가 이미 번역된 값(tagline)이거나, 번역 불필요한 ui_code일 수 있음.
-                    # 또는 JSON에서 온 제목이라면 번역 필요.
-                    # 여기서는 trailer_title_to_use를 한번 더 번역 (SiteUtil.trans는 이미 번역된 건 그대로 반환)
                     final_trans_trailer_title = SiteUtil.trans(trailer_title_to_use, do_trans=do_trans)
                     entity.extras.append(EntityExtra("trailer", final_trans_trailer_title, "mp4", trailer_url_final))
             except Exception as e_trailer_main: 
