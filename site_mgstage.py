@@ -350,53 +350,110 @@ class SiteMgstageAma(SiteMgstage):
 
                 if not skip_default_poster_logic:
                     resolved_poster_url_step1 = None; resolved_crop_mode_step1 = None
-                    if ps_to_poster_setting and ps_url_detail_page_default: resolved_poster_url_step1 = ps_url_detail_page_default
-                    elif crop_mode_setting and pl_url_detail_page_default: resolved_poster_url_step1 = pl_url_detail_page_default; resolved_crop_mode_step1 = crop_mode_setting
+                    # 1. PS 강제 설정
+                    if ps_to_poster_setting and ps_url_detail_page_default: 
+                        resolved_poster_url_step1 = ps_url_detail_page_default
+                    # 2. PL 크롭 설정
+                    elif crop_mode_setting and pl_url_detail_page_default: 
+                        resolved_poster_url_step1 = pl_url_detail_page_default
+                        resolved_crop_mode_step1 = crop_mode_setting
+                    # 3. PS와 PL 모두 존재 시 HQ 로직
                     elif pl_url_detail_page_default and ps_url_detail_page_default:
                         loc = SiteUtil.has_hq_poster(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
-                        if loc: resolved_poster_url_step1 = pl_url_detail_page_default; resolved_crop_mode_step1 = loc
+                        if loc: 
+                            resolved_poster_url_step1 = pl_url_detail_page_default
+                            resolved_crop_mode_step1 = loc
                         else: 
-                            if SiteUtil.is_hq_poster(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url): resolved_poster_url_step1 = pl_url_detail_page_default
-                            else: resolved_poster_url_step1 = ps_url_detail_page_default
-                    elif ps_url_detail_page_default: resolved_poster_url_step1 = ps_url_detail_page_default
-                    elif pl_url_detail_page_default: resolved_poster_url_step1 = pl_url_detail_page_default; resolved_crop_mode_step1 = crop_mode_setting
+                            if SiteUtil.is_hq_poster(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url): 
+                                resolved_poster_url_step1 = pl_url_detail_page_default
+                            else: 
+                                resolved_poster_url_step1 = ps_url_detail_page_default
+                    # 4. PS만 존재 시
+                    elif ps_url_detail_page_default: 
+                        resolved_poster_url_step1 = ps_url_detail_page_default
+                    # 5. PL만 존재하고 크롭 설정 있을 시
+                    elif pl_url_detail_page_default and crop_mode_setting : 
+                        resolved_poster_url_step1 = pl_url_detail_page_default
+                        resolved_crop_mode_step1 = crop_mode_setting
+                    
+                    # --- Specific Art 후보들을 포스터로 사용 시도 (구조 변경) ---
+                    # (일반 로직에서 포스터가 아직 결정되지 않았고, 아트가 있으며, PS 강제 설정이 아닐 때)
                     if not resolved_poster_url_step1 and arts_urls_page_default and not ps_to_poster_setting:
-                        if ps_url_detail_page_default and SiteUtil.is_hq_poster(ps_url_detail_page_default, arts_urls_page_default[0], proxy_url=proxy_url): resolved_poster_url_step1 = arts_urls_page_default[0]
-                        elif ps_url_detail_page_default and len(arts_urls_page_default) > 1 and SiteUtil.is_hq_poster(ps_url_detail_page_default, arts_urls_page_default[-1], proxy_url=proxy_url): resolved_poster_url_step1 = arts_urls_page_default[-1]
-                    if not resolved_poster_url_step1 and ps_url_detail_page_default: resolved_poster_url_step1 = ps_url_detail_page_default
+                        specific_art_candidates_ama = []
+                        if arts_urls_page_default:
+                            # 첫 번째 아트를 specific 후보로 추가
+                            if arts_urls_page_default[0] not in specific_art_candidates_ama:
+                                specific_art_candidates_ama.append(arts_urls_page_default[0])
+                            
+                            # 마지막 아트가 첫 번째 아트와 다르고, 리스트에 이미 없다면 추가
+                            if len(arts_urls_page_default) > 1 and \
+                               arts_urls_page_default[-1] != arts_urls_page_default[0] and \
+                               arts_urls_page_default[-1] not in specific_art_candidates_ama:
+                                specific_art_candidates_ama.append(arts_urls_page_default[-1])
+                        
+                        logger.debug(f"MGStage ({cls.module_char}, Ama): Specific art candidates for poster: {specific_art_candidates_ama}")
 
+                        if ps_url_detail_page_default:
+                            for sp_candidate_ama in specific_art_candidates_ama:
+                                if SiteUtil.is_hq_poster(ps_url_detail_page_default, sp_candidate_ama, proxy_url=proxy_url):
+                                    logger.info(f"MGStage ({cls.module_char}, Ama): Specific art ('{sp_candidate_ama}') chosen as poster.")
+                                    resolved_poster_url_step1 = sp_candidate_ama
+                                    resolved_crop_mode_step1 = None 
+                                    break 
+
+                    # 최종 Fallback (그래도 포스터 없으면 PS 사용)
+                    if not resolved_poster_url_step1 and ps_url_detail_page_default: 
+                        resolved_poster_url_step1 = ps_url_detail_page_default
+
+                    # MGS 스타일 특별 처리
                     mgs_special_poster_filepath = None
                     attempt_mgs_special_local = False
-                    if pl_url_detail_page_default and ps_url_detail_page_default and not ps_to_poster_setting and resolved_poster_url_step1 == ps_url_detail_page_default:
+                    if pl_url_detail_page_default and ps_url_detail_page_default and \
+                       not ps_to_poster_setting and resolved_poster_url_step1 == ps_url_detail_page_default:
                         attempt_mgs_special_local = True
+
                     if attempt_mgs_special_local:
                         temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
                         if temp_filepath and os.path.exists(temp_filepath): mgs_special_poster_filepath = temp_filepath
 
-                    if mgs_special_poster_filepath: final_poster_source = mgs_special_poster_filepath; final_poster_crop_mode = None
-                    else: final_poster_source = resolved_poster_url_step1; final_poster_crop_mode = resolved_crop_mode_step1
+                    if mgs_special_poster_filepath: 
+                        final_poster_source = mgs_special_poster_filepath
+                        final_poster_crop_mode = None
+                    else: 
+                        final_poster_source = resolved_poster_url_step1
+                        final_poster_crop_mode = resolved_crop_mode_step1
 
                 if not skip_default_landscape_logic: final_landscape_url_source = pl_url_detail_page_default
                 arts_urls_for_processing = arts_urls_page_default
 
+                # --- 이미지 최종 처리 및 entity에 추가 (이미지 서버 사용 안 할 때) ---
                 if not (use_image_server and image_mode == '4'):
-                    if final_poster_source and not skip_default_poster_logic:
+                    # 포스터 추가
+                    if final_poster_source and not skip_default_poster_logic and not any(t.aspect == 'poster' for t in entity.thumb):
                         processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
                         if processed_poster: entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
-                    if final_landscape_url_source and not skip_default_landscape_logic:
+                    # 랜드스케이프 추가
+                    if final_landscape_url_source and not skip_default_landscape_logic and not any(t.aspect == 'landscape' for t in entity.thumb):
                         processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_url_source, proxy_url=proxy_url)
                         if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
+                    
+                    # 팬아트 추가
                     if arts_urls_for_processing:
-                        processed_fanart_count = 0; sources_to_exclude = {final_poster_source, final_landscape_url_source}
-                        if pl_url_detail_page_default and 'mgs_special_poster_filepath' in locals() and mgs_special_poster_filepath and final_poster_source == mgs_special_poster_filepath:
+                        if entity.fanart is None: entity.fanart = []
+                        processed_fanart_count = len(entity.fanart) 
+                        sources_to_exclude = {final_poster_source, final_landscape_url_source}
+                        if pl_url_detail_page_default and mgs_special_poster_filepath and final_poster_source == mgs_special_poster_filepath:
                             sources_to_exclude.add(pl_url_detail_page_default)
+                        
                         for art_url in arts_urls_for_processing:
                             if processed_fanart_count >= max_arts: break
                             if art_url and art_url not in sources_to_exclude:
                                 processed_art = SiteUtil.process_image_mode(image_mode, art_url, proxy_url=proxy_url)
-                                if processed_art: entity.fanart.append(processed_art); processed_fanart_count += 1
+                                if processed_art and processed_art not in entity.fanart: 
+                                    entity.fanart.append(processed_art)
+                                    processed_fanart_count += 1
             except Exception as e_img_proc_default:
-                logger.exception(f"MGStage ({cls.module_char}): Error during default image processing: {e_img_proc_default}")
+                logger.exception(f"MGStage ({cls.module_char}, Ama): Error during default image processing: {e_img_proc_default}")
 
         if use_image_server and image_mode == '4' and ui_code_for_image:
             logger.info(f"MGStage ({cls.module_char}): Saving images to Image Server for {ui_code_for_image}...")
@@ -646,19 +703,61 @@ class SiteMgstageDvd(SiteMgstage):
 
                 if not skip_default_poster_logic:
                     resolved_poster_url_step1 = None; resolved_crop_mode_step1 = None
-                    if ps_to_poster_setting and ps_url_detail_page_default: resolved_poster_url_step1 = ps_url_detail_page_default
-                    elif crop_mode_setting and pl_url_detail_page_default: resolved_poster_url_step1 = pl_url_detail_page_default; resolved_crop_mode_step1 = crop_mode_setting
+                    # 1. PS 강제 설정
+                    if ps_to_poster_setting and ps_url_detail_page_default: 
+                        resolved_poster_url_step1 = ps_url_detail_page_default
+                    # 2. PL 크롭 설정
+                    elif crop_mode_setting and pl_url_detail_page_default: 
+                        resolved_poster_url_step1 = pl_url_detail_page_default
+                        resolved_crop_mode_step1 = crop_mode_setting
+                    # 3. PS와 PL 모두 존재 시 HQ 로직
                     elif pl_url_detail_page_default and ps_url_detail_page_default:
                         loc = SiteUtil.has_hq_poster(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
-                        if loc: resolved_poster_url_step1 = pl_url_detail_page_default; resolved_crop_mode_step1 = loc
+                        if loc: 
+                            resolved_poster_url_step1 = pl_url_detail_page_default
+                            resolved_crop_mode_step1 = loc
                         else: 
-                            if SiteUtil.is_hq_poster(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url): resolved_poster_url_step1 = pl_url_detail_page_default
-                            else: resolved_poster_url_step1 = ps_url_detail_page_default
-                    elif ps_url_detail_page_default: resolved_poster_url_step1 = ps_url_detail_page_default
-                    elif pl_url_detail_page_default: resolved_poster_url_step1 = pl_url_detail_page_default; resolved_crop_mode_step1 = crop_mode_setting
-                    if not resolved_poster_url_step1 and arts_urls_page_default and not ps_to_poster_setting: # Dvd는 Ama와 달리 arts[0], arts[-1] 우선순위 없음
-                        if ps_url_detail_page_default and SiteUtil.is_hq_poster(ps_url_detail_page_default, arts_urls_page_default[0], proxy_url=proxy_url): resolved_poster_url_step1 = arts_urls_page_default[0]
-                    if not resolved_poster_url_step1 and ps_url_detail_page_default: resolved_poster_url_step1 = ps_url_detail_page_default
+                            if SiteUtil.is_hq_poster(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url): 
+                                resolved_poster_url_step1 = pl_url_detail_page_default
+                            else: 
+                                resolved_poster_url_step1 = ps_url_detail_page_default
+                    # 4. PS만 존재 시
+                    elif ps_url_detail_page_default: 
+                        resolved_poster_url_step1 = ps_url_detail_page_default
+                    # 5. PL만 존재하고 크롭 설정 있을 시
+                    elif pl_url_detail_page_default and crop_mode_setting : 
+                        resolved_poster_url_step1 = pl_url_detail_page_default
+                        resolved_crop_mode_step1 = crop_mode_setting
+                    
+                    # --- Specific Art 후보들을 포스터로 사용 시도 (기존 로직 확장) ---
+                    # (일반 로직에서 포스터가 아직 결정되지 않았고, 아트가 있으며, PS 강제 설정이 아닐 때)
+                    if not resolved_poster_url_step1 and arts_urls_page_default and not ps_to_poster_setting:
+                        
+                        specific_art_candidates_mg = []
+                        if arts_urls_page_default:
+                            # 첫 번째 아트를 specific 후보로 추가
+                            if arts_urls_page_default[0] not in specific_art_candidates_mg:
+                                specific_art_candidates_mg.append(arts_urls_page_default[0])
+                            
+                            # 마지막 아트가 첫 번째 아트와 다르고, 리스트에 이미 없다면 추가
+                            if len(arts_urls_page_default) > 1 and \
+                               arts_urls_page_default[-1] != arts_urls_page_default[0] and \
+                               arts_urls_page_default[-1] not in specific_art_candidates_mg:
+                                specific_art_candidates_mg.append(arts_urls_page_default[-1])
+                        
+                        logger.debug(f"MGStage ({cls.module_char}): Specific art candidates for poster: {specific_art_candidates_mg}")
+
+                        if ps_url_detail_page_default:
+                            for sp_candidate_mg in specific_art_candidates_mg:
+                                if SiteUtil.is_hq_poster(ps_url_detail_page_default, sp_candidate_mg, proxy_url=proxy_url):
+                                    logger.info(f"MGStage ({cls.module_char}): Specific art ('{sp_candidate_mg}') chosen as poster based on HQ check with PS ('{ps_url_detail_page_default}').")
+                                    resolved_poster_url_step1 = sp_candidate_mg
+                                    resolved_crop_mode_step1 = None
+                                    break
+
+                    # 최종 Fallback (그래도 포스터 없으면 PS 사용)
+                    if not resolved_poster_url_step1 and ps_url_detail_page_default: 
+                        resolved_poster_url_step1 = ps_url_detail_page_default
                     
                     mgs_special_poster_filepath = None
                     attempt_mgs_special_local = False
@@ -667,29 +766,39 @@ class SiteMgstageDvd(SiteMgstage):
                     if attempt_mgs_special_local:
                         temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
                         if temp_filepath and os.path.exists(temp_filepath): mgs_special_poster_filepath = temp_filepath
-                    
+
                     if mgs_special_poster_filepath: final_poster_source = mgs_special_poster_filepath; final_poster_crop_mode = None
                     else: final_poster_source = resolved_poster_url_step1; final_poster_crop_mode = resolved_crop_mode_step1
-                
+
                 if not skip_default_landscape_logic: final_landscape_url_source = pl_url_detail_page_default
                 arts_urls_for_processing = arts_urls_page_default
-                
+
+                # --- 이미지 최종 처리 및 entity에 추가 (이미지 서버 사용 안 할 때) ---
                 if not (use_image_server and image_mode == '4'):
-                    if final_poster_source and not skip_default_poster_logic:
+                    # 포스터 추가
+                    if final_poster_source and not skip_default_poster_logic and not any(t.aspect == 'poster' for t in entity.thumb):
                         processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
                         if processed_poster: entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
-                    if final_landscape_url_source and not skip_default_landscape_logic:
+                    # 랜드스케이프 추가
+                    if final_landscape_url_source and not skip_default_landscape_logic and not any(t.aspect == 'landscape' for t in entity.thumb):
                         processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_url_source, proxy_url=proxy_url)
                         if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
+
+                    # 팬아트 추가
                     if arts_urls_for_processing:
-                        processed_fanart_count = 0; sources_to_exclude = {final_poster_source, final_landscape_url_source}
-                        if pl_url_detail_page_default and 'mgs_special_poster_filepath' in locals() and mgs_special_poster_filepath and final_poster_source == mgs_special_poster_filepath:
+                        if entity.fanart is None: entity.fanart = []
+                        processed_fanart_count = len(entity.fanart)
+                        sources_to_exclude = {final_poster_source, final_landscape_url_source}
+                        if pl_url_detail_page_default and mgs_special_poster_filepath and final_poster_source == mgs_special_poster_filepath:
                             sources_to_exclude.add(pl_url_detail_page_default)
+
                         for art_url in arts_urls_for_processing:
                             if processed_fanart_count >= max_arts: break
                             if art_url and art_url not in sources_to_exclude:
                                 processed_art = SiteUtil.process_image_mode(image_mode, art_url, proxy_url=proxy_url)
-                                if processed_art: entity.fanart.append(processed_art); processed_fanart_count += 1
+                                if processed_art and processed_art not in entity.fanart:
+                                    entity.fanart.append(processed_art)
+                                    processed_fanart_count += 1
             except Exception as e_img_proc_default_dvd:
                 logger.exception(f"MGStage ({cls.module_char}): Error during default image processing: {e_img_proc_default_dvd}")
 
