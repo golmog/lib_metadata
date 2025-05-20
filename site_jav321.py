@@ -348,7 +348,7 @@ class SiteJav321:
                             if entity.tag is None: entity.tag = []
                             if '-' in ui_code_for_image and ui_code_for_image.split('-',1)[0].upper() not in entity.tag:
                                 entity.tag.append(ui_code_for_image.split('-',1)[0].upper())
-                    
+
                     elif current_key == "出演者":
                         if entity.actor is None: entity.actor = []
                         if entity.actor is None: entity.actor = []
@@ -362,7 +362,7 @@ class SiteJav321:
                         for name_item in temp_actor_names:
                             if not any(ea_item.name == name_item for ea_item in entity.actor):
                                 entity.actor.append(EntityActor(name_item))
-                    
+
                     elif current_key == "メーカー":
                         studio_name_raw = ""
                         maker_a_tag = b_tag_key_node.xpath("./following-sibling::a[1][contains(@href, '/company/')]")
@@ -372,11 +372,11 @@ class SiteJav321:
                             maker_text_node = b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]")
                             if maker_text_node:
                                 studio_name_raw = maker_text_node[0].strip()
-                        
+
                         cleaned_studio_name = cls._clean_value(studio_name_raw)
                         if cleaned_studio_name:
                             entity.studio = SiteUtil.trans(cleaned_studio_name, do_trans=do_trans)
-                    
+
                     elif current_key == "ジャンル":
                         if entity.genre is None: entity.genre = []
                         genre_a_tags = b_tag_key_node.xpath("./following-sibling::a[contains(@href, '/genre/')]")
@@ -402,7 +402,7 @@ class SiteJav321:
                                 try: entity.year = int(entity.premiered[:4])
                                 except ValueError: entity.year = 0
                             else: entity.year = 0
-                            
+
                     elif current_key == "収録時間":
                         time_val_nodes = b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]")
                         time_val_raw = time_val_nodes[0].strip() if time_val_nodes else ""
@@ -410,7 +410,7 @@ class SiteJav321:
                         if time_val_cleaned:
                             match_rt = re.search(r"(\d+)", time_val_cleaned)
                             if match_rt: entity.runtime = int(match_rt.group(1))
-                            
+
                     elif current_key == "シリーズ":
                         series_name_raw = ""
                         series_a_tag = b_tag_key_node.xpath("./following-sibling::a[1][contains(@href, '/series/')]")
@@ -420,14 +420,14 @@ class SiteJav321:
                             series_text_node = b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]")
                             if series_text_node:
                                 series_name_raw = series_text_node[0].strip()
-                        
+
                         series_name_cleaned = cls._clean_value(series_name_raw)
                         if series_name_cleaned:
                             if entity.tag is None: entity.tag = []
                             trans_series = SiteUtil.trans(series_name_cleaned, do_trans=do_trans)
                             if trans_series and trans_series not in entity.tag: 
                                 entity.tag.append(trans_series)
-                    
+
                     elif current_key == "平均評価":
                         rating_val_nodes = b_tag_key_node.xpath("./following-sibling::text()[1][normalize-space()]")
                         rating_val_raw = rating_val_nodes[0].strip() if rating_val_nodes else ""
@@ -517,7 +517,7 @@ class SiteJav321:
         ps_from_detail_page = None
         pl_from_detail_page = None
         all_arts_from_page = []
-        
+
         # 플레이스홀더 이미지("now_printing.jpg")의 로컬 경로
         now_printing_path = None
 
@@ -551,12 +551,12 @@ class SiteJav321:
                 if not skip_default_poster_logic:
                     temp_poster_step1 = None 
                     temp_crop_step1 = None 
-                    
+
                     # 4-A-1. 유효한 PS 후보 결정 (플레이스홀더 아닌 것)
                     is_ps_detail_placeholder = False
                     if ps_from_detail_page and now_printing_path and SiteUtil.are_images_visually_same(ps_from_detail_page, now_printing_path, proxy_url=proxy_url):
                         is_ps_detail_placeholder = True
-                    
+
                     if ps_from_detail_page and not is_ps_detail_placeholder:
                         valid_ps_candidate = ps_from_detail_page
                     elif ps_url_from_search_cache:
@@ -587,14 +587,33 @@ class SiteJav321:
                         temp_poster_step1 = valid_ps_candidate
                     elif valid_pl_candidate and crop_mode_setting : # PL만 유효하고 크롭 설정 있을 때
                         temp_poster_step1 = valid_pl_candidate; temp_crop_step1 = crop_mode_setting
-                    
+
                     # 4-A-4. Specific Art 후보를 포스터로 사용 시도 (일반 로직에서 포스터 못 정했고, PS강제설정 아닐 때)
                     if not temp_poster_step1 and not ps_to_poster_setting:
                         actual_arts_for_specific = [art for art in all_arts_from_page if art != valid_pl_candidate] if valid_pl_candidate else all_arts_from_page
-                        specific_art_candidate = actual_arts_for_specific[0] if actual_arts_for_specific else None
-                        if specific_art_candidate and valid_ps_candidate and SiteUtil.is_hq_poster(valid_ps_candidate, specific_art_candidate, proxy_url=proxy_url):
-                            temp_poster_step1 = specific_art_candidate; temp_crop_step1 = None
-                    
+
+                        specific_art_candidates = []
+                        if actual_arts_for_specific:
+                            # 첫 번째 아트를 specific 후보로 추가
+                            if actual_arts_for_specific[0] not in specific_art_candidates:
+                                specific_art_candidates.append(actual_arts_for_specific[0])
+
+                            # 마지막 아트가 첫 번째 아트와 다르고, 리스트에 이미 없다면 추가
+                            if len(actual_arts_for_specific) > 1 and \
+                               actual_arts_for_specific[-1] != actual_arts_for_specific[0] and \
+                               actual_arts_for_specific[-1] not in specific_art_candidates:
+                                specific_art_candidates.append(actual_arts_for_specific[-1])
+
+                        logger.debug(f"Jav321: Specific art candidates for poster: {specific_art_candidates}")
+
+                        if valid_ps_candidate:
+                            for sp_candidate in specific_art_candidates:
+                                if SiteUtil.is_hq_poster(valid_ps_candidate, sp_candidate, proxy_url=proxy_url):
+                                    logger.info(f"Jav321: Specific art ('{sp_candidate}') chosen as poster based on HQ check with PS ('{valid_ps_candidate}').")
+                                    temp_poster_step1 = sp_candidate
+                                    temp_crop_step1 = None
+                                    break
+
                     # 4-A-5. 최종 Fallback (그래도 포스터 없으면 유효 PS 사용)
                     if not temp_poster_step1 and valid_ps_candidate:
                         temp_poster_step1 = valid_ps_candidate
@@ -602,7 +621,7 @@ class SiteJav321:
 
                     # 4-A-6. MGS 스타일 특별 처리 시도
                     attempt_special_local = False
-                    
+
                     # 조건: 일반 로직 결과 PS가 포스터로 선택되었는가?
                     general_logic_chose_ps = (temp_poster_step1 == valid_ps_candidate)
 
@@ -651,7 +670,7 @@ class SiteJav321:
                 # --- B. 랜드스케이프 소스 결정 ---
                 if not skip_default_landscape_logic: 
                     final_landscape_url_source = valid_pl_candidate
-                
+
                 # --- C. 팬아트 목록 결정 ---
                 temp_fanart_list = []
                 if all_arts_from_page:
@@ -660,7 +679,7 @@ class SiteJav321:
                         sources_to_exclude_for_fanart.add(final_landscape_url_source)
                     if final_poster_source and isinstance(final_poster_source, str) and final_poster_source.startswith("http"):
                         sources_to_exclude_for_fanart.add(final_poster_source)
-                    
+
                     # MGS 스타일 처리로 포스터가 생성된 경우, 원본 PL도 팬아트에서 제외
                     if valid_pl_candidate and jav321_special_poster_filepath and final_poster_source == jav321_special_poster_filepath:
                         sources_to_exclude_for_fanart.add(valid_pl_candidate)
@@ -687,7 +706,7 @@ class SiteJav321:
                     if final_landscape_url_source and not skip_default_landscape_logic and not any(t.aspect == 'landscape' for t in entity.thumb):
                         processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_url_source, proxy_url=proxy_url) # 랜드스케이프는 크롭 없음
                         if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
-                    
+
                     # 팬아트 추가
                     if entity.fanart is None: entity.fanart = [] # None 방지
                     for art_url_item in arts_urls_for_processing:
@@ -701,7 +720,7 @@ class SiteJav321:
         # === 5. 이미지 서버 저장 로직 (ui_code_for_image 사용) ===
         if use_image_server and image_mode == '4' and ui_code_for_image:
             logger.info(f"Jav321: Saving images to Image Server for {ui_code_for_image}...")
-            
+
             # PS 저장 (플레이스홀더 아닌 유효 PS 결정 로직 강화)
             ps_to_save_on_server = None
             # 1. 상세 페이지 PS가 유효하면 사용
@@ -718,7 +737,7 @@ class SiteJav321:
                     is_search_ps_placeholder_for_save = True
                 if not is_search_ps_placeholder_for_save: 
                     ps_to_save_on_server = ps_url_from_search_cache
-            
+
             #if ps_to_save_on_server:
             #    SiteUtil.save_image_to_server_path(ps_to_save_on_server, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
             #else:
@@ -728,7 +747,7 @@ class SiteJav321:
             if not skip_default_poster_logic and final_poster_source and not any(t.aspect == 'poster' for t in entity.thumb):
                 p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
                 if p_path: entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
-            
+
             # 랜드스케이프 저장
             if not skip_default_landscape_logic and final_landscape_url_source and not any(t.aspect == 'landscape' for t in entity.thumb):
                 pl_path = SiteUtil.save_image_to_server_path(final_landscape_url_source, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
@@ -745,7 +764,7 @@ class SiteJav321:
                 for fanart_url_str in entity.fanart: # 기존 entity.fanart에 있는 URL도 확인
                     if isinstance(fanart_url_str, str):
                         current_fanart_urls_on_server.add(fanart_url_str)
-                
+
                 processed_fanart_count_server = len(current_fanart_urls_on_server)
 
                 # 팬아트 제외 로직 (이전과 동일)

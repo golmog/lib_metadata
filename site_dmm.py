@@ -400,7 +400,7 @@ class SiteDmm:
     @classmethod
     def __img_urls(cls, tree, content_type='unknown'):
         logger.debug(f"DMM __img_urls: Extracting raw image URLs for type: {content_type}")
-        img_urls_dict = {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidate': None}
+        img_urls_dict = {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidates': []}
         
         try:
             if content_type == 'videoa' or content_type == 'vr':
@@ -414,7 +414,7 @@ class SiteDmm:
                     img_urls_dict['arts'] = list(dict.fromkeys(temp_arts))
                     return img_urls_dict
 
-                temp_arts_list = []
+                temp_arts_list_for_processing = []
                 for a_tag in sample_image_links:
                     final_image_url = None
                     href = a_tag.attrib.get("href", "").strip()
@@ -427,83 +427,104 @@ class SiteDmm:
                             if src and re.search(r'\.(jpg|jpeg|png|webp)$', src, re.IGNORECASE):
                                 final_image_url = py_urllib_parse.urljoin(cls.site_base_url, src)
                     if final_image_url:
-                        temp_arts_list.append(final_image_url)
+                        temp_arts_list_for_processing.append(final_image_url)
 
                 processed_pl_v = None
-                processed_specific_v = None
+                specific_candidates_v_list = []
                 remaining_arts_v = []
 
-                for url in temp_arts_list:
+                # 1. PL 결정 (파일명 기반)
+                for url in temp_arts_list_for_processing:
                     filename = url.split('/')[-1].lower()
                     is_pl_type = filename.endswith("pl.jpg") or filename.endswith("jp-0.jpg")
-                    is_specific_type = re.match(r".*jp-(?!0)\d+\.jpg$", filename)
-
                     if is_pl_type and processed_pl_v is None:
                         processed_pl_v = url
-                    elif is_specific_type and processed_specific_v is None:
-                        processed_specific_v = url
-                        if url not in remaining_arts_v: remaining_arts_v.append(url) 
-                    else:
-                        if url not in remaining_arts_v: remaining_arts_v.append(url)
+                        break
+                
+                # PL을 못 찾았지만 temp_arts_list_for_processing에 이미지가 있다면, 첫 번째를 PL로 간주
+                if not processed_pl_v and temp_arts_list_for_processing:
+                    processed_pl_v = temp_arts_list_for_processing[0]
 
-                if not processed_pl_v and temp_arts_list:
-                    processed_pl_v = temp_arts_list[0]
-                    if processed_pl_v in remaining_arts_v: remaining_arts_v.remove(processed_pl_v)
-                    if processed_specific_v == processed_pl_v: processed_specific_v = None
-
+                # 2. Arts 및 Specific Candidates 결정
+                #    Arts: PL로 사용된 URL을 제외한 모든 이미지
+                #    Specific Candidates: Arts 중에서 첫 번째와 마지막 이미지를 후보로 추가
+                if temp_arts_list_for_processing:
+                    for url in temp_arts_list_for_processing:
+                        if url != processed_pl_v:
+                            if url not in remaining_arts_v:
+                                remaining_arts_v.append(url)
+                    
+                    # remaining_arts_v (PL 제외된 아트 목록)에서 specific 후보 추출
+                    if remaining_arts_v:
+                        # 첫 번째 아트를 specific 후보로 추가
+                        if remaining_arts_v[0] not in specific_candidates_v_list:
+                            specific_candidates_v_list.append(remaining_arts_v[0])
+                        
+                        # 마지막 아트가 첫 번째 아트와 다르고, 리스트에 이미 없다면 추가
+                        if len(remaining_arts_v) > 1 and \
+                           remaining_arts_v[-1] != remaining_arts_v[0] and \
+                           remaining_arts_v[-1] not in specific_candidates_v_list:
+                            specific_candidates_v_list.append(remaining_arts_v[-1])
+                
                 img_urls_dict['pl'] = processed_pl_v if processed_pl_v else ""
-                img_urls_dict['specific_poster_candidate'] = processed_specific_v if processed_specific_v else ""
+                img_urls_dict['specific_poster_candidates'] = specific_candidates_v_list
                 img_urls_dict['arts'] = list(dict.fromkeys(remaining_arts_v))
 
             elif content_type == 'dvd' or content_type == 'bluray':
                 # --- DVD/Blu-ray 타입 이미지 추출 로직 ---
-                # 1. PL (메인 큰 이미지) 추출 시도
                 pl_xpath = '//div[@id="fn-sampleImage-imagebox"]/img/@src'
                 pl_tags = tree.xpath(pl_xpath)
                 raw_pl = pl_tags[0].strip() if pl_tags else ""
+                temp_pl_dvd = ""
                 if raw_pl:
                     if raw_pl.startswith("//"): temp_pl_dvd = "https:" + raw_pl
                     elif not raw_pl.startswith("http"): temp_pl_dvd = py_urllib_parse.urljoin(cls.site_base_url, raw_pl)
                     else: temp_pl_dvd = raw_pl
                     img_urls_dict['pl'] = temp_pl_dvd
-                    logger.debug(f"DMM __img_urls ({content_type}): PL extracted: {temp_pl_dvd}. 'ps' will rely on search cache.")
+                    logger.debug(f"DMM __img_urls ({content_type}): PL extracted: {temp_pl_dvd}.")
 
-                # 2. Arts (샘플 이미지들) 추출 시도 (제한적)
-                #    ul#sample-image-block 내부의 썸네일 이미지를 가져오려고 시도.
-                #    AJAX로 완전히 동적으로 로드된다면 이 방법도 실패할 수 있음.
                 temp_arts_list_dvd = []
-                sample_thumbs_container = tree.xpath('//ul[@id="sample-image-block"]')
-                if sample_thumbs_container:
-                    thumb_img_tags = sample_thumbs_container[0].xpath('.//li[contains(@class, "slick-slide")]//a[contains(@class, "fn-sample-image")]/img')
-                    for img_tag in thumb_img_tags:
-                        art_url_raw = img_tag.attrib.get("data-lazy") or img_tag.attrib.get("src")
-                        if art_url_raw:
-                            art_url = art_url_raw.strip()
-                            if art_url.lower().endswith("dummy_ps.gif"):
-                                continue
-                            if not art_url.startswith("http"):
-                                art_url = py_urllib_parse.urljoin(cls.site_base_url, art_url)
-
-                            if art_url == img_urls_dict['pl']:
-                                continue
-
-                            if art_url not in temp_arts_list_dvd:
-                                temp_arts_list_dvd.append(art_url)
-                    logger.debug(f"DMM __img_urls ({content_type}): Found {len(temp_arts_list_dvd)} potential art thumbnails from ul#sample-image-block.")
-                else:
-                    logger.warning(f"DMM __img_urls ({content_type}): Art thumbnail container (ul#sample-image-block) not found.")
+                try:
+                    sample_thumbs_container = tree.xpath('//ul[@id="sample-image-block"]')
+                    if sample_thumbs_container:
+                        thumb_img_tags = sample_thumbs_container[0].xpath('.//li[contains(@class, "slick-slide")]//a[contains(@class, "fn-sample-image")]/img')
+                        # 좀 더 일반적인 방법: li 하위의 img 태그 (data-lazy 또는 src 사용)
+                        # thumb_img_tags = sample_thumbs_container[0].xpath('.//li//img')
+                        for img_tag in thumb_img_tags:
+                            art_url_raw = img_tag.attrib.get("data-lazy") or img_tag.attrib.get("src")
+                            if art_url_raw:
+                                art_url = art_url_raw.strip()
+                                if art_url.lower().endswith("dummy_ps.gif"): continue
+                                if not art_url.startswith("http"):
+                                    art_url = py_urllib_parse.urljoin(cls.site_base_url, art_url)
+                                if art_url == img_urls_dict['pl']: continue
+                                if art_url not in temp_arts_list_dvd: temp_arts_list_dvd.append(art_url)
+                        logger.debug(f"DMM __img_urls ({content_type}): Found {len(temp_arts_list_dvd)} potential art thumbnails.")
+                    else:
+                        logger.warning(f"DMM __img_urls ({content_type}): Art thumbnail container (ul#sample-image-block) not found.")
+                except Exception as e_dvd_art:
+                    logger.error(f"DMM __img_urls ({content_type}): Error extracting DVD/BR arts: {e_dvd_art}")
 
                 img_urls_dict['arts'] = temp_arts_list_dvd
-                # DVD/Blu-ray는 specific_poster_candidate 개념 사용 안 함
-                img_urls_dict['specific_poster_candidate'] = None
+                
+                # DVD/Blu-ray도 specific_poster_candidates 로직 적용 (arts 리스트 기반)
+                specific_candidates_dvd_list = []
+                if temp_arts_list_dvd:
+                    if temp_arts_list_dvd[0] not in specific_candidates_dvd_list:
+                        specific_candidates_dvd_list.append(temp_arts_list_dvd[0])
+                    if len(temp_arts_list_dvd) > 1 and \
+                       temp_arts_list_dvd[-1] != temp_arts_list_dvd[0] and \
+                       temp_arts_list_dvd[-1] not in specific_candidates_dvd_list:
+                        specific_candidates_dvd_list.append(temp_arts_list_dvd[-1])
+                img_urls_dict['specific_poster_candidates'] = specific_candidates_dvd_list
 
-            else: # 알 수 없는 content_type
+            else: 
                 logger.error(f"DMM __img_urls: Unknown content type '{content_type}' for image extraction.")
 
         except Exception as e:
             logger.exception(f"DMM __img_urls ({content_type}): Error extracting image URLs: {e}")
 
-        logger.debug(f"DMM __img_urls ({content_type}) returning: PL='{img_urls_dict['pl']}', Specific='{img_urls_dict['specific_poster_candidate']}', ArtsCount={len(img_urls_dict['arts'])}.")
+        logger.debug(f"DMM __img_urls ({content_type}) returning: PL='{img_urls_dict['pl']}', SpecificCandidatesCount={len(img_urls_dict['specific_poster_candidates'])}, ArtsCount={len(img_urls_dict['arts'])}.")
         return img_urls_dict
 
 
@@ -918,121 +939,109 @@ class SiteDmm:
                 if web_url_pl_dmm_user: user_custom_landscape_url = web_url_pl_dmm_user; entity.thumb.append(EntityThumb(aspect="landscape", value=user_custom_landscape_url)); skip_default_landscape_logic = True; break
 
         # === 4. 이미지 정보 추출 및 처리 ===
-        # 1. 페이지에서 모든 관련 이미지 URL 수집
         raw_image_urls = cls.__img_urls(tree, content_type=entity.content_type)
         pl_on_page = raw_image_urls.get('pl')
-        specific_on_page = raw_image_urls.get('specific_poster_candidate') # videoa/vr 전용, dvd/br은 None
+        specific_candidates_on_page = raw_image_urls.get('specific_poster_candidates', []) 
         other_arts_on_page = raw_image_urls.get('arts', [])
 
-        # 초기화
         final_poster_source = None
         final_poster_crop_mode = None
         final_landscape_source = None
-        arts_urls_for_processing = [] # 최종 팬아트 목록으로 사용될 변수
+        arts_urls_for_processing = [] 
 
-        # 2. 랜드스케이프 이미지 결정
-        if not skip_default_landscape_logic:
+        if not skip_default_landscape_logic: # 랜드스케이프는 PL을 기본으로 사용
             final_landscape_source = pl_on_page
 
-        # 3. 포스터 이미지 결정
-        if not skip_default_poster_logic:
-            fixed_crop_applied_for_bluray = False # 특수 Blu-ray 고정 크롭 적용 여부
-
-            # --- 특수 Blu-ray 800x442 처리 로직 (가장 먼저 시도) ---
+        if not skip_default_poster_logic: # 포스터 결정 로직
+            fixed_crop_applied_for_bluray = False
+            # --- 특수 Blu-ray 800x442 처리 로직 ---
             if entity.content_type == 'bluray' and pl_on_page:
                 try:
                     pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_on_page, proxy_url=proxy_url)
                     if pl_image_obj_for_fixed_crop:
                         img_width, img_height = pl_image_obj_for_fixed_crop.size
-                        # 조건: 너비가 800이고, 높이가 438에서 442 사이일 때
                         if img_width == 800 and 438 <= img_height <= 442:
-                            logger.info(f"DMM Blu-ray: Detected {img_width}x{img_height} PL ('{pl_on_page}'). Attempting fixed crop (right 380px width, full height).")
-
-                            # 크롭 박스: 오른쪽 380px, 높이는 원본 이미지의 높이(img_height)를 그대로 사용
-                            # left = img_width - 380 
-                            # top = 0
-                            # right = img_width
-                            # bottom = img_height
                             crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
-
                             final_poster_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
                             if final_poster_pil_object:
                                 final_poster_source = final_poster_pil_object 
                                 final_poster_crop_mode = None 
                                 fixed_crop_applied_for_bluray = True
-                                logger.info(f"DMM Blu-ray: Successfully applied fixed crop. Poster source is PIL object ({final_poster_pil_object.size[0]}x{final_poster_pil_object.size[1]}).")
-                            else:
-                                logger.warning(f"DMM Blu-ray: Failed to apply fixed crop to {img_width}x{img_height} image ('{pl_on_page}').")
-                        # elif img_width == 800: # 너비는 맞지만 높이가 범위 밖인 경우 로깅 (선택적)
-                        #    logger.debug(f"DMM Blu-ray: PL ('{pl_on_page}') has width 800 but height {img_height} (not in 438-442 range). Skipping fixed crop.")
-                    # pl_image_obj_for_fixed_crop이 None인 경우는 imopen 실패 (이미 SiteUtil에서 로깅)
                 except Exception as e_fixed_crop_bluray:
-                    logger.error(f"DMM Blu-ray: Error during fixed crop attempt for '{pl_on_page}': {e_fixed_crop_bluray}")
+                    logger.error(f"DMM Blu-ray: Error during fixed crop: {e_fixed_crop_bluray}")
 
-            # 특수 고정 크롭이 적용되지 않았다면, 일반적인 포스터 결정 로직 실행
+
             if not fixed_crop_applied_for_bluray:
                 # videoa 또는 vr 타입일 경우
                 if entity.content_type == 'videoa' or entity.content_type == 'vr':
-                    # 우선순위: PS강제 > (PL+PS & is_hq) > (Specific+PS & is_hq) > (PL+PS & has_hq) > PS > PL > Specific
                     if ps_to_poster_setting and ps_url_from_search_cache:
                         final_poster_source = ps_url_from_search_cache
                     elif pl_on_page and ps_url_from_search_cache and SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url):
                         final_poster_source = pl_on_page
-                    elif specific_on_page and ps_url_from_search_cache and SiteUtil.is_hq_poster(ps_url_from_search_cache, specific_on_page, proxy_url=proxy_url):
-                        final_poster_source = specific_on_page
-                    elif pl_on_page and ps_url_from_search_cache:
-                        crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
-                        if crop_pos : final_poster_source = pl_on_page; final_poster_crop_mode = crop_pos
-                        else: final_poster_source = ps_url_from_search_cache
-                    elif ps_url_from_search_cache : final_poster_source = ps_url_from_search_cache
-                    elif pl_on_page: final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting 
-                    elif specific_on_page: final_poster_source = specific_on_page
-                    else: final_poster_source = None
+                    else:
+                        specific_found = False
+                        if ps_url_from_search_cache:
+                            for sp_candidate in specific_candidates_on_page:
+                                if SiteUtil.is_hq_poster(ps_url_from_search_cache, sp_candidate, proxy_url=proxy_url):
+                                    final_poster_source = sp_candidate
+                                    specific_found = True
+                                    break
+                        if not specific_found:
+                            if pl_on_page and ps_url_from_search_cache:
+                                crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
+                                if crop_pos : final_poster_source = pl_on_page; final_poster_crop_mode = crop_pos
+                                else: final_poster_source = ps_url_from_search_cache
+                            elif ps_url_from_search_cache : final_poster_source = ps_url_from_search_cache
+                            elif pl_on_page: final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting 
+                            elif specific_candidates_on_page: final_poster_source = specific_candidates_on_page[0]
+                            else: final_poster_source = None
 
                 # dvd 또는 일반 bluray (800x442 아닌 경우) 타입일 경우
                 elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
-                    # 우선순위: PS강제 > (PL+PS & has_hq) > (PL+PS & is_hq) > PS > PL
                     if ps_to_poster_setting and ps_url_from_search_cache:
                         final_poster_source = ps_url_from_search_cache
                     elif pl_on_page and ps_url_from_search_cache:
                         crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
                         if crop_pos: final_poster_source = pl_on_page; final_poster_crop_mode = crop_pos
                         elif SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url): final_poster_source = pl_on_page 
-                        else: final_poster_source = ps_url_from_search_cache
+                        else:
+                            specific_found_dvd = False
+                            if ps_url_from_search_cache:
+                                for sp_candidate_dvd in specific_candidates_on_page:
+                                    if SiteUtil.is_hq_poster(ps_url_from_search_cache, sp_candidate_dvd, proxy_url=proxy_url):
+                                        final_poster_source = sp_candidate_dvd
+                                        specific_found_dvd = True
+                                        break
+                            if not specific_found_dvd:
+                                final_poster_source = ps_url_from_search_cache
                     elif ps_url_from_search_cache: final_poster_source = ps_url_from_search_cache
                     elif pl_on_page: final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting
+                    elif specific_candidates_on_page: final_poster_source = specific_candidates_on_page[0]
                     else: final_poster_source = None
 
-            if final_poster_source is None: # 모든 시도 후에도 포스터 소스가 없다면 로깅
+            if final_poster_source is None and ps_url_from_search_cache and not ps_to_poster_setting:
+                logger.debug(f"DMM ({entity.content_type}): No poster source determined, falling back to cached PS: {ps_url_from_search_cache}")
+                final_poster_source = ps_url_from_search_cache
+            elif final_poster_source is None:
                 logger.warning(f"DMM ({entity.content_type}): No poster source could be determined for {code}.")
 
-        # 4. 팬아트 목록 결정 (arts_urls_for_processing)
-        #    - 초기 후보: specific_on_page (videoa/vr 경우) + other_arts_on_page
-        #    - 제외 대상: final_landscape_source, final_poster_source
-
+        # 4. 팬아트 목록 결정
         potential_fanart_candidates = []
-        if entity.content_type == 'videoa' or entity.content_type == 'vr':
-            if specific_on_page: # specific 후보가 있다면 팬아트 후보 목록의 가장 앞에 추가
-                potential_fanart_candidates.append(specific_on_page)
-        potential_fanart_candidates.extend(other_arts_on_page) # 나머지 arts 추가
+        potential_fanart_candidates.extend(specific_candidates_on_page)
+        potential_fanart_candidates.extend(other_arts_on_page) 
 
-        urls_used_as_thumb = set() # 포스터 또는 랜드스케이프로 사용된 URL
+        urls_used_as_thumb = set()
         if final_landscape_source and not skip_default_landscape_logic:
             urls_used_as_thumb.add(final_landscape_source)
+        if final_poster_source and not skip_default_poster_logic and isinstance(final_poster_source, str):
+            urls_used_as_thumb.add(final_poster_source)
 
-        if final_poster_source and not skip_default_poster_logic:
-            if isinstance(final_poster_source, str): # 문자열(URL 또는 파일 경로)인 경우에만 추가
-                urls_used_as_thumb.add(final_poster_source)
-
-        # 순서 유지를 위해 list와 set을 함께 사용한 중복 제거
         temp_unique_fanarts = []
         seen_for_temp_unique = set()
         for art_url in potential_fanart_candidates:
             if art_url and art_url not in urls_used_as_thumb and art_url not in seen_for_temp_unique:
                 temp_unique_fanarts.append(art_url)
                 seen_for_temp_unique.add(art_url)
-
-        # max_arts 제한 적용
         arts_urls_for_processing = temp_unique_fanarts[:max_arts]
 
         logger.debug(f"DMM ({entity.content_type}): Final Images Decision - Poster='{final_poster_source}' (Crop='{final_poster_crop_mode}'), Landscape='{final_landscape_source}', Fanarts_to_process({len(arts_urls_for_processing)})='{arts_urls_for_processing[:3]}...'")
