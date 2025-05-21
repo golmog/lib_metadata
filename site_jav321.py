@@ -619,52 +619,64 @@ class SiteJav321:
                         temp_poster_step1 = valid_ps_candidate
                     logger.debug(f"Jav321: After general poster logic: temp_poster_step1='{temp_poster_step1}', temp_crop_step1='{temp_crop_step1}'")
 
-                    # 4-A-6. MGS 스타일 특별 처리 시도
-                    attempt_special_local = False
+                    title_for_vr_check = entity.title if entity.title else "" 
+                    is_vr_content = title_for_vr_check.lower().startswith('[vr]') or \
+                                    title_for_vr_check.lower().startswith('【vr】')
 
-                    # 조건: 일반 로직 결과 PS가 포스터로 선택되었는가?
-                    general_logic_chose_ps = (temp_poster_step1 == valid_ps_candidate)
+                    skip_mgs_for_vr_and_use_ps = False
+                    # 조건: 일반 로직 결과가 PS이고, VR 콘텐츠이며, PS 강제 설정이 아니고, 유효 PS가 있을 때
+                    if temp_poster_step1 == valid_ps_candidate and \
+                       is_vr_content and \
+                       not ps_to_poster_setting and \
+                       valid_ps_candidate:
+                        skip_mgs_for_vr_and_use_ps = True
+                        logger.info(f"Jav321: VR content ('{title_for_vr_check}') and general logic chose PS. Skipping MGS style processing and using PS ('{valid_ps_candidate}') as poster.")
 
-                    if valid_pl_candidate and valid_ps_candidate and \
-                        not ps_to_poster_setting and general_logic_chose_ps:
-                        # 추가 조건: PL 이미지가 MGS 스타일 처리에 적합한 비율인가?
-                        try:
-                            pl_image_for_check = SiteUtil.imopen(valid_pl_candidate, proxy_url=proxy_url)
-                            if pl_image_for_check:
-                                pl_width, pl_height = pl_image_for_check.size
-                                if pl_height > 0 : # 높이가 0보다 커야 비율 계산 가능
-                                    original_pl_ratio = pl_width / pl_height
-                                    half_pl_width = pl_width / 2 # 절반 조각의 너비
-                                    # pl_height는 절반 조각의 높이와 동일
+                    # 4-A-6. MGS 스타일 특별 처리 시도 (VR 스킵 조건이 False일 때만)
+                    if not skip_mgs_for_vr_and_use_ps:
+                        attempt_special_local = False
+                        general_logic_chose_ps = (temp_poster_step1 == valid_ps_candidate)
 
-                                    # 조건 A: 원본 PL이 "충분히 가로로 긴가?" (임계값 1.7)
-                                    is_original_pl_very_wide = (original_pl_ratio >= 1.7)
-
-                                    # 조건 B: (임계값 1.2 적용) 원본 PL을 반으로 잘랐을 때, 그 조각의 높이가 너비의 1.2배를 넘지 않는가?
-                                    is_half_cut_shape_acceptable = False 
-                                    if half_pl_width > 0: 
-                                        is_half_cut_shape_acceptable = (pl_height <= half_pl_width * 1.2)
-
-                                    if is_original_pl_very_wide and is_half_cut_shape_acceptable:
-                                        attempt_special_local = True
+                        if valid_pl_candidate and valid_ps_candidate and \
+                           not ps_to_poster_setting and general_logic_chose_ps:
+                            try:
+                                pl_image_for_check = SiteUtil.imopen(valid_pl_candidate, proxy_url=proxy_url)
+                                if pl_image_for_check:
+                                    pl_width, pl_height = pl_image_for_check.size
+                                    if pl_height > 0 : 
+                                        original_pl_ratio = pl_width / pl_height
+                                        half_pl_width = pl_width / 2
+                                        is_original_pl_very_wide = (original_pl_ratio >= 1.7)
+                                        is_half_cut_shape_acceptable = False 
+                                        if half_pl_width > 0: 
+                                            is_half_cut_shape_acceptable = (pl_height <= half_pl_width * 1.2)
+                                        if is_original_pl_very_wide and is_half_cut_shape_acceptable:
+                                            attempt_special_local = True
+                                else:
+                                    logger.warning(f"Jav321: Could not open PL ('{valid_pl_candidate}') for MGS style eligibility check (imopen failed).")
+                            except Exception as e_ratio_check:
+                                logger.error(f"Jav321: Error during PL MGS style eligibility check: {e_ratio_check}")
+                        
+                        if attempt_special_local:
+                            logger.debug(f"Jav321: Attempting MGS style processing for PL ('{valid_pl_candidate}').")
+                            _temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url)
+                            if _temp_filepath and os.path.exists(_temp_filepath): 
+                                jav321_special_poster_filepath = _temp_filepath # 기존 변수명 사용
+                                logger.info(f"Jav321: MGS style processing successful. Using temp file: {jav321_special_poster_filepath}")
                             else:
-                                logger.warning(f"Jav321: Could not open PL ('{valid_pl_candidate}') for MGS style eligibility check.")
-                        except Exception as e_ratio_check:
-                            logger.error(f"Jav321: Error during PL MGS style eligibility check: {e_ratio_check}")
-
-                    if attempt_special_local:
-                        logger.debug(f"Jav321: Attempting MGS style processing for PL ('{valid_pl_candidate}').")
-                        _temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url)
-                        if _temp_filepath and os.path.exists(_temp_filepath): 
-                            jav321_special_poster_filepath = _temp_filepath
+                                logger.debug(f"Jav321: MGS style processing did not yield a valid file for PL ('{valid_pl_candidate}').")
 
                     # 4-A-7. 최종 포스터 소스 및 크롭 모드 결정
-                    if jav321_special_poster_filepath: 
+                    if skip_mgs_for_vr_and_use_ps:
+                        final_poster_source = valid_ps_candidate 
+                        final_poster_crop_mode = None
+                    elif jav321_special_poster_filepath:
                         final_poster_source = jav321_special_poster_filepath
-                        final_poster_crop_mode = None # MGS 스타일은 이미 잘렸으므로 크롭 불필요
-                    else: 
+                        final_poster_crop_mode = None 
+                    else:
                         final_poster_source = temp_poster_step1
                         final_poster_crop_mode = temp_crop_step1
+
                     logger.debug(f"Jav321: Final poster decision: source='{final_poster_source}', crop='{final_poster_crop_mode}'")
 
                 # --- B. 랜드스케이프 소스 결정 ---

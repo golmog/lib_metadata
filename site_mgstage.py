@@ -405,26 +405,41 @@ class SiteMgstageAma(SiteMgstage):
                     if not resolved_poster_url_step1 and ps_url_detail_page_default: 
                         resolved_poster_url_step1 = ps_url_detail_page_default
 
-                    # MGS 스타일 특별 처리
-                    mgs_special_poster_filepath = None
-                    attempt_mgs_special_local = False
-                    if pl_url_detail_page_default and ps_url_detail_page_default and \
-                       not ps_to_poster_setting and resolved_poster_url_step1 == ps_url_detail_page_default:
-                        attempt_mgs_special_local = True
+                    title_for_vr_check = entity.title if entity.title else "" 
+                    is_vr_content = title_for_vr_check.lower().startswith('[vr]') or \
+                                    title_for_vr_check.lower().startswith('【vr】')
 
-                    if attempt_mgs_special_local:
-                        temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
-                        if temp_filepath and os.path.exists(temp_filepath): mgs_special_poster_filepath = temp_filepath
+                    skip_mgs_for_vr_and_use_ps = False
+                    if resolved_poster_url_step1 == ps_url_detail_page_default and \
+                       is_vr_content and \
+                       not ps_to_poster_setting and \
+                       ps_url_detail_page_default:
+                        skip_mgs_for_vr_and_use_ps = True
+                        logger.info(f"MGStage ({cls.module_char}): VR content ('{title_for_vr_check}') and general logic chose PS. Skipping MGS style processing and using PS ('{ps_url_detail_page_default}') as poster.")
 
-                    if mgs_special_poster_filepath: 
+                    if not skip_mgs_for_vr_and_use_ps:
+                        attempt_mgs_special_local = False
+                        if pl_url_detail_page_default and ps_url_detail_page_default and \
+                           not ps_to_poster_setting and resolved_poster_url_step1 == ps_url_detail_page_default:
+                            attempt_mgs_special_local = True 
+
+                        if attempt_mgs_special_local:
+                            logger.debug(f"MGStage ({cls.module_char}): Attempting MGS style processing for PL ('{pl_url_detail_page_default}').")
+                            temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
+                            if temp_filepath and os.path.exists(temp_filepath): 
+                                mgs_special_poster_filepath = temp_filepath
+                                logger.info(f"MGStage ({cls.module_char}): MGS style processing successful. Using: {mgs_special_poster_filepath}")
+
+                    # 최종 포스터 결정
+                    if skip_mgs_for_vr_and_use_ps:
+                        final_poster_source = ps_url_detail_page_default
+                        final_poster_crop_mode = None
+                    elif mgs_special_poster_filepath:
                         final_poster_source = mgs_special_poster_filepath
                         final_poster_crop_mode = None
-                    else: 
+                    else:
                         final_poster_source = resolved_poster_url_step1
                         final_poster_crop_mode = resolved_crop_mode_step1
-
-                if not skip_default_landscape_logic: final_landscape_url_source = pl_url_detail_page_default
-                arts_urls_for_processing = arts_urls_page_default
 
                 # --- 이미지 최종 처리 및 entity에 추가 (이미지 서버 사용 안 할 때) ---
                 if not (use_image_server and image_mode == '4'):
@@ -728,11 +743,11 @@ class SiteMgstageDvd(SiteMgstage):
                     elif pl_url_detail_page_default and crop_mode_setting : 
                         resolved_poster_url_step1 = pl_url_detail_page_default
                         resolved_crop_mode_step1 = crop_mode_setting
-                    
-                    # --- Specific Art 후보들을 포스터로 사용 시도 (기존 로직 확장) ---
+
+                    # --- Specific Art 후보들을 포스터로 사용 시도 ---
                     # (일반 로직에서 포스터가 아직 결정되지 않았고, 아트가 있으며, PS 강제 설정이 아닐 때)
                     if not resolved_poster_url_step1 and arts_urls_page_default and not ps_to_poster_setting:
-                        
+
                         specific_art_candidates_mg = []
                         if arts_urls_page_default:
                             # 첫 번째 아트를 specific 후보로 추가
@@ -758,17 +773,42 @@ class SiteMgstageDvd(SiteMgstage):
                     # 최종 Fallback (그래도 포스터 없으면 PS 사용)
                     if not resolved_poster_url_step1 and ps_url_detail_page_default: 
                         resolved_poster_url_step1 = ps_url_detail_page_default
-                    
-                    mgs_special_poster_filepath = None
-                    attempt_mgs_special_local = False
-                    if pl_url_detail_page_default and ps_url_detail_page_default and not ps_to_poster_setting and resolved_poster_url_step1 == ps_url_detail_page_default:
-                        attempt_mgs_special_local = True
-                    if attempt_mgs_special_local:
-                        temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
-                        if temp_filepath and os.path.exists(temp_filepath): mgs_special_poster_filepath = temp_filepath
 
-                    if mgs_special_poster_filepath: final_poster_source = mgs_special_poster_filepath; final_poster_crop_mode = None
-                    else: final_poster_source = resolved_poster_url_step1; final_poster_crop_mode = resolved_crop_mode_step1
+                    title_for_vr_check = entity.title if entity.title else "" 
+                    is_vr_content = title_for_vr_check.lower().startswith('[vr]') or \
+                                    title_for_vr_check.lower().startswith('【vr】')
+
+                    skip_mgs_for_vr_and_use_ps = False
+                    if resolved_poster_url_step1 == ps_url_detail_page_default and \
+                       is_vr_content and \
+                       not ps_to_poster_setting and \
+                       ps_url_detail_page_default:
+                        skip_mgs_for_vr_and_use_ps = True
+                        logger.info(f"MGStage ({cls.module_char}): VR content ('{title_for_vr_check}') and general logic chose PS. Skipping MGS style processing and using PS ('{ps_url_detail_page_default}') as poster.")
+
+                    if not skip_mgs_for_vr_and_use_ps:
+                        attempt_mgs_special_local = False
+                        if pl_url_detail_page_default and ps_url_detail_page_default and \
+                           not ps_to_poster_setting and resolved_poster_url_step1 == ps_url_detail_page_default:
+                            attempt_mgs_special_local = True 
+
+                        if attempt_mgs_special_local:
+                            logger.debug(f"MGStage ({cls.module_char}): Attempting MGS style processing for PL ('{pl_url_detail_page_default}').")
+                            temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
+                            if temp_filepath and os.path.exists(temp_filepath): 
+                                mgs_special_poster_filepath = temp_filepath
+                                logger.info(f"MGStage ({cls.module_char}): MGS style processing successful. Using: {mgs_special_poster_filepath}")
+
+                    # 최종 포스터 결정
+                    if skip_mgs_for_vr_and_use_ps:
+                        final_poster_source = ps_url_detail_page_default
+                        final_poster_crop_mode = None
+                    elif mgs_special_poster_filepath:
+                        final_poster_source = mgs_special_poster_filepath
+                        final_poster_crop_mode = None
+                    else:
+                        final_poster_source = resolved_poster_url_step1
+                        final_poster_crop_mode = resolved_crop_mode_step1
 
                 if not skip_default_landscape_logic: final_landscape_url_source = pl_url_detail_page_default
                 arts_urls_for_processing = arts_urls_page_default
