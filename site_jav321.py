@@ -574,19 +574,25 @@ class SiteJav321:
                         if not is_pl_detail_placeholder: valid_pl_candidate = pl_from_detail_page
 
                     # 4-A-3. 일반적인 포스터 결정 로직 (MGStage 방식 기반)
-                    if ps_to_poster_setting and valid_ps_candidate: 
+                    # temp_poster_step1 과 temp_crop_step1 은 이 블록 이전에 None 으로 초기화되어 있어야 함 (이미 그렇게 되어 있음)
+                    if ps_to_poster_setting and valid_ps_candidate:
                         temp_poster_step1 = valid_ps_candidate
-                    elif crop_mode_setting and valid_pl_candidate: 
-                        temp_poster_step1 = valid_pl_candidate; temp_crop_step1 = crop_mode_setting
+                        # temp_crop_step1 은 None으로 유지
+                    elif crop_mode_setting and valid_pl_candidate:
+                        temp_poster_step1 = valid_pl_candidate
+                        temp_crop_step1 = crop_mode_setting
                     elif valid_pl_candidate and valid_ps_candidate: # PS, PL 모두 유효할 때 HQ 로직
                         loc = SiteUtil.has_hq_poster(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url)
-                        if loc: temp_poster_step1 = valid_pl_candidate; temp_crop_step1 = loc
-                        elif SiteUtil.is_hq_poster(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url): temp_poster_step1 = valid_pl_candidate
-                        else: temp_poster_step1 = valid_ps_candidate
-                    elif valid_ps_candidate: # PS만 유효할 때
-                        temp_poster_step1 = valid_ps_candidate
-                    elif valid_pl_candidate and crop_mode_setting : # PL만 유효하고 크롭 설정 있을 때
-                        temp_poster_step1 = valid_pl_candidate; temp_crop_step1 = crop_mode_setting
+                        if loc:
+                            temp_poster_step1 = valid_pl_candidate
+                            temp_crop_step1 = loc
+                        elif SiteUtil.is_hq_poster(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url):
+                            temp_poster_step1 = valid_pl_candidate
+                    elif valid_ps_candidate and not valid_pl_candidate and not crop_mode_setting and not ps_to_poster_setting:
+                        pass
+                    elif valid_pl_candidate and crop_mode_setting and not ps_to_poster_setting:
+                        temp_poster_step1 = valid_pl_candidate
+                        temp_crop_step1 = crop_mode_setting
 
                     # 4-A-4. Specific Art 후보를 포스터로 사용 시도 (일반 로직에서 포스터 못 정했고, PS강제설정 아닐 때)
                     if not temp_poster_step1 and not ps_to_poster_setting:
@@ -613,11 +619,14 @@ class SiteJav321:
                                     temp_poster_step1 = sp_candidate
                                     temp_crop_step1 = None
                                     break
-
+                    
                     # 4-A-5. 최종 Fallback (그래도 포스터 없으면 유효 PS 사용)
                     if not temp_poster_step1 and valid_ps_candidate:
+                        logger.debug(f"Jav321: Fallback to PS as poster after PL and Art checks failed.")
                         temp_poster_step1 = valid_ps_candidate
-                    logger.debug(f"Jav321: After general poster logic: temp_poster_step1='{temp_poster_step1}', temp_crop_step1='{temp_crop_step1}'")
+                        temp_crop_step1 = None # PS는 보통 크롭 없이 사용
+
+                    logger.debug(f"Jav321: After general poster logic (including art check): temp_poster_step1='{temp_poster_step1}', temp_crop_step1='{temp_crop_step1}'")
 
                     title_for_vr_check = entity.title if entity.title else "" 
                     is_vr_content = title_for_vr_check.lower().startswith('[vr]') or \
