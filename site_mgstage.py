@@ -786,6 +786,8 @@ class SiteMgstageDvd(SiteMgstage):
                         skip_mgs_for_vr_and_use_ps = True
                         logger.info(f"MGStage ({cls.module_char}): VR content ('{title_for_vr_check}') and general logic chose PS. Skipping MGS style processing and using PS ('{ps_url_detail_page_default}') as poster.")
 
+                    mgs_special_poster_filepath = None
+
                     if not skip_mgs_for_vr_and_use_ps:
                         attempt_mgs_special_local = False
                         if pl_url_detail_page_default and ps_url_detail_page_default and \
