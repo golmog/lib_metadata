@@ -707,7 +707,10 @@ class SiteDmm:
                     if "品番" in key_v:
                         value_pid_v = value_text_all_v; match_id_v = cls.PTN_ID.search(value_pid_v); id_before_v = None
                         if match_id_v: id_before_v = match_id_v.group(0); value_pid_v = value_pid_v.lower().replace(id_before_v.lower(), "zzid") # 소문자 변환 후 치환
-                        match_real_v = cls.PTN_SEARCH_REAL_NO.match(value_pid_v); formatted_code_v = value_text_all_v.upper()
+
+                        match_real_v = cls.PTN_SEARCH_REAL_NO.search(value_pid_v) 
+                        
+                        formatted_code_v = value_text_all_v.upper() # 기본값: 원본 품번 문자열
                         if match_real_v:
                             label_v = match_real_v.group("real").upper()
                             if id_before_v is not None: label_v = label_v.replace("ZZID", id_before_v.upper())
@@ -715,6 +718,27 @@ class SiteDmm:
                             formatted_code_v = f"{label_v}-{num_str_v}"
                             if entity.tag is None: entity.tag = []
                             if label_v not in entity.tag: entity.tag.append(label_v)
+                        else:
+                            # PTN_SEARCH_REAL_NO.search 실패 시 폴백 로직
+                            logger.warning(f"DMM Info ({entity.content_type}): PTN_SEARCH_REAL_NO failed for '{value_pid_v}'. Applying fallback for UI code.")
+
+                            # 첫번째 문자열 그룹과 그 뒤 숫자 그룹 추출
+                            m_fallback_v = re.match(r"([a-zA-Z]+)(\d+)", value_pid_v, re.I) # 원본 value_pid_v 사용
+                            if m_fallback_v:
+                                label_fallback_v = m_fallback_v.group(1).upper()
+                                number_fallback_v_str = m_fallback_v.group(2)
+                                try:
+                                    # 숫자 부분만 사용하고 3자리로 패딩
+                                    formatted_code_v = f"{label_fallback_v}-{str(int(number_fallback_v_str)).zfill(3)}"
+                                except ValueError:
+                                    # 숫자 변환 실패 시, 문자열 부분 + 원래 숫자 문자열 사용
+                                    formatted_code_v = f"{label_fallback_v}-{number_fallback_v_str}"
+                                logger.debug(f"DMM Info ({entity.content_type}): Fallback UI code set to '{formatted_code_v}' from '{value_pid_v}'.")
+                            else:
+                                # 이것도 실패하면 그냥 원본 대문자 사용
+                                formatted_code_v = value_text_all_v.upper()
+                                logger.warning(f"DMM Info ({entity.content_type}): Fallback UI code extraction failed for '{value_pid_v}'. Using original uppercase from HTML: '{formatted_code_v}'.")
+
                         ui_code_for_image = formatted_code_v # 확정된 품번
                         entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image # 품번을 타이틀로
                         entity.ui_code = ui_code_for_image
@@ -817,7 +841,10 @@ class SiteDmm:
                     if "品番" in key_dvd:
                         value_pid_dvd = value_text_all_dvd; match_id_dvd = cls.PTN_ID.search(value_pid_dvd); id_before_dvd = None
                         if match_id_dvd: id_before_dvd = match_id_dvd.group(0); value_pid_dvd = value_pid_dvd.lower().replace(id_before_dvd.lower(), "zzid")
-                        match_real_dvd = cls.PTN_SEARCH_REAL_NO.match(value_pid_dvd); formatted_code_dvd = value_text_all_dvd.upper()
+
+                        match_real_dvd = cls.PTN_SEARCH_REAL_NO.search(value_pid_dvd)
+                        
+                        formatted_code_dvd = value_text_all_dvd.upper() # 기본값: 원본 품번 문자열
                         if match_real_dvd:
                             label_dvd = match_real_dvd.group("real").upper()
                             if id_before_dvd is not None: label_dvd = label_dvd.replace("ZZID", id_before_dvd.upper())
@@ -825,6 +852,24 @@ class SiteDmm:
                             formatted_code_dvd = f"{label_dvd}-{num_str_dvd}"
                             if entity.tag is None: entity.tag = []
                             if label_dvd not in entity.tag: entity.tag.append(label_dvd)
+                        else:
+                            # PTN_SEARCH_REAL_NO.search 실패 시 폴백 로직
+                            logger.warning(f"DMM Info ({entity.content_type}): PTN_SEARCH_REAL_NO failed for '{value_pid_dvd}'. Applying fallback for UI code.")
+                            
+                            # 마찬가지로 h_ 제거 로직 불필요
+                            m_fallback_dvd = re.match(r"([a-zA-Z]+)(\d+)", value_pid_dvd, re.I) # 원본 value_pid_dvd 사용
+                            if m_fallback_dvd:
+                                label_fallback_dvd = m_fallback_dvd.group(1).upper()
+                                number_fallback_dvd_str = m_fallback_dvd.group(2)
+                                try:
+                                    formatted_code_dvd = f"{label_fallback_dvd}-{str(int(number_fallback_dvd_str)).zfill(3)}"
+                                except ValueError:
+                                    formatted_code_dvd = f"{label_fallback_dvd}-{number_fallback_dvd_str}"
+                                logger.debug(f"DMM Info ({entity.content_type}): Fallback UI code set to '{formatted_code_dvd}' from '{value_pid_dvd}'.")
+                            else:
+                                formatted_code_dvd = value_text_all_dvd.upper() # HTML에서 가져온 원본 품번 문자열 사용
+                                logger.warning(f"DMM Info ({entity.content_type}): Fallback UI code extraction failed for '{value_pid_dvd}'. Using original uppercase from HTML: '{formatted_code_dvd}'.")
+
                         ui_code_for_image = formatted_code_dvd
                         entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image
                         entity.ui_code = ui_code_for_image
