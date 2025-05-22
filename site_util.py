@@ -181,10 +181,10 @@ class SiteUtil:
     @classmethod
     def get_mgs_half_pl_poster_info_local(cls, ps_url: str, pl_url: str, proxy_url: str = None):
         """
-        MGStage용으로 pl 이미지를 특별 처리합니다. (로컬 임시 파일 사용, Fallback 강화)
+        MGStage용으로 pl 이미지를 특별 처리합니다. (로컬 임시 파일 사용)
         pl 이미지를 가로로 반으로 자르고 (오른쪽 우선), 각 절반의 중앙 부분을 ps와 비교합니다.
-        is_hq_poster 검사 성공 시 해당 결과를 사용하고,
-        검사 실패 시에는 성공적으로 크롭된 첫 번째 후보(오른쪽 우선)를 사용합니다.
+        is_hq_poster 검사 성공 시에만 해당 결과를 사용하고,
+        모든 검사 실패 시에는 None, None, None을 반환합니다.
         """
         try:
             logger.debug(f"MGS Special Local: Trying get_mgs_half_pl_poster_info_local for ps='{ps_url}', pl='{pl_url}'")
@@ -198,13 +198,9 @@ class SiteUtil:
                 return None, None, None
 
             pl_width, pl_height = pl_image_original.size
-            if pl_width < pl_height * 1.1:
+            if pl_width < pl_height * 1.1: # 가로가 세로의 1.1배보다 작으면 충분히 넓지 않다고 판단
                 logger.debug(f"MGS Special Local: pl_image_original not wide enough ({pl_width}x{pl_height}). Skipping.")
                 return None, None, None
-
-            # 최종 결과를 저장할 변수들
-            result_filepath = None
-            fallback_candidate_obj = None # is_hq_poster 실패 시 사용할 첫 번째 성공 크롭 객체
 
             # 처리 순서 정의: 오른쪽 먼저
             candidate_sources = []
@@ -224,7 +220,7 @@ class SiteUtil:
 
                 if center_cropped_candidate_obj:
                     logger.debug(f"MGS Special Local: Successfully cropped center from {obj_name}.")
-                    
+
                     # is_hq_poster 유사도 검사 시도
                     logger.debug(f"MGS Special Local: Comparing ps_image with cropped candidate from {obj_name}")
                     is_similar = cls.is_hq_poster(ps_image, center_cropped_candidate_obj)
@@ -233,7 +229,6 @@ class SiteUtil:
                         logger.info(f"MGS Special Local: Similarity check PASSED for {obj_name}. This is the best match.")
                         # 성공! 이 객체를 저장하고 반환
                         try:
-                            # 임시 파일 저장 로직 (이전과 동일)
                             img_format = center_cropped_candidate_obj.format if center_cropped_candidate_obj.format else "JPEG"
                             ext = img_format.lower().replace("jpeg", "jpg")
                             if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
@@ -243,51 +238,25 @@ class SiteUtil:
                             save_params = {}
                             if ext in ['jpg', 'webp']: save_params['quality'] = 95
                             elif ext == 'png': save_params['optimize'] = True
-                            center_cropped_candidate_obj.save(temp_filepath, **save_params)
+
+                            # JPEG 저장 시 RGB 변환 필요할 수 있음
+                            img_to_save = center_cropped_candidate_obj
+                            if ext == 'jpg' and img_to_save.mode not in ('RGB', 'L'):
+                                img_to_save = img_to_save.convert('RGB')
+
+                            img_to_save.save(temp_filepath, **save_params)
                             logger.info(f"MGS Special Local: Saved similarity match to temp file: {temp_filepath}")
                             return temp_filepath, None, pl_url # 성공 반환 (파일경로, crop=None, 원본pl)
                         except Exception as e_save_hq:
                             logger.exception(f"MGS Special Local: Failed to save HQ similarity match from {obj_name}: {e_save_hq}")
-                            # 저장 실패 시 루프 계속 진행 (fallback 가능성 고려)
-                    
+
                     else: # is_hq_poster 검사 실패
                         logger.info(f"MGS Special Local: Similarity check FAILED for {obj_name}.")
-                        # fallback 후보로 저장 (아직 fallback 후보가 없다면)
-                        if fallback_candidate_obj is None:
-                            logger.debug(f"MGS Special Local: Storing cropped candidate from {obj_name} as fallback.")
-                            fallback_candidate_obj = center_cropped_candidate_obj
-                        # 루프 계속 (왼쪽 절반에서 더 좋은 결과(is_similar=True)가 나올 수 있으므로)
-                
                 else: # 크롭 자체 실패
                     logger.warning(f"MGS Special Local: Failed to crop center from {obj_name}.")
-            
-            # 루프 종료 후: is_hq_poster 매칭이 없었는지 확인
-            if result_filepath is None: # is_hq_poster 성공 케이스가 없었음
-                if fallback_candidate_obj: # fallback 후보가 있다면 사용
-                    logger.info("MGS Special Local: No similarity match found, using the first successfully cropped candidate as fallback.")
-                    try:
-                        # Fallback 후보 저장
-                        img_format = fallback_candidate_obj.format if fallback_candidate_obj.format else "JPEG"
-                        ext = img_format.lower().replace("jpeg", "jpg")
-                        if ext not in ['jpg', 'png', 'webp']: ext = 'jpg'
-                        temp_filename = f"mgs_temp_poster_fallback_{int(time.time())}_{os.urandom(4).hex()}.{ext}"
-                        temp_filepath = os.path.join(path_data, "tmp", temp_filename)
-                        os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
-                        save_params = {}
-                        if ext in ['jpg', 'webp']: save_params['quality'] = 95
-                        elif ext == 'png': save_params['optimize'] = True
-                        fallback_candidate_obj.save(temp_filepath, **save_params)
-                        logger.info(f"MGS Special Local: Saved fallback candidate to temp file: {temp_filepath}")
-                        return temp_filepath, None, pl_url # Fallback 성공 반환
-                    except Exception as e_save_fb:
-                        logger.exception(f"MGS Special Local: Failed to save fallback candidate: {e_save_fb}")
-                        # Fallback 저장 실패 시 최종 실패
-                else: # Fallback 후보조차 없음 (양쪽 다 크롭 실패)
-                    logger.warning("MGS Special Local: Cropping failed for both halves. Cannot provide fallback.")
-            
-            # 최종적으로 아무것도 반환되지 못했다면 실패
-            logger.warning("MGS Special Local: Failed to find or create a suitable poster.")
-            return None, None, None
+
+            logger.warning("MGS Special Local: All similarity checks failed. No suitable poster found.")
+            return None, None, None # 최종적으로 실패 반환
 
         except Exception as e:
             logger.exception(f"MGS Special Local: Error in get_mgs_half_pl_poster_info_local: {e}")
