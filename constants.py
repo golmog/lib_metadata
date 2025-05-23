@@ -3065,7 +3065,7 @@ MGS_CODE_LEN = {
     "203VERUS": 4,
     "220SILK": 4,
     "229SCUTE": 4,
-    "230OREC": 4,
+    "230OREC": 3,
     "234DH": 2,
     "234DOM": 2,
     "234GB": 2,
