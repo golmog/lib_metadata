@@ -2648,6 +2648,7 @@ MGS_LABEL_MAP = {
     "YAN": ["232YAN"],
     "YARI": ["547YARI"],
     "YARIA": ["547YARIA"],
+    "YARIM": ["845YARIM"],
     "YARR": ["756YARR"],
     "YAT": ["077YAT"],
     "YBB": ["232YBB"],
