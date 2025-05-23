@@ -932,13 +932,14 @@ class SiteMgstageDvd(SiteMgstage):
                             logger.debug(f"MGStage ({cls.module_char}): MGS special processing conditions not met. PL='{pl_url_detail_page_default}', PS='{ps_url_detail_page_default}', ps_to_poster='{ps_to_poster_setting}', resolved_poster='{resolved_poster_url_step1}'")
 
                         if attempt_mgs_special_local:
-                            logger.info(f"MGStage ({cls.module_char}): Attempting MGS style processing for PL ('{pl_url_detail_page_default}').") # 로그 레벨 info로 변경
+                            logger.info(f"MGStage ({cls.module_char}): Attempting MGS style processing for PL ('{pl_url_detail_page_default}').")
                             temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_detail_page_default, pl_url_detail_page_default, proxy_url=proxy_url)
+                            
                             if temp_filepath and os.path.exists(temp_filepath):
                                 mgs_special_poster_filepath = temp_filepath
                                 logger.info(f"MGStage ({cls.module_char}): MGS style processing successful. Using: {mgs_special_poster_filepath}")
                             else:
-                                logger.debug(f"MGStage ({cls.module_char}): MGS style processing did not yield a file for PL ('{pl_url_detail_page_default}').")
+                                logger.info(f"MGStage ({cls.module_char}): MGS style processing FAILED or did not yield a file for PL ('{pl_url_detail_page_default}'). Will use other poster options.")
                         else:
                             logger.debug(f"MGStage ({cls.module_char}): Skipping MGS style processing based on conditions.")
                     else: # VR 콘텐츠라서 MGS 스페셜 건너뛴 경우
