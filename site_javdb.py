@@ -206,7 +206,7 @@ class SiteJavdb:
             if search_results:
                 search_results = sorted(search_results, key=lambda k: k.get('score', 0), reverse=True)
 
-            logger.info(f"JavDB Search for '{original_keyword_for_log}' completed. Found {len(search_results)} results.")
+            logger.debug(f"JavDB Search for '{original_keyword_for_log}' completed. Found {len(search_results)} results.")
             return {'ret': 'success', 'data': search_results}
 
         except requests.exceptions.HTTPError as http_err_outer: 

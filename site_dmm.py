@@ -137,7 +137,7 @@ class SiteDmm:
                 logger.warning(f"DMM Search: XPath error with '{xpath_expr}' for '{original_keyword_for_log}': {e_xpath}")
 
         if not lists: 
-            logger.warning(f"DMM Search: No item blocks found using any XPath for '{original_keyword_for_log}'.")
+            logger.debug(f"DMM Search: No item blocks found using any XPath for '{original_keyword_for_log}'.")
             # HTML 저장 로직
             #try:
             #    import os; from framework import path_data; import html as lxml_html
