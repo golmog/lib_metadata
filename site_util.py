@@ -264,7 +264,7 @@ class SiteUtil:
 
 
     @classmethod
-    def is_portrait_high_quality_image(cls, image_url, proxy_url=None, min_height=700, aspect_ratio_threshold=1.2):
+    def is_portrait_high_quality_image(cls, image_url, proxy_url=None, min_height=600, aspect_ratio_threshold=1.2):
         """
         주어진 이미지 URL 또는 파일 경로가 세로형 고화질 이미지인지 판단합니다.
         SiteUtil.imopen을 사용하여 PIL Image 객체를 가져옵니다.

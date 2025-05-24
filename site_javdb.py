@@ -448,7 +448,7 @@ class SiteJavdb:
                 # 인자: image_url, proxy_url, min_height=700, aspect_ratio_threshold=1.2
                 if SiteUtil.is_portrait_high_quality_image(first_art_url, 
                                                             proxy_url=proxy_url, 
-                                                            min_height=700, 
+                                                            min_height=600, 
                                                             aspect_ratio_threshold=1.2):
                     vr_poster_override_url = first_art_url
                     logger.info(f"JavDB Info: VR content. Using first art image '{vr_poster_override_url}' as poster based on quality check.")
