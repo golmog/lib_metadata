@@ -405,7 +405,6 @@ class SiteJavdb:
 
             logger.debug(f"JavDB Info: Determined pl_url = '{pl_url}'")
 
-
             arts_urls = [] 
             sample_image_container = tree_info.xpath('//div[contains(@class, "preview-images")]')
             if sample_image_container:
@@ -431,6 +430,31 @@ class SiteJavdb:
                 logger.warning(f"JavDB Info: Sample image container (div.preview-images) not found for {code}.")
             logger.debug(f"JavDB Info: Collected {len(arts_urls)} arts_urls: {arts_urls[:5]}")
 
+            # --- VR 작품 포스터 로직 ---
+            is_vr_content = False
+            # entity.tagline (번역된 제목) 또는 actual_raw_title_text (번역 전 원본 제목) 확인
+            title_to_check_for_vr = entity.tagline if entity.tagline and entity.tagline != entity.ui_code else actual_raw_title_text
+            if title_to_check_for_vr:
+                normalized_title_for_vr_check = title_to_check_for_vr.upper()
+                if normalized_title_for_vr_check.startswith("[VR]") or \
+                   normalized_title_for_vr_check.startswith("【VR】"):
+                    is_vr_content = True
+            logger.debug(f"JavDB Info: Is VR content? {is_vr_content} (Checked title: '{title_to_check_for_vr}')")
+
+            vr_poster_override_url = None
+            if is_vr_content and arts_urls:
+                first_art_url = arts_urls[0]
+                # SiteUtil.is_portrait_high_quality_image 함수 호출
+                # 인자: image_url, proxy_url, min_height=700, aspect_ratio_threshold=1.2
+                if SiteUtil.is_portrait_high_quality_image(first_art_url, 
+                                                            proxy_url=proxy_url, 
+                                                            min_height=700, 
+                                                            aspect_ratio_threshold=1.2):
+                    vr_poster_override_url = first_art_url
+                    logger.info(f"JavDB Info: VR content. Using first art image '{vr_poster_override_url}' as poster based on quality check.")
+                else:
+                    logger.debug(f"JavDB Info: VR content, but first art '{first_art_url}' is not suitable as portrait poster (failed quality check).")
+
             # --- 사용자 지정 이미지 확인 ---
             user_custom_poster_url = None
             user_custom_landscape_url = None
@@ -451,24 +475,31 @@ class SiteJavdb:
             # --- 기본 포스터, 랜드스케이프, 팬아트 처리 ---
             final_poster_source_for_processing = None 
             recommended_crop_mode_from_util = None 
-            
+
             if not skip_default_poster_logic:
-                if pl_url:
+                if vr_poster_override_url:
+                    final_poster_source_for_processing = vr_poster_override_url
+                    recommended_crop_mode_from_util = 'c'
+                    logger.debug(f"JavDB Info: Using VR override poster '{final_poster_source_for_processing}' with crop mode '{recommended_crop_mode_from_util}'.")
+                elif pl_url:
                     log_identifier_for_util = entity.ui_code if hasattr(entity, 'ui_code') and entity.ui_code else original_code_for_url
                     poster_pil_or_url, rec_crop_mode, _ = SiteUtil.get_javdb_poster_from_pl_local(pl_url, log_identifier_for_util, proxy_url=proxy_url)
                     if poster_pil_or_url: 
                         final_poster_source_for_processing = poster_pil_or_url
                         recommended_crop_mode_from_util = rec_crop_mode
                     else: 
-                        logger.warning(f"JavDB Info: get_javdb_poster_from_pl_local returned None for pl_url '{pl_url}'. Falling back.")
-                        final_poster_source_for_processing = pl_url # Fallback
+                        logger.warning(f"JavDB Info: get_javdb_poster_from_pl_local returned None for pl_url '{pl_url}'. Falling back to raw pl_url.")
+                        final_poster_source_for_processing = pl_url 
                         recommended_crop_mode_from_util = 'r' 
                 else:
-                    logger.warning(f"JavDB Info: pl_url is None. Cannot determine default poster source.")
-            
+                    logger.warning(f"JavDB Info: Neither VR override nor PL URL is available. Cannot determine default poster source.")
+
             final_poster_crop_mode_to_use = user_defined_crop_mode if user_defined_crop_mode else recommended_crop_mode_from_util
             if final_poster_crop_mode_to_use is None and final_poster_source_for_processing:
-                final_poster_crop_mode_to_use = 'r'
+                if not vr_poster_override_url: 
+                    final_poster_crop_mode_to_use = 'r'
+                else: 
+                    final_poster_crop_mode_to_use = recommended_crop_mode_from_util if recommended_crop_mode_from_util else 'c'
 
             final_landscape_source_for_processing = None
             if not skip_default_landscape_logic and pl_url:
@@ -487,6 +518,8 @@ class SiteJavdb:
 
                 unique_arts_for_fanart = []
                 for art_url_item in arts_urls: 
+                    if vr_poster_override_url and art_url_item == vr_poster_override_url:
+                        continue
                     if art_url_item not in unique_arts_for_fanart: unique_arts_for_fanart.append(art_url_item)
                 for art_url_item in unique_arts_for_fanart:
                     if len(entity.fanart) >= max_arts : break

@@ -262,6 +262,55 @@ class SiteUtil:
             logger.exception(f"MGS Special Local: Error in get_mgs_half_pl_poster_info_local: {e}")
             return None, None, None
 
+
+    @classmethod
+    def is_portrait_high_quality_image(cls, image_url, proxy_url=None, min_height=700, aspect_ratio_threshold=1.2):
+        """
+        주어진 이미지 URL 또는 파일 경로가 세로형 고화질 이미지인지 판단합니다.
+        SiteUtil.imopen을 사용하여 PIL Image 객체를 가져옵니다.
+        - 높이가 min_height 이상
+        - 세로/가로 비율이 aspect_ratio_threshold 이상
+        """
+        from .plugin import P
+        logger = P.logger
+
+        if not image_url:
+            logger.debug("is_portrait_high_quality_image: No image_url/path provided.")
+            return False
+
+        img_pil_object = None
+        try:
+            img_pil_object = cls.imopen(image_url, proxy_url=proxy_url) 
+
+            if img_pil_object is None:
+                logger.debug(f"is_portrait_high_quality_image: SiteUtil.imopen returned None for '{image_url}'")
+                return False
+
+            width, height = img_pil_object.size
+            
+            actual_ratio = 0
+            if width > 0:
+                actual_ratio = height / width
+
+            if height >= min_height and actual_ratio >= aspect_ratio_threshold:
+                logger.debug(f"Image '{image_url}' IS portrait high quality (W: {width}, H: {height}, Ratio: {actual_ratio:.2f}). Criteria: H>={min_height}, Ratio>={aspect_ratio_threshold}")
+                return True
+            else:
+                logger.debug(f"Image '{image_url}' is NOT portrait high quality (W: {width}, H: {height}, Ratio: {actual_ratio:.2f}). Criteria: H>={min_height}, Ratio>={aspect_ratio_threshold}")
+                return False
+
+        except Exception as e: 
+            logger.warning(f"is_portrait_high_quality_image: Unexpected error processing image '{image_url}': {e}")
+            # logger.error(traceback.format_exc()) # 상세 오류 로깅
+            return False
+        finally:
+            if img_pil_object and not isinstance(image_url, Image.Image): 
+                try:
+                    img_pil_object.close() 
+                except Exception as e_close:
+                    logger.warning(f"is_portrait_high_quality_image: Error closing PIL image object for '{image_url}': {e_close}")
+
+
     @classmethod
     def get_javdb_poster_from_pl_local(cls, pl_url: str, original_code_for_log: str = "unknown", proxy_url: str = None):
         """
