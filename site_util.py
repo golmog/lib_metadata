@@ -567,11 +567,6 @@ class SiteUtil:
 
     @classmethod
     def save_image_to_server_path(cls, image_source, image_type: str, base_path: str, path_segment: str, ui_code: str, art_index: int = None, proxy_url: str = None, crop_mode: str = None):
-        """
-        이미지를 다운로드하거나 로컬 파일로부터 지정된 로컬 경로에 저장하고, 웹 서버 접근용 상대 경로를 반환합니다.
-        기존 파일이 존재하면 덮어씁니다.
-        image_source는 URL 문자열, 로컬 파일 경로, 또는 PIL Image 객체일 수 있습니다.
-        """
         # 1. 필수 인자 유효성 검사 (image_source는 PIL 객체일 수도 있으므로 all() 검사에서 제외 후 타입 체크)
         if not all([image_type, base_path, path_segment, ui_code]): # image_source는 아래에서 별도 체크
             logger.warning("save_image_to_server_path: 기본 필수 인자 누락.")
@@ -579,10 +574,12 @@ class SiteUtil:
         if not image_source: # image_source가 None이나 빈 문자열 등 Falsy 값일 때
             logger.warning("save_image_to_server_path: image_source가 유효하지 않습니다.")
             return None
+        # image_type 유효성 검사는 유지 (ps, pl, p, art)
+        # ps: poster small (javdb에서 사용), p: poster (일반)
         if image_type not in ['ps', 'pl', 'p', 'art']:
             logger.warning(f"save_image_to_server_path: 유효하지 않은 image_type: {image_type}")
             return None
-        if image_type == 'art' and art_index is None:
+        if image_type == 'art' and art_index is None: # art_index는 1부터 시작한다고 가정
             logger.warning("save_image_to_server_path: image_type='art'일 때 art_index 필요.")
             return None
 
@@ -590,18 +587,18 @@ class SiteUtil:
         log_source_info = ""
 
         source_is_pil_object = isinstance(image_source, Image.Image)
-        source_is_local_file = not source_is_pil_object and isinstance(image_source, str) and os.path.exists(image_source)
-        source_is_url = not source_is_pil_object and not source_is_local_file and isinstance(image_source, str)
+        # source_is_local_file = not source_is_pil_object and isinstance(image_source, str) and os.path.exists(image_source) # 아래 로직에서 path.exists 사용
+        # source_is_url = not source_is_pil_object and not source_is_local_file and isinstance(image_source, str) # 아래 로직에서 타입 체크
 
         # 2. 입력 소스 타입 판별 및 이미지 로드
         if isinstance(image_source, Image.Image): # 이미 PIL Image 객체로 전달된 경우
             im_opened_original = image_source
             log_source_info = "PIL Image Object"
         elif isinstance(image_source, str) and os.path.exists(image_source): # 로컬 파일 경로인 경우
-            im_opened_original = cls.imopen(image_source)
+            im_opened_original = cls.imopen(image_source) # SiteUtil.imopen 사용 가정
             log_source_info = f"localfile:{os.path.basename(image_source)}"
         elif isinstance(image_source, str): # URL 문자열인 경우
-            im_opened_original = cls.imopen(image_source, proxy_url=proxy_url)
+            im_opened_original = cls.imopen(image_source, proxy_url=proxy_url) # SiteUtil.imopen 사용 가정
             log_source_info = image_source
         else:
             logger.warning(f"save_image_to_server_path: 지원하지 않는 image_source 타입: {type(image_source)}.")
@@ -615,7 +612,8 @@ class SiteUtil:
             # 3. 실제 처리 대상 이미지 준비 (초기에는 원본과 동일)
             im_to_process = im_opened_original
 
-            # 4. 레터박스 제거 (image_type='p'이고 crop_mode가 있을 때, 4:3 비율이면 시도)
+            # 4. 레터박스 제거 (image_type='p' 또는 'ps' 이고 crop_mode가 있을 때, 4:3 비율이면 시도)
+            # 원본 코드에서는 image_type == 'p' 조건만 있었으나, 'ps'도 포스터이므로 포함 고려. 여기서는 원본 유지.
             if image_type == 'p' and crop_mode:
                 try:
                     wl_orig, hl_orig = im_to_process.size # 현재 처리 대상 이미지의 크기
@@ -626,12 +624,11 @@ class SiteUtil:
                             bottom_crop_ratio = 0.0555
                             top_pixels = int(hl_orig * top_crop_ratio)
                             bottom_y_coord = hl_orig - int(hl_orig * bottom_crop_ratio)
-                            
+
                             if top_pixels < bottom_y_coord and top_pixels >= 0 and bottom_y_coord <= hl_orig:
                                 box_for_lb_removal = (0, top_pixels, wl_orig, bottom_y_coord)
                                 im_no_lb = im_to_process.crop(box_for_lb_removal) # 현재 im_to_process에서 crop
                                 if im_no_lb:
-                                    # 레터박스 제거 성공 시, 처리 대상을 이 이미지로 교체
                                     im_to_process = im_no_lb 
                                     wl_new, hl_new = im_to_process.size
                                     logger.info(f"save_image_to_server_path: Letterbox removed from '{log_source_info}'. Original: {wl_orig}x{hl_orig}, Now: {wl_new}x{hl_new}")
@@ -643,50 +640,96 @@ class SiteUtil:
                             logger.debug(f"save_image_to_server_path: Image '{log_source_info}' ratio ({aspect_ratio_orig:.2f}) not in 4:3 range. No letterbox removal.")
                 except Exception as e_letterbox:
                     logger.error(f"save_image_to_server_path: Error during letterbox removal for '{log_source_info}': {e_letterbox}")
-                    # 레터박스 제거 실패 시에도 원본 im_to_process로 계속 진행
 
-            # 5. 최종 크롭 적용 (image_type='p'이고 crop_mode가 있을 때)
+            # 5. 최종 크롭 적용 (image_type='p' 또는 'ps' 이고 crop_mode가 있을 때)
+            # 원본 코드에서는 image_type == 'p' 조건만 있었으나, 'ps'도 포스터이므로 포함 고려. 여기서는 원본 유지.
             if image_type == 'p' and crop_mode:
                 logger.debug(f"save_image_to_server_path: Applying final crop_mode '{crop_mode}' to image for {log_source_info}")
-                cropped_im_final = cls.imcrop(im_to_process, position=crop_mode) # 레터박스가 제거되었을 수 있는 im_to_process 사용
+                cropped_im_final = cls.imcrop(im_to_process, position=crop_mode) # SiteUtil.imcrop 사용 가정
                 if cropped_im_final is None:
                     logger.error(f"save_image_to_server_path: 최종 크롭 실패 (crop_mode: {crop_mode}) for {log_source_info}")
                     return None 
-                im_to_process = cropped_im_final # 최종 저장할 이미지는 크롭까지 완료된 이미지
-            
+                im_to_process = cropped_im_final
+
+            # --- 이미지 확장자 결정 ---
             current_format_for_ext = None
             if im_to_process.format: 
                 current_format_for_ext = im_to_process.format
             elif im_opened_original.format: 
                 current_format_for_ext = im_opened_original.format
-            
+
             if not current_format_for_ext: 
-                if source_is_url: 
+                if isinstance(image_source, str) and (image_source.startswith('http://') or image_source.startswith('https://')): # source_is_url 대신 직접 체크
                     ext_match = re.search(r'\.(jpg|jpeg|png|webp|gif)(\?|$)', image_source.lower()) 
                     if ext_match: current_format_for_ext = ext_match.group(1).upper()
-                elif source_is_local_file: 
+                elif isinstance(image_source, str) and os.path.exists(image_source): # source_is_local_file 대신 직접 체크
                     _, file_ext_val = os.path.splitext(image_source) 
                     if file_ext_val: current_format_for_ext = file_ext_val[1:].upper()
-                if not current_format_for_ext: current_format_for_ext = "JPEG"
-            
+                if not current_format_for_ext: current_format_for_ext = "JPEG" # 기본 JPEG
+
             ext = current_format_for_ext.lower().replace("jpeg", "jpg")
-            allowed_exts = ['jpg', 'png', 'webp']
+            allowed_exts = ['jpg', 'png', 'webp'] # gif는 처리 방식이 다를 수 있어 일단 제외 (필요시 추가)
 
-            if ext not in allowed_exts:
-                logger.warning(f"save_image_to_server_path: Unsupported image format '{ext}' from '{log_source_info}'. Skipping save.")
-                return None
+            if ext not in allowed_exts: # 지원하지 않는 확장자는 jpg로 강제 변환 시도 또는 에러
+                logger.warning(f"save_image_to_server_path: Original image format '{ext}' from '{log_source_info}' is not in allowed_exts. Attempting to save as JPG.")
+                ext = 'jpg' # 기본 저장 포맷 JPG
 
-            ui_code_parts = ui_code.split('-')
-            label_part = ui_code_parts[0].upper() if ui_code_parts else "UNKNOWN"
-            first_char = label_part[0] if label_part and label_part[0].isalpha() else '09'
-            save_dir = os.path.join(base_path, path_segment, first_char, label_part)
+            # --- 파일명 및 폴더 경로 결정 ---
+            # path_segment: 'jav/cen', 'jav/uncen', 'jav/fc2' 등
+            # base_path: 로컬 이미지 서버의 최상위 실제 경로 (예: /data/imgserver)
 
+            # 기본 파일명 (확장자 제외)
+            filename_base = ui_code.lower() # 예: fc2-6686531 또는 ssni-001
+
+            # 이미지 타입에 따른 접미사
             if image_type == 'art':
-                filename = f"{ui_code.lower()}_art_{art_index}.{ext}"
-            else: 
-                filename = f"{ui_code.lower()}_{image_type}.{ext}"
+                filename_with_suffix = f"{filename_base}_art_{art_index}"
+            else: # 'p', 'ps', 'pl'
+                filename_with_suffix = f"{filename_base}_{image_type}"
+            
+            filename = f"{filename_with_suffix}.{ext}" # 최종 파일명 (확장자 포함)
+
+            # 폴더 구조 생성
+            # save_dir: 이미지가 실제 저장될 전체 로컬 경로 (base_path 포함)
+            # relative_dir_parts: 웹 접근 시 base_path를 제외한 상대 경로 부분 리스트
+            
+            relative_dir_parts = [path_segment] # 예: ['jav/fc2'] 또는 ['jav/cen']
+
+            if path_segment == 'jav/fc2': # FC2 전용 경로 규칙
+                logger.debug(f"FC2 이미지 저장 경로 규칙 적용. ui_code: {ui_code}")
+                match_fc2_id = re.search(r'(?:FC2-)?(\d+)', ui_code, re.I) # FC2- 접두사 있거나 없거나, 숫자 부분 추출
+                if match_fc2_id:
+                    num_id_str = match_fc2_id.group(1)
+                    logger.debug(f"FC2 숫자 ID 추출: {num_id_str}")
+
+                    if len(num_id_str) > 4:
+                        prefix_num_str = num_id_str[:-4]
+                        sub_folder_name = prefix_num_str.zfill(3)
+                        logger.debug(f"FC2 ID > 4자리: 앞부분 '{prefix_num_str}', 패딩 후 폴더명 '{sub_folder_name}'")
+                    elif len(num_id_str) > 0: # 1~4자리 ID
+                        sub_folder_name = "000"
+                        logger.debug(f"FC2 ID <= 4자리: 폴더명 '000'")
+                    else: # 숫자 ID가 비어있는 경우 (이론상 발생 어려움)
+                        sub_folder_name = "_error_no_fc2_numid" # 에러 상황 명시
+                        logger.warning(f"FC2 숫자 ID가 비어있습니다: {num_id_str}. 폴더명: {sub_folder_name}")
+                else: # FC2- 다음 숫자가 없는 경우 (예외 케이스)
+                    sub_folder_name = "_error_fc2_id_format" # 에러 상황 명시
+                    logger.warning(f"FC2 UI 코드에서 숫자 ID를 찾을 수 없습니다: {ui_code}. 폴더명: {sub_folder_name}")
+                relative_dir_parts.append(sub_folder_name)
+            else: # FC2가 아닌 다른 path_segment의 경우 (기존 로직)
+                ui_code_parts = ui_code.split('-')
+                label_part = ui_code_parts[0].upper() if ui_code_parts else "UNKNOWN_LABEL"
+                first_char_of_label = label_part[0] if label_part and label_part[0].isalpha() else '0-9' # 숫자로 시작하면 '0-9' 폴더 (기존 first_char 변수명 유지 위해 변경)
+
+                relative_dir_parts.append(first_char_of_label)
+                relative_dir_parts.append(label_part)
+
+            # 최종 저장될 로컬 디렉토리 경로
+            save_dir = os.path.join(base_path, *relative_dir_parts)
+            # 최종 저장될 로컬 파일 전체 경로
             save_filepath = os.path.join(save_dir, filename)
-            os.makedirs(save_dir, exist_ok=True)
+
+            os.makedirs(save_dir, exist_ok=True) # 폴더 생성
 
             # 7. 이미지 저장 (im_to_process 사용)
             logger.debug(f"Saving final image (format: {ext}) to {save_filepath} (will overwrite if exists).")
@@ -696,31 +739,41 @@ class SiteUtil:
             elif ext == 'png': save_options['optimize'] = True
 
             try:
+                # 저장 전 이미지 모드 변환 (필요시)
+                im_to_save_final = im_to_process # 최종 저장할 이미지 객체
                 if ext == 'jpg' and im_to_process.mode not in ('RGB', 'L'):
                     logger.debug(f"Converting final image mode from {im_to_process.mode} to RGB for JPG saving.")
-                    im_to_process_save = im_to_process.convert('RGB')
-                elif ext == 'png' and im_to_process.mode == 'P': # PNG인데 팔레트 모드면 RGBA 또는 RGB로 변환
+                    im_to_save_final = im_to_process.convert('RGB')
+                elif ext == 'png' and im_to_process.mode == 'P': 
                     logger.debug(f"Converting final PNG image mode from P to RGBA/RGB for saving.")
-                    im_to_process_save = im_to_process.convert('RGBA' if 'transparency' in im_to_process.info else 'RGB')
-                else:
-                    im_to_process_save = im_to_process
-                
-                im_to_process_save.save(save_filepath, **save_options)
-            except OSError as e_os_save_final:
-                logger.warning(f"save_image_to_server_path: OSError on final save ({save_filepath}): {str(e_os_save_final)}. If not JPG, consider retrying as JPG or check permissions/disk space.")
-                return None
-            except Exception as e_main_save_final:
-                logger.exception(f"save_image_to_server_path: Main final image save failed for {save_filepath}: {e_main_save_final}")
-                return None
+                    im_to_save_final = im_to_process.convert('RGBA' if 'transparency' in im_to_process.info else 'RGB')
 
-            # 8. 성공 시 상대 경로 반환
-            relative_path = os.path.join(path_segment, first_char, label_part, filename).replace("\\", "/")
-            logger.info(f"save_image_to_server_path: 저장 성공: {relative_path}")
-            return relative_path
+                im_to_save_final.save(save_filepath, **save_options)
+            except OSError as e_os_save_final: # 디스크 공간 부족, 권한 문제 등
+                logger.warning(f"save_image_to_server_path: OSError on final save ({save_filepath}): {str(e_os_save_final)}. Check permissions/disk space.")
+                return None # 저장 실패
+            except Exception as e_main_save_final: # 기타 PIL 저장 관련 예외
+                logger.exception(f"save_image_to_server_path: Main final image save failed for {save_filepath}: {e_main_save_final}")
+                return None # 저장 실패
+
+            # 8. 성공 시 상대 경로 반환 (웹 접근용)
+            # relative_dir_parts는 base_path를 제외한 부분이므로, 파일명만 추가하면 됨
+            relative_web_path = os.path.join(*relative_dir_parts, filename).replace("\\", "/") # OS에 따라 \를 /로 변경
+            logger.info(f"save_image_to_server_path: 저장 성공: {relative_web_path}")
+            return relative_web_path
 
         except Exception as e_outer: 
             logger.exception(f"save_image_to_server_path: 전체 처리 중 예외 발생 ({log_source_info}): {e_outer}")
             return None
+        finally: # PIL Image 객체는 사용 후 닫아주는 것이 좋음 (메모리 관리)
+            if im_opened_original:
+                try:
+                    im_opened_original.close()
+                except Exception: pass # 이미 닫혔거나 다른 문제로 실패해도 무시
+            if im_to_process and im_to_process is not im_opened_original: # im_to_process가 다른 객체인 경우
+                try:
+                    im_to_process.close()
+                except Exception: pass
 
 
     @classmethod
