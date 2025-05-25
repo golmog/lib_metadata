@@ -29,14 +29,7 @@ class SiteFc2ppvdb(object):
 
     @classmethod
     def search(cls, keyword_num_part, do_trans=False, proxy_url=None, image_mode='0', manual=False, **kwargs):
-        """
-        FC2 품번의 숫자 부분을 사용하여 fc2ppvdb.com에서 검색합니다. (JavDB 방식)
-        search 단계에서는 원본 이미지 URL을 사용하고, 번역을 수행하지 않습니다.
-        do_trans, image_mode, manual 인자는 이 함수 내에서는 직접 사용되지 않으나,
-        호출하는 쪽(logic_jav_fc2.py)과의 인터페이스 일관성을 위해 유지합니다.
-        proxy_url은 SiteUtil.get_tree 호출 시 사용됩니다.
-        """
-        logger.debug(f"[{cls.site_name} Search (JavDB Style)] Keyword(num_part): {keyword_num_part}, manual: {manual}, proxy: {'Yes' if proxy_url else 'No'}")
+        logger.debug(f"[{cls.site_name} Search Keyword(num_part): {keyword_num_part}, manual: {manual}, proxy: {'Yes' if proxy_url else 'No'}")
         
         ret = {'ret': 'failed', 'data': []}
 
@@ -230,20 +223,28 @@ class SiteFc2ppvdb(object):
             else:
                 logger.debug(f"[{cls.site_name} Info] Premiered date not found for {code_module_site_id}")
 
-            studio_xpath = "./div[starts-with(normalize-space(.), '販売者：')]/span/a/text()"
-            studio_elements = info_element.xpath(studio_xpath)
-            if studio_elements:
-                entity.studio = studio_elements[0].strip()
-                # logger.debug(f"[{cls.site_name} Info] Parsed studio (from link): {entity.studio}")
-            else: 
-                studio_text_xpath = "./div[starts-with(normalize-space(.), '販売者：')]/span/text()"
-                studio_text_elements = info_element.xpath(studio_text_xpath)
-                if studio_text_elements and studio_text_elements[0].strip():
-                    entity.studio = studio_text_elements[0].strip()
-                    # logger.debug(f"[{cls.site_name} Info] Parsed studio (from text): {entity.studio}")
-                else:
-                    logger.debug(f"[{cls.site_name} Info] Studio (販売者) not found for {code_module_site_id}")
+            seller_name_raw = None
             
+            seller_xpath_link = "./div[starts-with(normalize-space(.), '販売者：')]/span/a/text()"
+            seller_elements_link = info_element.xpath(seller_xpath_link)
+            
+            if seller_elements_link:
+                seller_name_raw = seller_elements_link[0].strip()
+                logger.debug(f"[{cls.site_name} Info] Parsed Seller (for Director/Studio) from link: {seller_name_raw}")
+            else: 
+                seller_xpath_text = "./div[starts-with(normalize-space(.), '販売者：')]/span/text()"
+                seller_elements_text = info_element.xpath(seller_xpath_text)
+                if seller_elements_text and seller_elements_text[0].strip():
+                    seller_name_raw = seller_elements_text[0].strip()
+                    logger.debug(f"[{cls.site_name} Info] Parsed Seller (for Director/Studio) from text: {seller_name_raw}")
+                else:
+                    logger.debug(f"[{cls.site_name} Info] Seller (for Director/Studio) not found for {code_module_site_id}")
+
+            if seller_name_raw:
+                entity.director = entity.studio = seller_name_raw
+            else:
+                entity.director = entity.studio = None
+
             actor_xpath = "./div[starts-with(normalize-space(.), '女優：')]/span//a/text() | ./div[starts-with(normalize-space(.), '女優：')]/span/text()[normalize-space()]"
             actor_name_elements = info_element.xpath(actor_xpath)
             if actor_name_elements:
