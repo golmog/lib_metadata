@@ -164,6 +164,7 @@ class EntityMovie(object):
         self.tagline = None
         self.extras = None
         self.mpaa = None
+        self.review = []
         """
         self.top250 = None
         self.outline = None
@@ -203,7 +204,8 @@ class EntityMovie(object):
             'tag' : self.tag,
             'tagline' : self.tagline,
             'extras' :  [x.as_dict() for x in self.extras] if self.extras is not None else None,
-            'mpaa' : self.mpaa
+            'mpaa' : self.mpaa,
+            'review' :  [x.as_dict() for x in self.review] if self.review is not None else None,
         }
 
 

@@ -1,25 +1,23 @@
 # -*- coding: utf-8 -*-
-import requests # 현재 직접 사용 안 함 (SiteUtil 사용)
+import requests
 import re
-import json # 현재 직접 사용 안 함
+import json
 import traceback
-# from dateutil.parser import parse # 사용 안 함
 
 from lxml import html
 
-from framework import SystemModelSetting # 현재 직접 사용 안 함
-from framework.util import Util # 현재 직접 사용 안 함
-from system import SystemLogicTrans # 번역에 사용
+from framework import SystemModelSetting
+from framework.util import Util
+from system import SystemLogicTrans
 
 # lib_metadata
 from ..entity_av import EntityAVSearch
-from ..entity_base import EntityMovie, EntityThumb, EntityActor, EntityRatings, EntityExtra
+from ..entity_base import EntityMovie, EntityThumb, EntityActor, EntityRatings, EntityExtra, EntityReview
 from ..site_util import SiteUtil
 
 #########################################################
-from ..plugin import P # lib_metadata의 plugin.P
+from ..plugin import P
 logger = P.logger
-# ModelSetting = P.ModelSetting # lib_metadata 내에서는 직접적인 SJVA ModelSetting 사용 지양 (필요시 인자로 받아야 함)
 
 class SiteFc2ppvdb(object):
     site_name = 'fc2ppvdb'
@@ -30,13 +28,13 @@ class SiteFc2ppvdb(object):
     @classmethod
     def search(cls, keyword_num_part, do_trans=False, proxy_url=None, image_mode='0', manual=False, **kwargs):
         logger.debug(f"[{cls.site_name} Search Keyword(num_part): {keyword_num_part}, manual: {manual}, proxy: {'Yes' if proxy_url else 'No'}")
-        
+
         ret = {'ret': 'failed', 'data': []}
 
         try:
             search_url = f'{cls.site_base_url}/articles/{keyword_num_part}/'
-            # logger.debug(f"[{cls.site_name} Search] Requesting URL: {search_url}") # 이전 로그에서 확인되므로 주석 처리 가능
-            
+            # logger.debug(f"[{cls.site_name} Search] Requesting URL: {search_url}")
+
             tree = SiteUtil.get_tree(search_url, proxy_url=proxy_url)
             if tree is None:
                 logger.warning(f"[{cls.site_name} Search] Failed to get HTML tree for URL: {search_url}")
@@ -51,7 +49,7 @@ class SiteFc2ppvdb(object):
                 is_page_not_found = True
             elif not_found_h1_elements and "404 Not Found" in not_found_h1_elements[0]:
                 is_page_not_found = True
-            
+
             if is_page_not_found:
                 logger.debug(f"[{cls.site_name} Search] Page not found on site for keyword_num_part: {keyword_num_part}")
                 ret['data'] = 'not found on site'
@@ -59,7 +57,7 @@ class SiteFc2ppvdb(object):
 
             item = EntityAVSearch(cls.site_name)
             item.code = cls.module_char + cls.site_char + keyword_num_part
-            
+
             info_block_xpath_base = '/html/body/div[1]/div/div/main/div/section/div[1]/div[1]'
 
             # 제목 (번역 안 함)
@@ -96,7 +94,7 @@ class SiteFc2ppvdb(object):
             item.score = 100 
 
             # logger.debug(f"[{cls.site_name} Search] Final item for keyword_num_part '{keyword_num_part}': score={item.score}, ui_code='{item.ui_code}', title='{item.title}', year={item.year if hasattr(item, 'year') else 'N/A'}, image_url='{item.image_url}'")
-            
+
             ret['data'].append(item.as_dict())
             ret['ret'] = 'success'
 
@@ -105,14 +103,15 @@ class SiteFc2ppvdb(object):
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
             ret['data'] = str(exception)
-        
+
         return ret
 
 
     @classmethod
     def info(cls, code_module_site_id, do_trans=True, proxy_url=None, image_mode='0', 
              use_image_server=False, image_server_url=None, image_server_local_path=None, 
-             url_prefix_segment=None, max_arts=0, use_extras=True, **kwargs):
+             url_prefix_segment=None, max_arts=0, use_extras=True, 
+             use_review=False, **kwargs):
 
         keyword_num_part = code_module_site_id[len(cls.module_char) + len(cls.site_char):]
         ui_code_for_images = f'FC2-{keyword_num_part}'
@@ -126,7 +125,7 @@ class SiteFc2ppvdb(object):
         try:
             info_url = f'{cls.site_base_url}/articles/{keyword_num_part}/'
             logger.debug(f"[{cls.site_name} Info] Requesting URL: {info_url}")
-            
+
             tree = SiteUtil.get_tree(info_url, proxy_url=proxy_url)
             if tree is None:
                 logger.warning(f"[{cls.site_name} Info] Failed to get HTML tree for URL: {info_url}")
@@ -149,7 +148,7 @@ class SiteFc2ppvdb(object):
             entity = EntityMovie(cls.site_name, code_module_site_id)
             entity.country = ['일본']
             entity.mpaa = '청소년 관람불가'
-            
+
             info_base_xpath = '/html/body/div[1]/div/div/main/div/section/div[1]/div[1]/div[2]'
             info_base_elements = tree.xpath(info_base_xpath)
             if not info_base_elements:
@@ -227,7 +226,7 @@ class SiteFc2ppvdb(object):
             
             seller_xpath_link = "./div[starts-with(normalize-space(.), '販売者：')]/span/a/text()"
             seller_elements_link = info_element.xpath(seller_xpath_link)
-            
+
             if seller_elements_link:
                 seller_name_raw = seller_elements_link[0].strip()
                 logger.debug(f"[{cls.site_name} Info] Parsed Seller (for Director/Studio) from link: {seller_name_raw}")
@@ -309,7 +308,100 @@ class SiteFc2ppvdb(object):
             entity.originaltitle = f'FC2-{keyword_num_part}'
             entity.sorttitle = f'FC2-{keyword_num_part}'
             logger.debug(f"[{cls.site_name} Info] Set fixed title/originaltitle/sorttitle: {entity.title}")
-            
+
+            logger.info(f"[{cls.site_name} Info] Successfully processed info for code: {code_module_site_id}")
+            ret['ret'] = 'success'
+            ret['data'] = entity.as_dict()
+
+            # 리뷰 정보 파싱
+            entity.review = []
+            if use_review:
+                logger.debug(f"[{cls.site_name} Info] Parsing reviews for {code_module_site_id}")
+                comments_section = tree.xpath("//div[@id='comments']")
+                if comments_section:
+                    comment_elements = comments_section[0].xpath("./div[starts-with(@id, 'comment-')]")
+                    logger.debug(f"[{cls.site_name} Info] Found {len(comment_elements)} comment elements.")
+
+                    for comment_el in comment_elements:
+                        try:
+                            review_obj = EntityReview(cls.site_name)
+
+                            author_el = comment_el.xpath("./div[contains(@class, 'flex-auto')]/div[1]/div[1]/p/text()")
+                            author = author_el[0].strip() if author_el and author_el[0].strip() else 'Anonymous'
+
+                            up_votes_el = comment_el.xpath(".//span[starts-with(@id, 'up-counter-')]/text()")
+                            up_votes = up_votes_el[0].strip() if up_votes_el else '0'
+
+                            down_votes_el = comment_el.xpath(".//span[starts-with(@id, 'down-counter-')]/text()")
+                            down_votes = down_votes_el[0].strip() if down_votes_el else '0'
+
+                            date_id_text_el = comment_el.xpath("./div[contains(@class, 'flex-auto')]/div[1]/div[2]/p/text()")
+                            review_date_str = ''
+                            comment_id_str = ''
+                            if date_id_text_el:
+                                full_date_id_str = date_id_text_el[0].strip()
+                                match_date = re.search(r'(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})', full_date_id_str)
+                                if match_date:
+                                    review_date_str = match_date.group(1)
+
+                                match_id = re.search(r'ID:(\S+)', full_date_id_str)
+                                if match_id:
+                                    comment_id_str = match_id.group(1)
+
+                            review_obj.author = author
+                            if hasattr(review_obj, 'date') and review_date_str:
+                                review_obj.date = review_date_str
+
+                            comment_p_elements = comment_el.xpath("./div[contains(@class, 'flex-auto')]/p[contains(@class, 'text-gray-500')]")
+                            comment_text_raw = ''
+                            if comment_p_elements:
+                                p_element = comment_p_elements[0]
+                                parts = []
+                                for node in p_element.xpath('./node()'):
+                                    if isinstance(node, str):
+                                        parts.append(node)
+                                    elif hasattr(node, 'tag'):
+                                        if node.tag == 'br':
+                                            parts.append('\n')
+                                        else:
+                                            parts.append(html.tostring(node, encoding='unicode', method='html'))
+
+                                inner_html_content_with_newlines = ''.join(parts)
+                                temp_element = html.fromstring(f"<div>{inner_html_content_with_newlines}</div>")
+                                comment_text_raw = temp_element.text_content().strip()
+
+                            if not comment_text_raw:
+                                logger.debug(f"[{cls.site_name} Info] Skipping comment (ID: {comment_id_str or 'N/A'}) due to empty content.")
+                                continue
+
+                            if hasattr(review_obj, 'source'):
+                                review_obj.source = comment_text_raw
+
+                            comment_text_for_display = SiteUtil.trans(comment_text_raw, do_trans=do_trans, source='ja', target='ko')
+
+                            review_header_parts = [f"좋아요: {up_votes}", f"싫어요: {down_votes}"]
+                            if review_date_str and not hasattr(review_obj, 'date'): # date 속성이 없을 경우 text에 포함
+                                review_header_parts.append(f"작성일: {review_date_str}")
+
+                            review_header = "[" + " / ".join(review_header_parts) + "]"
+                            review_obj.text = f"{review_header} {comment_text_for_display}"
+
+                            if comment_id_str:
+                                review_obj.link = f"{info_url}#comment-{comment_id_str}"
+                            else:
+                                review_obj.link = info_url
+
+                            entity.review.append(review_obj)
+                            logger.debug(f"[{cls.site_name} Info] Added review by '{author}': Up={up_votes}, Down={down_votes}, Date='{review_date_str}', ID='{comment_id_str}'")
+
+                        except Exception as e_review:
+                            logger.error(f"[{cls.site_name} Info] Exception parsing a review for {code_module_site_id}: {e_review}")
+                            logger.error(traceback.format_exc())
+                else:
+                    logger.debug(f"[{cls.site_name} Info] No comments section found for {code_module_site_id}")
+            else:
+                logger.debug(f"[{cls.site_name} Info] Skipping review parsing as 'use_review' is False for {code_module_site_id}")
+
             logger.info(f"[{cls.site_name} Info] Successfully processed info for code: {code_module_site_id}")
             ret['ret'] = 'success'
             ret['data'] = entity.as_dict()
@@ -319,5 +411,5 @@ class SiteFc2ppvdb(object):
             logger.error(traceback.format_exc())
             ret['ret'] = 'exception'
             ret['data'] = str(exception)
-        
+
         return ret
