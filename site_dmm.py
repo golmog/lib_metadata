@@ -1005,7 +1005,7 @@ class SiteDmm:
                     pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_on_page, proxy_url=proxy_url)
                     if pl_image_obj_for_fixed_crop:
                         img_width, img_height = pl_image_obj_for_fixed_crop.size
-                        if img_width == 800 and 438 <= img_height <= 442:
+                        if img_width == 800 and 438 <= img_height <= 444:
                             crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
                             final_poster_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
                             if final_poster_pil_object:
