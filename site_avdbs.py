@@ -36,7 +36,7 @@ class SiteAvdbs:
     @staticmethod
     def __get_actor_info_from_web(originalname, **kwargs) -> dict:
         """Avdbs.com 웹사이트에서 배우 정보를 가져오는 내부 메소드 (Fallback용)"""
-        logger.info(f"WEB Fallback: Avdbs.com 에서 '{originalname}' 정보 직접 검색 시작.")
+        logger.debug(f"WEB Fallback: Avdbs.com 에서 '{originalname}' 정보 직접 검색 시작.")
         proxy_url = kwargs.get('proxy_url')
         image_mode = kwargs.get('image_mode', '0')
 
@@ -175,7 +175,7 @@ class SiteAvdbs:
         db_image_base_url = kwargs.get('db_image_base_url', '')
         site_name_for_db = kwargs.get('site_name_for_db_query', SiteAvdbs.site_name)
 
-        logger.info(f"배우 정보 검색 시작: '{original_input_name}' (DB:{use_local_db}, SiteForDB:{site_name_for_db}, Prefix:'{db_image_base_url}')")
+        logger.debug(f"배우 정보 검색 시작: '{original_input_name}' (DB:{use_local_db}, SiteForDB:{site_name_for_db}, Prefix:'{db_image_base_url}')")
 
         name_variations_to_search = SiteAvdbs._parse_name_variations(original_input_name)
         final_info = None
@@ -188,10 +188,10 @@ class SiteAvdbs:
                 conn = sqlite3.connect(db_uri, uri=True, timeout=10)
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
-                logger.debug(f"로컬 배우DB 연결 성공: {local_db_path}")
+                # logger.debug(f"로컬 배우DB 연결 성공: {local_db_path}")
 
                 for current_search_name in name_variations_to_search:
-                    logger.debug(f"DB 검색 시도: '{current_search_name}' (Site: {site_name_for_db})")
+                    # logger.debug(f"DB 검색 시도: '{current_search_name}' (Site: {site_name_for_db})")
                     row = None
                     query1 = "SELECT inner_name_kr, inner_name_en, profile_img_path FROM actors WHERE site = ? AND inner_name_cn = ? LIMIT 1"
                     cursor.execute(query1, (site_name_for_db, current_search_name))
@@ -240,7 +240,7 @@ class SiteAvdbs:
                         if db_relative_path:
                             if db_image_base_url:
                                 thumb_url = db_image_base_url.rstrip('/') + '/' + db_relative_path.lstrip('/')
-                                logger.debug(f"DB: 이미지 URL 생성 (Prefix 사용): {thumb_url}")
+                                # logger.debug(f"DB: 이미지 URL 생성 (Prefix 사용): {thumb_url}")
                             else:
                                 thumb_url = db_relative_path
                                 logger.warning(f"DB: db_image_base_url (jav_actor_img_url_prefix) 설정 없음. 상대 경로 사용: {thumb_url}")
@@ -251,7 +251,7 @@ class SiteAvdbs:
                                 try:
                                     renewed_data = DiscordUtil.renew_urls({"thumb": thumb_url})
                                     if renewed_data and renewed_data.get("thumb") and renewed_data.get("thumb") != thumb_url:
-                                        thumb_url = renewed_data.get("thumb"); logger.info(f"DB: Discord URL 갱신 성공 -> {thumb_url}")
+                                        thumb_url = renewed_data.get("thumb"); # logger.debug(f"DB: Discord URL 갱신 성공 -> {thumb_url}")
                                 except Exception as e_renew: logger.error(f"DB: Discord URL 갱신 중 예외: {e_renew}")
                         
                         if name2_field:
@@ -259,7 +259,7 @@ class SiteAvdbs:
                             if match_name2: name2_field = match_name2.group(1).strip()
 
                         if korean_name and thumb_url:
-                            logger.info(f"DB에서 '{current_search_name}' 유효 정보 찾음 ({korean_name}).")
+                            # logger.debug(f"DB에서 '{current_search_name}' 유효 정보 찾음 ({korean_name}).")
                             final_info = {"name": korean_name, "name2": name2_field, "thumb": thumb_url, "site": f"{site_name_for_db}_db"}
                             db_found_valid = True
                             break
@@ -270,16 +270,16 @@ class SiteAvdbs:
         elif use_local_db: 
             logger.warning(f"로컬 배우DB 사용 설정되었으나 경로 문제: {local_db_path}")
         else:
-            logger.info("로컬 배우DB 사용 안 함.")
+            logger.debug("로컬 배우DB 사용 안 함.")
 
         if not db_found_valid and final_info is None:
-            logger.info(f"DB에서 '{original_input_name}' 정보를 찾지 못했거나 유효하지 않아 웹 검색 시도.")
+            logger.debug(f"DB에서 '{original_input_name}' 정보를 찾지 못했거나 유효하지 않아 웹 검색 시도.")
             web_info = SiteAvdbs.__get_actor_info_from_web(original_input_name, image_mode=image_mode, proxy_url=proxy_url)
             if web_info:
-                logger.info(f"웹에서 '{original_input_name}' 정보 찾음 (출처: {web_info.get('site')}).")
+                # logger.debug(f"웹에서 '{original_input_name}' 정보 찾음 (출처: {web_info.get('site')}).")
                 final_info = web_info
             else:
-                logger.info(f"웹에서도 '{original_input_name}' 정보를 찾지 못함.")
+                logger.debug(f"웹에서도 '{original_input_name}' 정보를 찾지 못함.")
 
         # 최종 결과 처리
         if final_info is not None:
@@ -296,7 +296,7 @@ class SiteAvdbs:
                 logger.warning(f"'{original_input_name}' 정보는 찾았으나 (출처: {entity_actor['site']}), 업데이트할 유효 필드(name, name2, thumb) 부족.")
                 return False
         else:
-            logger.info(f"'{original_input_name}'에 대한 정보를 DB와 웹 모두에서 찾지 못함.")
+            logger.debug(f"'{original_input_name}'에 대한 정보를 DB와 웹 모두에서 찾지 못함.")
 
             if not entity_actor.get('name') and entity_actor.get('originalname'):
                 entity_actor['name'] = entity_actor.get('originalname')
