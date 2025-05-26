@@ -37,7 +37,7 @@ class SiteUtil:
             expire_after=timedelta(hours=6),
         )
     except Exception as e:
-        logger.warning("requests cache 사용 안함: %s", e)
+        logger.debug("requests cache 사용 안함: %s", e)
         session = requests.Session()
 
     default_headers = {
@@ -97,7 +97,7 @@ class SiteUtil:
             current_proxies = {"http": proxy_url, "https": proxy_url}
             scraper.proxies.update(current_proxies)
 
-        logger.debug(f"SiteUtil.get_response_cs: Making {method} request to URL='{url}'")
+        # logger.debug(f"SiteUtil.get_response_cs: Making {method} request to URL='{url}'")
         if headers: scraper.headers.update(headers)
 
         try:
@@ -187,19 +187,19 @@ class SiteUtil:
         모든 검사 실패 시에는 None, None, None을 반환합니다.
         """
         try:
-            logger.debug(f"MGS Special Local: Trying get_mgs_half_pl_poster_info_local for ps='{ps_url}', pl='{pl_url}'")
+            # logger.debug(f"MGS Special Local: Trying get_mgs_half_pl_poster_info_local for ps='{ps_url}', pl='{pl_url}'")
             if not ps_url or not pl_url: return None, None, None
 
             ps_image = cls.imopen(ps_url, proxy_url=proxy_url)
             pl_image_original = cls.imopen(pl_url, proxy_url=proxy_url)
 
             if ps_image is None or pl_image_original is None:
-                logger.debug("MGS Special Local: Failed to open ps_image or pl_image_original.")
+                # logger.debug("MGS Special Local: Failed to open ps_image or pl_image_original.")
                 return None, None, None
 
             pl_width, pl_height = pl_image_original.size
             if pl_width < pl_height * 1.1: # 가로가 세로의 1.1배보다 작으면 충분히 넓지 않다고 판단
-                logger.debug(f"MGS Special Local: pl_image_original not wide enough ({pl_width}x{pl_height}). Skipping.")
+                # logger.debug(f"MGS Special Local: pl_image_original not wide enough ({pl_width}x{pl_height}). Skipping.")
                 return None, None, None
 
             # 처리 순서 정의: 오른쪽 먼저
@@ -214,19 +214,19 @@ class SiteUtil:
             if left_half_img_obj: candidate_sources.append( (left_half_img_obj, f"{pl_url} (left_half)") )
 
             for img_obj_to_crop, obj_name in candidate_sources:
-                logger.debug(f"MGS Special Local: Processing candidate source: {obj_name}")
+                # logger.debug(f"MGS Special Local: Processing candidate source: {obj_name}")
                 # 중앙 크롭 시도
                 center_cropped_candidate_obj = cls.imcrop(img_obj_to_crop, position='c') 
 
                 if center_cropped_candidate_obj:
-                    logger.debug(f"MGS Special Local: Successfully cropped center from {obj_name}.")
+                    # logger.debug(f"MGS Special Local: Successfully cropped center from {obj_name}.")
 
                     # is_hq_poster 유사도 검사 시도
-                    logger.debug(f"MGS Special Local: Comparing ps_image with cropped candidate from {obj_name}")
+                    # logger.debug(f"MGS Special Local: Comparing ps_image with cropped candidate from {obj_name}")
                     is_similar = cls.is_hq_poster(ps_image, center_cropped_candidate_obj)
 
                     if is_similar:
-                        logger.info(f"MGS Special Local: Similarity check PASSED for {obj_name}. This is the best match.")
+                        logger.debug(f"MGS Special Local: Similarity check PASSED for {obj_name}. This is the best match.")
                         # 성공! 이 객체를 저장하고 반환
                         try:
                             img_format = center_cropped_candidate_obj.format if center_cropped_candidate_obj.format else "JPEG"
@@ -245,17 +245,17 @@ class SiteUtil:
                                 img_to_save = img_to_save.convert('RGB')
 
                             img_to_save.save(temp_filepath, **save_params)
-                            logger.info(f"MGS Special Local: Saved similarity match to temp file: {temp_filepath}")
+                            logger.debug(f"MGS Special Local: Saved similarity match to temp file: {temp_filepath}")
                             return temp_filepath, None, pl_url # 성공 반환 (파일경로, crop=None, 원본pl)
                         except Exception as e_save_hq:
                             logger.exception(f"MGS Special Local: Failed to save HQ similarity match from {obj_name}: {e_save_hq}")
 
                     else: # is_hq_poster 검사 실패
-                        logger.info(f"MGS Special Local: Similarity check FAILED for {obj_name}.")
+                        logger.debug(f"MGS Special Local: Similarity check FAILED for {obj_name}.")
                 else: # 크롭 자체 실패
-                    logger.warning(f"MGS Special Local: Failed to crop center from {obj_name}.")
+                    logger.debug(f"MGS Special Local: Failed to crop center from {obj_name}.")
 
-            logger.warning("MGS Special Local: All similarity checks failed. No suitable poster found.")
+            logger.debug("MGS Special Local: All similarity checks failed. No suitable poster found.")
             return None, None, None # 최종적으로 실패 반환
 
         except Exception as e:
@@ -293,14 +293,14 @@ class SiteUtil:
                 actual_ratio = height / width
 
             if height >= min_height and actual_ratio >= aspect_ratio_threshold:
-                logger.debug(f"Image '{image_url}' IS portrait high quality (W: {width}, H: {height}, Ratio: {actual_ratio:.2f}). Criteria: H>={min_height}, Ratio>={aspect_ratio_threshold}")
+                # logger.debug(f"Image '{image_url}' IS portrait high quality (W: {width}, H: {height}, Ratio: {actual_ratio:.2f}). Criteria: H>={min_height}, Ratio>={aspect_ratio_threshold}")
                 return True
             else:
                 logger.debug(f"Image '{image_url}' is NOT portrait high quality (W: {width}, H: {height}, Ratio: {actual_ratio:.2f}). Criteria: H>={min_height}, Ratio>={aspect_ratio_threshold}")
                 return False
 
         except Exception as e: 
-            logger.warning(f"is_portrait_high_quality_image: Unexpected error processing image '{image_url}': {e}")
+            logger.debug(f"is_portrait_high_quality_image: Unexpected error processing image '{image_url}': {e}")
             # logger.error(traceback.format_exc()) # 상세 오류 로깅
             return False
         finally:
@@ -308,7 +308,7 @@ class SiteUtil:
                 try:
                     img_pil_object.close() 
                 except Exception as e_close:
-                    logger.warning(f"is_portrait_high_quality_image: Error closing PIL image object for '{image_url}': {e_close}")
+                    logger.debug(f"is_portrait_high_quality_image: Error closing PIL image object for '{image_url}': {e_close}")
 
 
     @classmethod
@@ -321,7 +321,7 @@ class SiteUtil:
         성공 시 (임시 파일 경로 또는 원본 URL, 추천 crop_mode, 원본 PL URL), 실패 시 (None, None, None) 반환.
         """
         try:
-            logger.debug(f"JavDB Poster Util: Trying get_javdb_poster_from_pl_local for pl_url='{pl_url}', code='{original_code_for_log}'")
+            # logger.debug(f"JavDB Poster Util: Trying get_javdb_poster_from_pl_local for pl_url='{pl_url}', code='{original_code_for_log}'")
             if not pl_url:
                 return None, None, None
 
@@ -334,13 +334,13 @@ class SiteUtil:
 
             pl_width, pl_height = pl_image_original.size
             aspect_ratio = pl_width / pl_height if pl_height > 0 else 0
-            logger.debug(f"JavDB Poster Util: PL aspect_ratio={aspect_ratio:.2f} ({pl_width}x{pl_height}), format={original_format}")
+            # logger.debug(f"JavDB Poster Util: PL aspect_ratio={aspect_ratio:.2f} ({pl_width}x{pl_height}), format={original_format}")
 
             processed_pil_object = pl_image_original # 기본적으로 원본 PIL 객체
             recommended_crop_mode = 'r' # 기본 추천 크롭 모드
 
             if aspect_ratio >= 1.8: # 가로로 매우 긴 이미지
-                logger.info(f"JavDB Poster Util: PL is very wide (ratio {aspect_ratio:.2f}). Processing right-half.")
+                logger.debug(f"JavDB Poster Util: PL is very wide (ratio {aspect_ratio:.2f}). Processing right-half.")
                 right_half_box = (pl_width / 2, 0, pl_width, pl_height)
                 try:
                     right_half_img_obj = pl_image_original.crop(right_half_box)
@@ -348,9 +348,9 @@ class SiteUtil:
                         if original_format: right_half_img_obj.format = original_format # 원본 포맷 유지
                         processed_pil_object = right_half_img_obj
                         recommended_crop_mode = 'c'
-                        logger.info(f"JavDB Poster Util: Successfully cropped right-half. Recommended crop: 'c'.")
+                        logger.debug(f"JavDB Poster Util: Successfully cropped right-half. Recommended crop: 'c'.")
                     else: # 크롭 자체가 실패 (매우 드문 경우)
-                        logger.warning("JavDB Poster Util: Cropping right-half returned None. Using original PL.")
+                        logger.debug("JavDB Poster Util: Cropping right-half returned None. Using original PL.")
                 except Exception as e_crop_half:
                     logger.error(f"JavDB Poster Util: Error cropping right-half: {e_crop_half}. Using original PL.")
             else: # 일반적인 가로 이미지
@@ -359,7 +359,7 @@ class SiteUtil:
             
             # 원본 포맷이 없었다면, 여기서라도 기본값 설정 시도 (선택적)
             if processed_pil_object and not processed_pil_object.format:
-                logger.warning("JavDB Poster Util: Processed PIL object still has no format. Defaulting to JPEG for safety.")
+                logger.debug("JavDB Poster Util: Processed PIL object still has no format. Defaulting to JPEG for safety.")
                 processed_pil_object.format = "JPEG"
 
             return processed_pil_object, recommended_crop_mode, pl_url
@@ -414,7 +414,7 @@ class SiteUtil:
             new_w = width - left
             right = width
         if new_w <= 0 : # 계산된 너비가 0 이하이면 크롭 불가
-            logger.warning(f"imcrop: Calculated new_w ({new_w}) is invalid for image size {width}x{height}. Returning original.")
+            logger.debug(f"imcrop: Calculated new_w ({new_w}) is invalid for image size {width}x{height}. Returning original.")
             return im # 원본 반환 또는 None
 
         box = (left, 0, right, height) # 수정된 right 사용
@@ -502,14 +502,14 @@ class SiteUtil:
         if isinstance(image_source, str) and os.path.exists(image_source):
             log_name = f"localfile:{os.path.basename(image_source)}"
         
-        logger.debug(f"process_image_mode: mode='{image_mode}', source='{log_name}', crop='{crop_mode}'")
+        # logger.debug(f"process_image_mode: mode='{image_mode}', source='{log_name}', crop='{crop_mode}'")
 
         if image_mode == "0": 
             return image_source # 원본 사용
 
         if image_mode in ["1", "2"]: # SJVA URL 프록시
             if not (isinstance(image_source, str) and not os.path.exists(image_source)): # URL이 아니면
-                logger.warning(f"Image mode {image_mode} (SJVA URL Proxy) called with non-URL source '{log_name}'.")
+                logger.debug(f"Image mode {image_mode} (SJVA URL Proxy) called with non-URL source '{log_name}'.")
                 return image_source # 원본 반환 (프록시 불가)
             
             api_path = "image_proxy" if image_mode == "1" else "discord_proxy" # SJVA 내 API 엔드포인트 이름
@@ -580,7 +580,7 @@ class SiteUtil:
             logger.warning(f"save_image_to_server_path: 유효하지 않은 image_type: {image_type}")
             return None
         if image_type == 'art' and art_index is None: # art_index는 1부터 시작한다고 가정
-            logger.warning("save_image_to_server_path: image_type='art'일 때 art_index 필요.")
+            logger.debug("save_image_to_server_path: image_type='art'일 때 art_index 필요.")
             return None
 
         im_opened_original = None # 원본으로 열리거나 전달된 이미지
@@ -631,7 +631,7 @@ class SiteUtil:
                                 if im_no_lb:
                                     im_to_process = im_no_lb 
                                     wl_new, hl_new = im_to_process.size
-                                    logger.info(f"save_image_to_server_path: Letterbox removed from '{log_source_info}'. Original: {wl_orig}x{hl_orig}, Now: {wl_new}x{hl_new}")
+                                    logger.debug(f"save_image_to_server_path: Letterbox removed from '{log_source_info}'. Original: {wl_orig}x{hl_orig}, Now: {wl_new}x{hl_new}")
                                 else:
                                     logger.warning(f"save_image_to_server_path: Failed to crop letterbox from '{log_source_info}'.")
                             else:
@@ -696,19 +696,19 @@ class SiteUtil:
             relative_dir_parts = [path_segment] # 예: ['jav/fc2'] 또는 ['jav/cen']
 
             if path_segment == 'jav/fc2': # FC2 전용 경로 규칙
-                logger.debug(f"FC2 이미지 저장 경로 규칙 적용. ui_code: {ui_code}")
+                # logger.debug(f"FC2 이미지 저장 경로 규칙 적용. ui_code: {ui_code}")
                 match_fc2_id = re.search(r'(?:FC2-)?(\d+)', ui_code, re.I) # FC2- 접두사 있거나 없거나, 숫자 부분 추출
                 if match_fc2_id:
                     num_id_str = match_fc2_id.group(1)
-                    logger.debug(f"FC2 숫자 ID 추출: {num_id_str}")
+                    # logger.debug(f"FC2 숫자 ID 추출: {num_id_str}")
 
                     if len(num_id_str) > 4:
                         prefix_num_str = num_id_str[:-4]
                         sub_folder_name = prefix_num_str.zfill(3)
-                        logger.debug(f"FC2 ID > 4자리: 앞부분 '{prefix_num_str}', 패딩 후 폴더명 '{sub_folder_name}'")
+                        # logger.debug(f"FC2 ID > 4자리: 앞부분 '{prefix_num_str}', 패딩 후 폴더명 '{sub_folder_name}'")
                     elif len(num_id_str) > 0: # 1~4자리 ID
                         sub_folder_name = "000"
-                        logger.debug(f"FC2 ID <= 4자리: 폴더명 '000'")
+                        # logger.debug(f"FC2 ID <= 4자리: 폴더명 '000'")
                     else: # 숫자 ID가 비어있는 경우 (이론상 발생 어려움)
                         sub_folder_name = "_error_no_fc2_numid" # 에러 상황 명시
                         logger.warning(f"FC2 숫자 ID가 비어있습니다: {num_id_str}. 폴더명: {sub_folder_name}")
@@ -732,7 +732,7 @@ class SiteUtil:
             os.makedirs(save_dir, exist_ok=True) # 폴더 생성
 
             # 7. 이미지 저장 (im_to_process 사용)
-            logger.debug(f"Saving final image (format: {ext}) to {save_filepath} (will overwrite if exists).")
+            # logger.debug(f"Saving final image (format: {ext}) to {save_filepath} (will overwrite if exists).")
             save_options = {}
             if ext == 'jpg': save_options['quality'] = 95
             elif ext == 'webp': save_options.update({'quality': 95, 'lossless': False}) 
@@ -742,10 +742,10 @@ class SiteUtil:
                 # 저장 전 이미지 모드 변환 (필요시)
                 im_to_save_final = im_to_process # 최종 저장할 이미지 객체
                 if ext == 'jpg' and im_to_process.mode not in ('RGB', 'L'):
-                    logger.debug(f"Converting final image mode from {im_to_process.mode} to RGB for JPG saving.")
+                    # logger.debug(f"Converting final image mode from {im_to_process.mode} to RGB for JPG saving.")
                     im_to_save_final = im_to_process.convert('RGB')
                 elif ext == 'png' and im_to_process.mode == 'P': 
-                    logger.debug(f"Converting final PNG image mode from P to RGBA/RGB for saving.")
+                    # logger.debug(f"Converting final PNG image mode from P to RGBA/RGB for saving.")
                     im_to_save_final = im_to_process.convert('RGBA' if 'transparency' in im_to_process.info else 'RGB')
 
                 im_to_save_final.save(save_filepath, **save_options)
@@ -759,7 +759,7 @@ class SiteUtil:
             # 8. 성공 시 상대 경로 반환 (웹 접근용)
             # relative_dir_parts는 base_path를 제외한 부분이므로, 파일명만 추가하면 됨
             relative_web_path = os.path.join(*relative_dir_parts, filename).replace("\\", "/") # OS에 따라 \를 /로 변경
-            logger.info(f"save_image_to_server_path: 저장 성공: {relative_web_path}")
+            logger.debug(f"save_image_to_server_path: 저장 성공: {relative_web_path}")
             return relative_web_path
 
         except Exception as e_outer: 
@@ -872,11 +872,11 @@ class SiteUtil:
         else:
             mode_str = "no_crop" # 크롭 없으면 "no_crop"
         
-        logger.debug(f"Discord_proxy_image: Processing URL/Path='{image_url}', Mode='{mode_str}'")
+        # logger.debug(f"Discord_proxy_image: Processing URL/Path='{image_url}', Mode='{mode_str}'")
 
         if cached_discord_url := cached_data_for_url.get(mode_str):
             if DiscordUtil.isurlattachment(cached_discord_url) and not DiscordUtil.isurlexpired(cached_discord_url):
-                logger.debug(f"Discord_proxy_image: Cache hit for Mode='{mode_str}'. URL: {cached_discord_url}")
+                # logger.debug(f"Discord_proxy_image: Cache hit for Mode='{mode_str}'. URL: {cached_discord_url}")
                 return cached_discord_url
             else:
                 logger.debug(f"Discord_proxy_image: Cache for Mode='{mode_str}' found but expired or invalid.")
@@ -893,7 +893,7 @@ class SiteUtil:
             original_format_from_pil = pil_image_opened.format # 열린 이미지의 원본 포맷
 
             if is_cropped_image: # crop_mode가 실제로 있을 때만 크롭 수행
-                logger.debug(f"Discord_proxy_image: Applying crop_mode '{crop_mode_from_caller}' to image from '{image_url}'.")
+                # logger.debug(f"Discord_proxy_image: Applying crop_mode '{crop_mode_from_caller}' to image from '{image_url}'.")
                 cropped_image = cls.imcrop(pil_image_opened, position=crop_mode_from_caller.strip())
                 if cropped_image:
                     image_to_upload = cropped_image
@@ -930,12 +930,12 @@ class SiteUtil:
             fields = [{"name": "original_url", "value": image_url[:1000]}]
             fields.append({"name": "applied_transform", "value": mode_str}) # 캐시 키에 사용된 mode_str 기록
             
-            logger.debug(f"Discord_proxy_image: Uploading to Discord. Filename: '{filename_for_discord}', Title: '{image_url}'")
+            # logger.debug(f"Discord_proxy_image: Uploading to Discord. Filename: '{filename_for_discord}', Title: '{image_url}'")
             new_discord_url = DiscordUtil.proxy_image(image_to_upload, filename_for_discord, title=image_url, fields=fields)
             
             cached_data_for_url[mode_str] = new_discord_url
             cache[image_url] = cached_data_for_url
-            logger.info(f"Discord_proxy_image: Uploaded and cached. MainKey='{image_url}', Mode='{mode_str}'. URL: {new_discord_url}")
+            logger.debug(f"Discord_proxy_image: Uploaded and cached. MainKey='{image_url}', Mode='{mode_str}'. URL: {new_discord_url}")
             return new_discord_url
         except Exception as e_proxy:
             logger.exception(f"이미지 프록시 중 예외 (discord_proxy_image for {image_url}): {e_proxy}")
@@ -991,7 +991,7 @@ class SiteUtil:
             if os.path.exists(user_image_file_local_path):
                 relative_web_path = os.path.join(path_segment, first_char, label_part, filename_with_suffix).replace("\\", "/")
                 full_web_url = f"{image_server_url.rstrip('/')}/{relative_web_path.lstrip('/')}"
-                # logger.info(f"User custom image found: Local='{user_image_file_local_path}', Web='{full_web_url}'")
+                # logger.debug(f"User custom image found: Local='{user_image_file_local_path}', Web='{full_web_url}'")
                 return user_image_file_local_path, full_web_url
             else:
                 return None, None
@@ -1016,7 +1016,7 @@ class SiteUtil:
             #    ret['image_url'] = tmp
 
             if with_poster:
-                logger.debug(ret["image_url"])
+                # logger.debug(ret["image_url"])
                 # ret['poster_image_url'] = cls.discord_proxy_get_target_poster(image_url)
                 # if ret['poster_image_url'] is None:
                 ret["poster_image_url"] = cls.process_image_mode("5", ret["image_url"])  # 포스터이미지 url 본인 sjva
@@ -1106,7 +1106,7 @@ class SiteUtil:
         ws, hs = im_sm_obj.size
         wl, hl = im_lg_to_compare.size
         if ws > wl or hs > hl:
-            logger.debug(f"{function_name_for_log}: Small image ({ws}x{hs}) > large image ({wl}x{hl}).")
+            # logger.debug(f"{function_name_for_log}: Small image ({ws}x{hs}) > large image ({wl}x{hl}).")
             return None
 
         positions = ["r", "l", "c"]
@@ -1116,7 +1116,7 @@ class SiteUtil:
                 cropped_im = cls.imcrop(im_lg_to_compare, position=pos)
                 if cropped_im is None: continue
                 if average_hash(im_sm_obj) - average_hash(cropped_im) <= ahash_threshold:
-                    logger.debug(f"{function_name_for_log}: Found similar (ahash) at pos '{pos}'.")
+                    # logger.debug(f"{function_name_for_log}: Found similar (ahash) at pos '{pos}'.")
                     return pos
             except Exception as e_ahash:
                 logger.error(f"{function_name_for_log}: Exception during ahash for pos '{pos}': {e_ahash}")
@@ -1129,7 +1129,7 @@ class SiteUtil:
                 cropped_im = cls.imcrop(im_lg_to_compare, position=pos)
                 if cropped_im is None: continue
                 if phash(im_sm_obj) - phash(cropped_im) <= phash_threshold:
-                    logger.debug(f"{function_name_for_log}: Found similar (phash) at pos '{pos}'.")
+                    # logger.debug(f"{function_name_for_log}: Found similar (phash) at pos '{pos}'.")
                     return pos
             except Exception as e_phash:
                 logger.error(f"{function_name_for_log}: Exception during phash for pos '{pos}': {e_phash}")
@@ -1141,11 +1141,11 @@ class SiteUtil:
 
     @classmethod
     def is_hq_poster(cls, im_sm_source, im_lg_source, proxy_url=None):
-        logger.debug(f"--- is_hq_poster called ---")
+        # logger.debug(f"--- is_hq_poster called ---")
         log_sm_info = f"URL: {im_sm_source}" if isinstance(im_sm_source, str) else f"Type: {type(im_sm_source)}"
         log_lg_info = f"URL: {im_lg_source}" if isinstance(im_lg_source, str) else f"Type: {type(im_lg_source)}"
-        logger.debug(f"  Small Image Source: {log_sm_info}")
-        logger.debug(f"  Large Image Source: {log_lg_info}")
+        # logger.debug(f"  Small Image Source: {log_sm_info}")
+        # logger.debug(f"  Large Image Source: {log_lg_info}")
         
         try:
             if im_sm_source is None or im_lg_source is None:
@@ -1158,42 +1158,42 @@ class SiteUtil:
             if im_sm_obj is None or im_lg_obj is None:
                 logger.debug("  Result: False (Failed to open one or both images from source)")
                 return False
-            logger.debug("  Images acquired/opened successfully.")
+            # logger.debug("  Images acquired/opened successfully.")
 
             try:
                 from imagehash import dhash as hfun
                 from imagehash import phash 
 
                 ws, hs = im_sm_obj.size; wl, hl = im_lg_obj.size
-                logger.debug(f"  Sizes: Small=({ws}x{hs}), Large=({wl}x{hl})")
+                # logger.debug(f"  Sizes: Small=({ws}x{hs}), Large=({wl}x{hl})")
 
                 ratio_sm = ws / hs if hs != 0 else 0
                 ratio_lg = wl / hl if hl != 0 else 0
                 ratio_diff = abs(ratio_sm - ratio_lg)
-                logger.debug(f"  Aspect Ratios: Small={ratio_sm:.3f}, Large={ratio_lg:.3f}, Diff={ratio_diff:.3f}")
+                # logger.debug(f"  Aspect Ratios: Small={ratio_sm:.3f}, Large={ratio_lg:.3f}, Diff={ratio_diff:.3f}")
 
                 if ratio_diff > 0.1: 
-                    logger.debug("  Result: False (Aspect ratio difference > 0.1)")
+                    # logger.debug("  Result: False (Aspect ratio difference > 0.1)")
                     return False
 
                 # dhash 비교
                 dhash_sm = hfun(im_sm_obj); dhash_lg = hfun(im_lg_obj)
                 hdis_d = dhash_sm - dhash_lg
-                logger.debug(f"  dhash distance: {hdis_d}")
+                # logger.debug(f"  dhash distance: {hdis_d}")
                 if hdis_d >= 14:
-                    logger.debug("  Result: False (dhash distance >= 14)")
+                    # logger.debug("  Result: False (dhash distance >= 14)")
                     return False
 
                 if hdis_d <= 6:
-                    logger.debug("  Result: True (dhash distance <= 6)")
+                    # logger.debug("  Result: True (dhash distance <= 6)")
                     return True
 
                 phash_sm = phash(im_sm_obj); phash_lg = phash(im_lg_obj)
                 hdis_p = phash_sm - phash_lg
                 hdis_sum = hdis_d + hdis_p # 합산 거리
-                logger.debug(f"  phash distance: {hdis_p}, Combined distance (d+p): {hdis_sum}")
+                # logger.debug(f"  phash distance: {hdis_p}, Combined distance (d+p): {hdis_sum}")
                 result = hdis_sum < 20 # 합산 거리가 20 미만이면 유사하다고 판단
-                logger.debug(f"  Result: {result} (Combined distance < 20)")
+                # logger.debug(f"  Result: {result} (Combined distance < 20)")
                 return result
 
             except ImportError:
@@ -1205,8 +1205,8 @@ class SiteUtil:
         except Exception as e:
             logger.exception(f"  Error in is_hq_poster: {e}")
             return False
-        finally:
-            logger.debug(f"--- is_hq_poster finished ---")
+        # finally:
+            # logger.debug(f"--- is_hq_poster finished ---")
 
     @classmethod
     def has_hq_poster(cls, im_sm_url, im_lg_url, proxy_url=None):
@@ -1224,12 +1224,12 @@ class SiteUtil:
                 return None
 
             # 1단계: 원본 PL 이미지로 비교 시도
-            logger.debug(f"has_hq_poster: Attempting comparison with original PL ('{im_lg_url}').")
+            # logger.debug(f"has_hq_poster: Attempting comparison with original PL ('{im_lg_url}').")
             found_pos = cls._internal_has_hq_poster_comparison(im_sm_obj, im_lg_obj_original, 
                                                                function_name_for_log="has_hq_poster_original_pl")
 
             if found_pos:
-                logger.info(f"has_hq_poster: Found position '{found_pos}' using original PL.")
+                logger.debug(f"has_hq_poster: Found position '{found_pos}' using original PL.")
                 return found_pos
 
             # 2단계: 1단계 실패 시, PL이 4:3 비율이면 레터박스 제거 후 재시도
@@ -1256,23 +1256,23 @@ class SiteUtil:
                                 wl_new, hl_new = im_lg_no_letterbox.size
                                 logger.debug(f"has_hq_poster: PL ('{im_lg_url}') is 4:3 like. Letterbox removed. Original: {wl_orig}x{hl_orig}, Cropped for retry: {wl_new}x{hl_new}")
                             else:
-                                logger.warning(f"has_hq_poster: Failed to crop letterbox from 4:3 PL ('{im_lg_url}').")
+                                logger.debug(f"has_hq_poster: Failed to crop letterbox from 4:3 PL ('{im_lg_url}').")
                         else:
                             logger.debug(f"has_hq_poster: Invalid letterbox crop pixels for 4:3 PL ('{im_lg_url}'). Top: {top_pixels}, Bottom_Y: {bottom_y_coord}, Height: {hl_orig}.")
                     else:
                         logger.debug(f"has_hq_poster: PL ('{im_lg_url}') aspect ratio ({aspect_ratio_lg:.2f}) not in 4:3 range for letterbox removal retry.")
                 else:
-                    logger.warning(f"has_hq_poster: PL ('{im_lg_url}') height is 0. Cannot calculate aspect ratio.")
+                    logger.debug(f"has_hq_poster: PL ('{im_lg_url}') height is 0. Cannot calculate aspect ratio.")
             except Exception as e_letterbox_check:
                 logger.error(f"has_hq_poster: Error during letterbox check/removal for PL ('{im_lg_url}'): {e_letterbox_check}")
 
             # 레터박스 제거된 이미지가 있다면, 그것으로 다시 비교 시도
             if im_lg_no_letterbox:
-                logger.debug(f"has_hq_poster: Retrying comparison with letterbox-removed PL ('{im_lg_url}').")
+                # logger.debug(f"has_hq_poster: Retrying comparison with letterbox-removed PL ('{im_lg_url}').")
                 found_pos_retry = cls._internal_has_hq_poster_comparison(im_sm_obj, im_lg_no_letterbox, 
                                                                         function_name_for_log="has_hq_poster_letterbox_removed")
                 if found_pos_retry:
-                    logger.info(f"has_hq_poster: Found position '{found_pos_retry}' using letterbox-removed PL.")
+                    logger.debug(f"has_hq_poster: Found position '{found_pos_retry}' using letterbox-removed PL.")
                     # 중요: 여기서 반환되는 found_pos_retry는 레터박스 제거된 이미지 기준의 크롭 위치.
                     # 호출부에서 이 PL URL을 사용할 때는 레터박스 제거를 다시 수행해야 함.
                     return found_pos_retry 
