@@ -3,6 +3,7 @@ import requests
 import re
 import json
 import traceback
+import time
 
 from lxml import html
 
@@ -26,8 +27,9 @@ class SiteFc2ppvdb(object):
     site_char = 'P'
 
     @classmethod
-    def search(cls, keyword_num_part, do_trans=False, proxy_url=None, image_mode='0', manual=False, **kwargs):
-        logger.debug(f"[{cls.site_name} Search Keyword(num_part): {keyword_num_part}, manual: {manual}, proxy: {'Yes' if proxy_url else 'No'}")
+    def search(cls, keyword_num_part, do_trans=False, proxy_url=None, image_mode='0', manual=False, 
+                 not_found_delay_seconds=0, **kwargs):
+        logger.debug(f"[{cls.site_name} Search Keyword(num_part): {keyword_num_part}, manual: {manual}, proxy: {'Yes' if proxy_url else 'No'}, delay: {not_found_delay_seconds}s")
 
         ret = {'ret': 'failed', 'data': []}
 
@@ -39,6 +41,9 @@ class SiteFc2ppvdb(object):
             if tree is None:
                 logger.warning(f"[{cls.site_name} Search] Failed to get HTML tree for URL: {search_url}")
                 ret['data'] = 'failed to get tree'
+                if not_found_delay_seconds > 0:
+                    logger.info(f"[{cls.site_name} Search] 'failed to get tree', delaying for {not_found_delay_seconds} seconds.")
+                    time.sleep(not_found_delay_seconds)
                 return ret
 
             # 페이지를 찾을 수 없는 경우
@@ -50,9 +55,20 @@ class SiteFc2ppvdb(object):
             elif not_found_h1_elements and "404 Not Found" in not_found_h1_elements[0]:
                 is_page_not_found = True
 
+            # 페이지 삭제
+            # XPath: //div[contains(@class, 'absolute') and contains(@class, 'inset-0')]/h1[contains(text(), 'このページは削除されました')]
+            # 더 간단하게: //h1[contains(text(), 'このページは削除されました')]
+            deleted_page_elements = tree.xpath("//h1[contains(text(), 'このページは削除されました')]")
+            if deleted_page_elements:
+                # logger.debug(f"[{cls.site_name} Search] Page deleted on site for keyword_num_part: {keyword_num_part} (문구: {deleted_page_elements[0].text.strip()})")
+                is_page_not_found = True
+
             if is_page_not_found:
-                logger.debug(f"[{cls.site_name} Search] Page not found on site for keyword_num_part: {keyword_num_part}")
+                logger.debug(f"[{cls.site_name} Search] Page not found or deleted on site for keyword_num_part: {keyword_num_part}")
                 ret['data'] = 'not found on site'
+                if not_found_delay_seconds > 0:
+                    logger.debug(f"[{cls.site_name} Search] 'not found on site', delaying for {not_found_delay_seconds} seconds.")
+                    time.sleep(not_found_delay_seconds)
                 return ret
 
             item = EntityAVSearch(cls.site_name)
