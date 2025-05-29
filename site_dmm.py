@@ -622,8 +622,8 @@ class SiteDmm:
         image_server_url = kwargs.get('image_server_url', '').rstrip('/') if use_image_server else ''
         image_server_local_path = kwargs.get('image_server_local_path', '') if use_image_server else ''
         image_path_segment = kwargs.get('url_prefix_segment', 'unknown/unknown')
-        ps_to_poster_setting = ps_to_poster # kwargs에서 받은 ps_to_poster 사용
-        crop_mode_setting = crop_mode     # kwargs에서 받은 crop_mode 사용
+        ps_to_poster_setting = ps_to_poster
+        crop_mode_setting = crop_mode
 
         cached_data = cls._ps_url_cache.get(code, {})
         ps_url_from_search_cache = cached_data.get('ps') 
