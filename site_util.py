@@ -36,6 +36,7 @@ class SiteUtil:
             use_temp=True,
             expire_after=timedelta(hours=6),
         )
+        logger.debug("requests_cache.CachedSession initialized successfully.")
     except Exception as e:
         logger.debug("requests cache 사용 안함: %s", e)
         session = requests.Session()
@@ -146,10 +147,8 @@ class SiteUtil:
     @classmethod
     def get_response(cls, url, **kwargs):
         proxy_url = kwargs.pop("proxy_url", None)
-        current_proxies = None # 현재 요청에 사용될 프록시 정보 로깅용
         if proxy_url:
             kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
-            current_proxies = kwargs["proxies"] # 로깅용으로 저장
 
         kwargs.setdefault("headers", cls.default_headers)
 
@@ -159,20 +158,14 @@ class SiteUtil:
             method = "POST"
             kwargs["data"] = post_data
 
-        if "javbus.com" in url: # 이 부분은 JavDB와 무관
-            kwargs.setdefault("headers", {})
-            kwargs["headers"]["referer"] = "https://www.javbus.com/"
-
         try:
             res = cls.session.request(method, url, **kwargs)
-            # logger.debug(f"  Response status: {res.status_code}, URL after redirects (if any): {res.url}")
-            # logger.debug(f"  Response headers: {res.headers}") # 응답 헤더도 필요시 주석 해제
             return res
         except requests.exceptions.RequestException as e_req:
             logger.error(f"SiteUtil.get_response: RequestException for URL='{url}'. Proxy='{proxy_url}'. Error: {e_req}")
-            logger.error(traceback.format_exc()) # 상세 트레이스백
-            return None # 예외 발생 시 None 반환 고려 (호출부에서 None 체크 필요)
-        except Exception as e_general: # 기타 예외
+            logger.error(traceback.format_exc())
+            return None
+        except Exception as e_general:
             logger.error(f"SiteUtil.get_response: General Exception for URL='{url}'. Proxy='{proxy_url}'. Error: {e_general}")
             logger.error(traceback.format_exc())
             return None
