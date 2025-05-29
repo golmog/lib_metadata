@@ -52,6 +52,9 @@ class SiteFc2ppvdb(object):
             is_page_not_found = False
             if not_found_title_elements and 'お探しの商品が見つかりません' in not_found_title_elements[0]:
                 is_page_not_found = True
+            elif not_found_title_elements and 'not found' in not_found_title_elements[0].lower():
+                logger.debug(f"[{cls.site_name} Search] Page Not Found {keyword_num_part} (429 Too many requests)")
+                is_page_not_found = True
             elif not_found_h1_elements and "404 Not Found" in not_found_h1_elements[0]:
                 is_page_not_found = True
 
