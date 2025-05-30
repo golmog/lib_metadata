@@ -402,7 +402,24 @@ class SiteMgstageDvd(SiteMgstage):
             # 3. 일반 비교 로직 + MGS Special 처리 (위 사용자 설정에서 결정 안 됐을 때)
             else:
                 if ps_url_from_search_cache: # PS가 있어야 비교 가능
-                    # --- 3-A. is_hq_poster 검사 (세로 이미지 직접 비교) ---
+
+                    # --- 3-A. has_hq_poster 검사 (가로 이미지를 크롭하여 비교) ---
+                    if final_poster_source is None:
+                        if pl_url:
+                            crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
+                            if crop_pos: final_poster_source = pl_url; final_poster_crop_mode = crop_pos
+
+                        # Specific Arts 크롭
+                        if final_poster_source is None and specific_arts_candidates:
+                            for art_candidate in specific_arts_candidates:
+                                crop_pos_art = SiteUtil.has_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url)
+                                if crop_pos_art:
+                                    final_poster_source = art_candidate
+                                    final_poster_crop_mode = crop_pos_art
+                                    logger.debug(f"MGStage ({cls.module_char}): Specific Art ('{art_candidate}') chosen as poster via has_hq_poster (crop: {crop_pos_art}).")
+                                    break
+
+                    # --- 3-B. is_hq_poster 검사 (세로 이미지 직접 비교) ---
                     specific_arts_candidates = []
                     if all_arts:
                         if all_arts[0] not in specific_arts_candidates: specific_arts_candidates.append(all_arts[0])
@@ -418,22 +435,6 @@ class SiteMgstageDvd(SiteMgstage):
                             if SiteUtil.is_portrait_high_quality_image(art_candidate, proxy_url=proxy_url):
                                 if SiteUtil.is_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url):
                                     final_poster_source = art_candidate; break
-
-                    # --- 3-B. has_hq_poster 검사 (가로 이미지를 크롭하여 비교) ---
-                    if final_poster_source is None:
-                        if pl_url:
-                            crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
-                            if crop_pos: final_poster_source = pl_url; final_poster_crop_mode = crop_pos
-
-                        # Specific Arts 크롭 (추가된 부분)
-                        if final_poster_source is None and specific_arts_candidates:
-                            for art_candidate in specific_arts_candidates:
-                                crop_pos_art = SiteUtil.has_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url)
-                                if crop_pos_art:
-                                    final_poster_source = art_candidate
-                                    final_poster_crop_mode = crop_pos_art
-                                    logger.debug(f"MGStage ({cls.module_char}): Specific Art ('{art_candidate}') chosen as poster via has_hq_poster (crop: {crop_pos_art}).")
-                                    break
 
                     # --- 3-C. MGS Special 처리 시도 ---
                     try_mgs_special_now = False
