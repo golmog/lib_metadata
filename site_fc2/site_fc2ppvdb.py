@@ -73,66 +73,93 @@ class SiteFc2ppvdb(object):
 
     @classmethod
     def _get_fc2ppvdb_page_content(cls, url, proxy_url=None, use_cloudscraper=True):
-        if cls._is_blocked(): # 요청 전에 차단 상태 확인
-            return None, "Site is rate-limited" # (tree, page_text) 형태
+        if cls._is_blocked():
+            return None, "Site is rate-limited"
 
         headers = SiteUtil.default_headers.copy()
         headers['Referer'] = cls.site_base_url + "/"
-
         logger.debug(f"[{cls.site_name}] Requesting URL: {url}, use_cloudscraper: {use_cloudscraper}")
 
         res = None
+        page_text_for_rate_limit_check = "" # Rate limit HTML 내용 검사용
+
         if use_cloudscraper:
-            # logger.debug(f"[{cls.site_name}] Attempting with cloudscraper...")
-            res = SiteUtil.get_response_cs(url, proxy_url=proxy_url, headers=headers, cookies=cls.ppvdb_default_cookies, timeout=20)
+            res_cs = SiteUtil.get_response_cs(url, proxy_url=proxy_url, headers=headers, cookies=cls.ppvdb_default_cookies, timeout=20)
+            if res_cs is not None: # Cloudscraper가 응답 객체를 반환했다면
+                res = res_cs # 일단 res에 할당
+                if hasattr(res_cs, 'text'):
+                    page_text_for_rate_limit_check = res_cs.text
 
-        # Cloudscraper 실패 시 또는 cloudscraper 사용 안 할 경우 일반 requests 시도
+                # Cloudscraper 응답에서 바로 Rate Limit 조건 확인
+                is_rate_limited_by_content_cs = False
+                if "<title>Too Many Requests</title>" in page_text_for_rate_limit_check:
+                    is_rate_limited_by_content_cs = True
+                
+                if res.status_code == 429 or 'Retry-After' in res.headers or is_rate_limited_by_content_cs:
+                    logger.warning(f"[{cls.site_name}] Rate limit detected by Cloudscraper. Status: {res.status_code}, Headers: {res.headers.get('Retry-After')}, HTML Title: {is_rate_limited_by_content_cs}")
+                    if cls._handle_rate_limit(res.headers): # Retry-After 헤더가 있으면 그것을 우선 사용
+                        return None, f"Rate limit hit (Cloudscraper with Header). Retry-After: {res.headers.get('Retry-After', 'N/A')}"
+                    elif is_rate_limited_by_content_cs: # HTML 내용으로만 감지
+                        logger.warning(f"[{cls.site_name}] Rate limit by HTML (Cloudscraper), no Retry-After. Default block.")
+                        cls._block_release_time_fc2ppvdb = time.time() + 300 # 예: 5분 기본 차단
+                        cls._last_retry_after_value = 300 
+                        return None, "Rate limit detected by HTML content (Cloudscraper - default block applied)"
+                    # else: Retry-After 헤더 없고, HTML 내용으로도 특정 못하면 그냥 일반 실패로 간주 (아래 로직 따름)
+
+            if res is None and use_cloudscraper: # Cloudscraper가 None을 반환했거나, 위 Rate Limit 조건에 안 걸렸지만 실패한 경우
+                logger.warning(f"[{cls.site_name}] Cloudscraper returned None or non-rate-limit error for {url}. Falling back to standard requests.")
+                # res는 여전히 None인 상태로 아래 fallback 로직으로 넘어감
+
+        # Cloudscraper를 사용하지 않았거나, Cloudscraper가 None을 반환했거나,
+        # Cloudscraper가 응답했지만 Rate Limit이 아닌 다른 이유로 실패했을 경우 fallback
         if res is None:
-            if use_cloudscraper:
-                logger.warning(f"[{cls.site_name}] Cloudscraper failed for {url}. Falling back to standard requests.")
-            # else: # 처음부터 Cloudscraper를 사용 안 한 경우
-                # logger.debug(f"[{cls.site_name}] Attempting with requests (cloudscraper not used)...")
+            logger.debug(f"[{cls.site_name}] Attempting with standard requests for {url}...")
+            res_std = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, cookies=cls.ppvdb_default_cookies, timeout=20)
+            if res_std is not None:
+                res = res_std # res에 할당
+                if hasattr(res_std, 'text'):
+                    page_text_for_rate_limit_check = res_std.text
+            # else: res는 여전히 None
 
-            # 기본 쿠키와 함께 일반 requests 호출
-            res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, cookies=cls.ppvdb_default_cookies, timeout=20)
-
+        # 최종 res 객체로 나머지 처리
         if res:
-            page_text = res.text if hasattr(res, 'text') else "" # page_text가 없을 경우 대비
+            page_text = res.text if hasattr(res, 'text') else ""
 
-            # Rate Limit 감지 로직 수정
-            is_rate_limited_by_content = False
-            if res.status_code != 200 and "<title>Too Many Requests</title>" in page_text: # 상태코드가 200이 아니면서 title 확인
-                is_rate_limited_by_content = True
-                logger.warning(f"[{cls.site_name}] Rate limit detected by HTML title 'Too Many Requests'. Status: {res.status_code}, URL: {url}")
-            
-            # 상태 코드 429 또는 Retry-After 헤더 또는 HTML 내용으로 Rate Limit 판단
-            if res.status_code == 429 or 'Retry-After' in res.headers or is_rate_limited_by_content:
-                if cls._handle_rate_limit(res.headers): # Retry-After 헤더가 있으면 그것을 우선 사용
-                    return None, f"Rate limit hit (Header). Retry-After: {res.headers.get('Retry-After', 'N/A')}"
-                elif is_rate_limited_by_content: # Retry-After 헤더는 없지만 HTML 내용으로 감지된 경우
-                    # 이 경우, Retry-After가 없으므로 임의의 기본 대기시간 설정 또는 마지막 Retry-After 값 재사용 고려
-                    # 여기서는 일단 헤더가 없을 때의 _handle_rate_limit 동작에 맡기거나,
-                    # 기본 대기시간(예: 5분)을 _block_release_time_fc2ppvdb에 설정할 수 있음
-                    # 예시: cls._block_release_time_fc2ppvdb = time.time() + 300 # 5분 대기
-                    # 혹은, _handle_rate_limit이 False를 반환했으므로 여기서는 그냥 실패로 처리
-                    logger.warning(f"[{cls.site_name}] Rate limit detected by HTML content, but no Retry-After header. Treating as temporary error.")
-                    # 이 경우, 호출부에서 재시도를 유도하거나, 잠시 후 다시 시도하도록 하는 별도 로직이 필요할 수 있음.
-                    # 여기서는 일단 페이지 로드 실패로 간주.
-                    return None, "Rate limit detected by HTML content (no Retry-After header)"
+            # 표준 requests 응답에서도 Rate Limit 조건 한 번 더 확인 (Cloudscraper가 실패하고 fallback했을 경우 대비)
+            is_rate_limited_by_content_std = False
+            if "<title>Too Many Requests</title>" in page_text: # status code 조건은 위에서 res_cs에 대해 이미 했을 수 있으므로 여기선 생략 가능
+                is_rate_limited_by_content_std = True
+
+            if res.status_code == 429 or 'Retry-After' in res.headers or is_rate_limited_by_content_std:
+                logger.warning(f"[{cls.site_name}] Rate limit detected by standard requests (or fallback). Status: {res.status_code}, Headers: {res.headers.get('Retry-After')}, HTML Title: {is_rate_limited_by_content_std}")
+                if cls._handle_rate_limit(res.headers):
+                    return None, f"Rate limit hit (Standard Requests with Header). Retry-After: {res.headers.get('Retry-After', 'N/A')}"
+                elif is_rate_limited_by_content_std:
+                    logger.warning(f"[{cls.site_name}] Rate limit by HTML (Standard Requests), no Retry-After. Default block.")
+                    cls._block_release_time_fc2ppvdb = time.time() + 300 # 예: 5분 기본 차단
+                    cls._last_retry_after_value = 300
+                    return None, "Rate limit detected by HTML content (Standard Requests - default block applied)"
 
             if res.status_code == 200:
-                page_text = res.text
+                # 로그인 페이지 또는 "페이지 없음" 감지는 그대로 유지
+                if "fc2.com" in res.url and "login.php" in res.url:
+                    logger.warning(f"[{cls.site_name}] Detected redirection to FC2 main login page...")
+                    return None, page_text
+                if "お探しのページは見つかりません。" in page_text:
+                    logger.info(f"[{cls.site_name}] Page explicitly states 'not found'...")
+                    return None, page_text
+                
                 try:
                     return html.fromstring(page_text), page_text
                 except Exception as e_parse:
                     logger.error(f"[{cls.site_name}] Failed to parse HTML: {e_parse}. URL: {url}")
                     return None, page_text
-            else:
+            else: # 200도 아니고 Rate Limit 조건에도 해당 안되는 다른 에러
                 logger.warning(f"[{cls.site_name}] Failed to get page. Status: {res.status_code}. URL: {url}")
-                return None, res.text if hasattr(res, 'text') else f"HTTP Error: {res.status_code}"
-        else:
-            logger.warning(f"[{cls.site_name}] Failed to get page (response is None). URL: {url}")
-            return None, "Network error or no response"
+                return None, page_text
+        else: # 최종적으로 res가 None인 경우 (모든 시도 실패)
+            logger.warning(f"[{cls.site_name}] Failed to get page (all attempts failed - response is None). URL: {url}")
+            return None, "Network error or no response from all attempts"
 
     @classmethod
     def search(cls, keyword_num_part, do_trans=False, proxy_url=None, image_mode='0', manual=False,
