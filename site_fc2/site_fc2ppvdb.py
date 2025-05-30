@@ -6,6 +6,7 @@ import traceback
 import time
 import os
 from framework import path_data
+from datetime import datetime, timedelta
 
 from lxml import html
 
@@ -29,9 +30,52 @@ class SiteFc2ppvdb(object):
     site_char = 'P'
 
     ppvdb_default_cookies = {}
+    _block_release_time_fc2ppvdb = 0 # 차단 해제 시간 저장 (타임스탬프)
+    _last_retry_after_value = 0 # 마지막으로 받은 Retry-After 값 (로그용)
+
+    @classmethod
+    def _is_blocked(cls):
+        """현재 사이트가 차단 상태인지 확인하고, 남은 차단 시간을 로깅합니다."""
+        if cls._block_release_time_fc2ppvdb == 0:
+            return False # 차단된 적 없거나 해제됨
+        
+        now_timestamp = time.time()
+        if now_timestamp < cls._block_release_time_fc2ppvdb:
+            remaining_seconds = int(cls._block_release_time_fc2ppvdb - now_timestamp)
+            remaining_time_str = str(timedelta(seconds=remaining_seconds)) # HH:MM:SS 형식
+            logger.warning(f"[{cls.site_name}] Site is currently rate-limited. Retrying after {remaining_time_str} (Retry-After was {cls._last_retry_after_value}s).")
+            return True
+        else: # 차단 시간 지남
+            logger.info(f"[{cls.site_name}] Rate-limit period has passed. Resetting block time.")
+            cls._block_release_time_fc2ppvdb = 0 # 차단 해제, 변수 초기화
+            cls._last_retry_after_value = 0
+            return False
+
+    @classmethod
+    def _handle_rate_limit(cls, response_headers):
+        """Retry-After 헤더를 확인하고 차단 시간을 설정합니다."""
+        retry_after_str = response_headers.get('Retry-After')
+        if retry_after_str and retry_after_str.isdigit():
+            retry_after_seconds = int(retry_after_str)
+            cls._last_retry_after_value = retry_after_seconds # 로그용으로 저장
+            # 현재 시간에 Retry-After 초를 더해 차단 해제 시간 계산
+            # 너무 긴 시간(예: 하루 이상)이 설정되면 최대치를 두는 것도 고려
+            # if retry_after_seconds > 86400: # 예: 하루 이상이면 최대 1시간으로 제한 (선택적)
+            #    logger.warning(f"[{cls.site_name}] Received very long Retry-After: {retry_after_seconds}s. Limiting block to 1 hour.")
+            #    retry_after_seconds = 3600
+            
+            cls._block_release_time_fc2ppvdb = time.time() + retry_after_seconds
+            release_dt_str = datetime.fromtimestamp(cls._block_release_time_fc2ppvdb).strftime('%Y-%m-%d %H:%M:%S')
+            logger.warning(f"[{cls.site_name}] Rate limit detected. Retry-After: {retry_after_seconds}s. Blocking requests until {release_dt_str}.")
+            return True # 차단 설정됨
+        return False # Retry-After 헤더 없거나 유효하지 않음
+
 
     @classmethod
     def _get_fc2ppvdb_page_content(cls, url, proxy_url=None, use_cloudscraper=True):
+        if cls._is_blocked(): # 요청 전에 차단 상태 확인
+            return None, "Site is rate-limited" # (tree, page_text) 형태
+
         headers = SiteUtil.default_headers.copy()
         headers['Referer'] = cls.site_base_url + "/"
 
@@ -52,24 +96,52 @@ class SiteFc2ppvdb(object):
             # 기본 쿠키와 함께 일반 requests 호출
             res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, cookies=cls.ppvdb_default_cookies, timeout=20)
 
-        if res and res.status_code == 200:
-            page_text = res.text
-            try:
-                return html.fromstring(page_text), page_text # 파싱된 tree와 원본 텍스트 반환
-            except Exception as e_parse:
-                logger.error(f"[{cls.site_name}] Failed to parse HTML: {e_parse}. URL: {url}")
-                return None, page_text # 파싱 실패 시 tree는 None, 텍스트는 반환
-        elif res: # 응답은 받았으나 성공(200)이 아닐 때
-            logger.warning(f"[{cls.site_name}] Failed to get page. Status: {res.status_code}. URL: {url}")
-            return None, res.text if hasattr(res, 'text') else None # tree는 None, 텍스트는 반환 (있다면)
-        else: # 응답 객체 자체가 None일 때 (네트워크 오류 등)
+        if res:
+            page_text = res.text if hasattr(res, 'text') else "" # page_text가 없을 경우 대비
+
+            # Rate Limit 감지 로직 수정
+            is_rate_limited_by_content = False
+            if res.status_code != 200 and "<title>Too Many Requests</title>" in page_text: # 상태코드가 200이 아니면서 title 확인
+                is_rate_limited_by_content = True
+                logger.warning(f"[{cls.site_name}] Rate limit detected by HTML title 'Too Many Requests'. Status: {res.status_code}, URL: {url}")
+            
+            # 상태 코드 429 또는 Retry-After 헤더 또는 HTML 내용으로 Rate Limit 판단
+            if res.status_code == 429 or 'Retry-After' in res.headers or is_rate_limited_by_content:
+                if cls._handle_rate_limit(res.headers): # Retry-After 헤더가 있으면 그것을 우선 사용
+                    return None, f"Rate limit hit (Header). Retry-After: {res.headers.get('Retry-After', 'N/A')}"
+                elif is_rate_limited_by_content: # Retry-After 헤더는 없지만 HTML 내용으로 감지된 경우
+                    # 이 경우, Retry-After가 없으므로 임의의 기본 대기시간 설정 또는 마지막 Retry-After 값 재사용 고려
+                    # 여기서는 일단 헤더가 없을 때의 _handle_rate_limit 동작에 맡기거나,
+                    # 기본 대기시간(예: 5분)을 _block_release_time_fc2ppvdb에 설정할 수 있음
+                    # 예시: cls._block_release_time_fc2ppvdb = time.time() + 300 # 5분 대기
+                    # 혹은, _handle_rate_limit이 False를 반환했으므로 여기서는 그냥 실패로 처리
+                    logger.warning(f"[{cls.site_name}] Rate limit detected by HTML content, but no Retry-After header. Treating as temporary error.")
+                    # 이 경우, 호출부에서 재시도를 유도하거나, 잠시 후 다시 시도하도록 하는 별도 로직이 필요할 수 있음.
+                    # 여기서는 일단 페이지 로드 실패로 간주.
+                    return None, "Rate limit detected by HTML content (no Retry-After header)"
+
+            if res.status_code == 200:
+                page_text = res.text
+                try:
+                    return html.fromstring(page_text), page_text
+                except Exception as e_parse:
+                    logger.error(f"[{cls.site_name}] Failed to parse HTML: {e_parse}. URL: {url}")
+                    return None, page_text
+            else:
+                logger.warning(f"[{cls.site_name}] Failed to get page. Status: {res.status_code}. URL: {url}")
+                return None, res.text if hasattr(res, 'text') else f"HTTP Error: {res.status_code}"
+        else:
             logger.warning(f"[{cls.site_name}] Failed to get page (response is None). URL: {url}")
-            return None, None # 둘 다 None 반환
+            return None, "Network error or no response"
 
     @classmethod
     def search(cls, keyword_num_part, do_trans=False, proxy_url=None, image_mode='0', manual=False,
                  not_found_delay_seconds=0, **kwargs):
         logger.debug(f"[{cls.site_name} Search Keyword(num_part): {keyword_num_part}, manual: {manual}, proxy: {'Yes' if proxy_url else 'No'}, delay: {not_found_delay_seconds}s, image_mode_in_kwargs: {kwargs.get('image_mode', 'N/A')}")
+
+        # 요청 전 차단 상태 확인
+        if cls._is_blocked():
+            return {'ret': 'error_site_rate_limited', 'data': f"Site is currently rate-limited. Try again later. Retry-After was {cls._last_retry_after_value}s."}
 
         current_image_mode_for_search = kwargs.get('image_mode', image_mode if image_mode else '0')
         ret = {'ret': 'failed', 'data': []}
@@ -78,20 +150,23 @@ class SiteFc2ppvdb(object):
 
         try:
             search_url = f'{cls.site_base_url}/articles/{keyword_num_part}/'
-
             tree, response_html_text = cls._get_fc2ppvdb_page_content(search_url, proxy_url=proxy_url, use_cloudscraper=True)
 
+            if response_html_text and "Site is rate-limited" in response_html_text: # _get_fc2ppvdb_page_content에서 반환한 메시지
+                logger.warning(f"[{cls.site_name} Search] Aborted due to rate-limiting for {search_url}.")
+                return {'ret': 'Too Many Requests', 'data': response_html_text}
+
             # --- HTML 파일 저장 로직 (디버깅용) ---
-            if response_html_text: # response_html_text가 None이 아닐 때만 저장 시도
-                temp_filename = f"{cls.site_name}_search_{keyword_num_part}_{P.package_name}.html"
-                temp_filepath = os.path.join(path_data, "tmp", temp_filename)
-                try:
-                    os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
-                    with open(temp_filepath, 'w', encoding='utf-8') as f:
-                        f.write(response_html_text)
-                    logger.debug(f"[{cls.site_name} Search] HTML content saved to: {temp_filepath}")
-                except Exception as e_save:
-                    logger.error(f"[{cls.site_name} Search] Failed to save HTML to {temp_filepath}: {e_save}")
+            #if response_html_text: # response_html_text가 None이 아닐 때만 저장 시도
+            #    temp_filename = f"{cls.site_name}_search_{keyword_num_part}_{P.package_name}.html"
+            #    temp_filepath = os.path.join(path_data, "tmp", temp_filename)
+            #    try:
+            #        os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
+            #        with open(temp_filepath, 'w', encoding='utf-8') as f:
+            #            f.write(response_html_text)
+            #        logger.debug(f"[{cls.site_name} Search] HTML content saved to: {temp_filepath}")
+            #    except Exception as e_save:
+            #        logger.error(f"[{cls.site_name} Search] Failed to save HTML to {temp_filepath}: {e_save}")
 
             if tree is None: # _get_fc2ppvdb_page_content에서 tree가 None이면 실패
                 logger.warning(f"[{cls.site_name} Search] Failed to get valid HTML tree for URL: {search_url}.")
@@ -201,6 +276,10 @@ class SiteFc2ppvdb(object):
              use_image_server=False, image_server_url=None, image_server_local_path=None,
              url_prefix_segment=None, max_arts=0, use_extras=True,
              use_review=False, **kwargs):
+
+        # 요청 전 차단 상태 확인
+        if cls._is_blocked():
+            return {'ret': 'error_site_rate_limited', 'data': f"Site is currently rate-limited. Try again later. Retry-After was {cls._last_retry_after_value}s."}
 
         keyword_num_part = code_module_site_id[len(cls.module_char) + len(cls.site_char):]
         ui_code_for_images = f'FC2-{keyword_num_part}'

@@ -64,5 +64,5 @@ class SiteHentaku:
             entity_actor.update(info)
             return True
         else:
-            logger.info(f"Hentaku: '{entity_actor['originalname']}' 정보 찾지 못함.")
+            logger.debug(f"Hentaku: '{entity_actor['originalname']}' 정보 찾지 못함.")
             return False
