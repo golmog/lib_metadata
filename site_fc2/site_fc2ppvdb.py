@@ -63,7 +63,7 @@ class SiteFc2ppvdb(object):
             # 더 간단하게: //h1[contains(text(), 'このページは削除されました')]
             deleted_page_elements = tree.xpath("//h1[contains(text(), 'このページは削除されました')]")
             if deleted_page_elements:
-                # logger.debug(f"[{cls.site_name} Search] Page deleted on site for keyword_num_part: {keyword_num_part} (문구: {deleted_page_elements[0].text.strip()})")
+                logger.debug(f"[{cls.site_name} Search] Page deleted on site for keyword_num_part: {keyword_num_part} (문구: {deleted_page_elements[0].text.strip()})")
                 is_page_not_found = True
 
             if is_page_not_found:

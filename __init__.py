@@ -44,7 +44,7 @@ from .site_avdbs import SiteAvdbs
 from .site_dmm import SiteDmm
 from .site_javbus import SiteJavbus
 from .site_jav321 import SiteJav321
-from .site_mgstage import SiteMgstageDvd, SiteMgstageAma
+from .site_mgstage import SiteMgstageDvd
 from .site_javdb import SiteJavdb
 
 from .site_vibe import SiteVibe

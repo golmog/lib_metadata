@@ -73,7 +73,7 @@ class SiteDmm:
                     else:
                         logger.warning("Set-Cookie received, but not updated in session. Trying manual set...")
                         SiteUtil.session.cookies.set("age_check_done", "1", domain=".dmm.co.jp", path="/"); SiteUtil.session.cookies.set("age_check_done", "1", domain=".dmm.com", path="/")
-                        logger.info("Manually set age_check_done cookie."); cls.age_verified = True; return True
+                        logger.debug("Manually set age_check_done cookie."); cls.age_verified = True; return True
                 else: logger.warning(f"Age check failed (Status:{confirm_response.status_code} or cookie missing).")
             except Exception as e: logger.exception(f"Age verification exception: {e}")
             cls.age_verified = False; return False
@@ -103,7 +103,7 @@ class SiteDmm:
         # --- 검색 URL 생성 ---
         search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': dmm_keyword_for_url }
         search_url = f"{cls.site_base_url}/search/?{py_urllib_parse.urlencode(search_params)}"
-        logger.debug(f"Using new search URL (v2): {search_url}")
+        logger.debug(f"Search URL: {search_url}")
 
         search_headers = cls._get_request_headers(referer=cls.fanza_av_url)
         tree = None
@@ -145,7 +145,7 @@ class SiteDmm:
             #    os.makedirs(os.path.join(path_data, 'tmp'), exist_ok=True)
             #    with open(debug_html_path, 'w', encoding='utf-8') as f:
             #        f.write(etree.tostring(tree, pretty_print=True, encoding='unicode'))
-            #    logger.info(f"DMM Search HTML content saved to: {debug_html_path} due to no items found.")
+            #    logger.debug(f"DMM Search HTML content saved to: {debug_html_path} due to no items found.")
             #except Exception as e_save_html: logger.error(f"DMM Search: Failed to save HTML for no items: {e_save_html}")
             return []
 
@@ -355,7 +355,7 @@ class SiteDmm:
             if is_bluray_to_filter:
                 dvd_exists = item_ui_code_filter in dvd_ui_codes
                 # logger.debug(f"  Item is Blu-ray. DVD exists for UI Code '{item_ui_code_filter}'? {dvd_exists}")
-                if dvd_exists: logger.info(f"Excluding Blu-ray item '{item_to_check_bluray.get('code')}' because DVD version exists.")
+                if dvd_exists: logger.debug(f"Excluding Blu-ray item '{item_to_check_bluray.get('code')}' because DVD version exists.")
                 else: filtered_ret.append(item_to_check_bluray) 
             else: filtered_ret.append(item_to_check_bluray)
 
@@ -606,7 +606,7 @@ class SiteDmm:
                 if match_js_var:
                     trailer_url_raw = match_js_var.group(1)
                     trailer_url = "https:" + trailer_url_raw if trailer_url_raw.startswith("//") else trailer_url_raw
-                    logger.info(f"DMM VR Trailer Fallback: Found sampleUrl: {trailer_url}")
+                    logger.debug(f"DMM VR Trailer Fallback: Found sampleUrl: {trailer_url}")
         except Exception as e_fallback:
             logger.exception(f"DMM VR Trailer Fallback: Exception for CID {cid_part}: {e_fallback}")
         return trailer_url
@@ -648,7 +648,7 @@ class SiteDmm:
             detail_url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={cid_part}/"
             current_content_type = 'videoa' # 파싱 시 사용할 임시 타입
 
-        logger.info(f"DMM Info (Processing as {current_content_type}): Accessing detail page: {detail_url}")
+        logger.debug(f"DMM Info (Processing as {current_content_type}): Accessing detail page: {detail_url}")
         referer = cls.fanza_av_url if current_content_type in ['videoa', 'vr'] else (cls.site_base_url + "/mono/dvd/")
         headers = cls._get_request_headers(referer=referer)
 
@@ -658,7 +658,7 @@ class SiteDmm:
             if tree is None: 
                 logger.error(f"DMM Info ({current_content_type}): Failed to get page tree for {code}. URL: {detail_url}")
                 if (content_type_from_cache == 'unknown' or content_type_from_cache == 'videoa') and current_content_type == 'videoa':
-                    logger.info(f"DMM Info: Retrying with DVD path for {code} as videoa failed.")
+                    logger.debug(f"DMM Info: Retrying with DVD path for {code} as videoa failed.")
                     current_content_type = 'dvd' 
                     detail_url = cls.site_base_url + f"/mono/dvd/-/detail/=/cid={cid_part}/"
                     referer = cls.site_base_url + "/mono/dvd/"
@@ -994,83 +994,106 @@ class SiteDmm:
         final_landscape_source = None
         arts_urls_for_processing = [] 
 
-        if not skip_default_landscape_logic: # 랜드스케이프는 PL을 기본으로 사용
+        if not skip_default_landscape_logic:
             final_landscape_source = pl_on_page
 
-        if not skip_default_poster_logic: # 포스터 결정 로직
-            fixed_crop_applied_for_bluray = False
-            # --- 특수 Blu-ray 800x442 처리 로직 ---
-            if entity.content_type == 'bluray' and pl_on_page:
-                try:
-                    pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_on_page, proxy_url=proxy_url)
-                    if pl_image_obj_for_fixed_crop:
-                        img_width, img_height = pl_image_obj_for_fixed_crop.size
-                        if img_width == 800 and 438 <= img_height <= 444:
-                            crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
-                            final_poster_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
-                            if final_poster_pil_object:
-                                final_poster_source = final_poster_pil_object 
-                                final_poster_crop_mode = None 
-                                fixed_crop_applied_for_bluray = True
-                except Exception as e_fixed_crop_bluray:
-                    logger.error(f"DMM Blu-ray: Error during fixed crop: {e_fixed_crop_bluray}")
-
-
-            if not fixed_crop_applied_for_bluray:
-                # videoa 또는 vr 타입일 경우
-                if entity.content_type == 'videoa' or entity.content_type == 'vr':
-                    if ps_to_poster_setting and ps_url_from_search_cache:
-                        final_poster_source = ps_url_from_search_cache
-                    elif pl_on_page and ps_url_from_search_cache and SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url):
-                        final_poster_source = pl_on_page
-                    else:
-                        specific_found = False
-                        if ps_url_from_search_cache:
-                            for sp_candidate in specific_candidates_on_page:
-                                if SiteUtil.is_hq_poster(ps_url_from_search_cache, sp_candidate, proxy_url=proxy_url):
-                                    final_poster_source = sp_candidate
-                                    specific_found = True
-                                    break
-                        if not specific_found:
-                            if pl_on_page and ps_url_from_search_cache:
-                                crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
-                                if crop_pos : final_poster_source = pl_on_page; final_poster_crop_mode = crop_pos
-                                else: final_poster_source = ps_url_from_search_cache
-                            elif ps_url_from_search_cache : final_poster_source = ps_url_from_search_cache
-                            elif pl_on_page: final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting 
-                            elif specific_candidates_on_page: final_poster_source = specific_candidates_on_page[0]
-                            else: final_poster_source = None
-
-                # dvd 또는 일반 bluray (800x442 아닌 경우) 타입일 경우
-                elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
-                    if ps_to_poster_setting and ps_url_from_search_cache:
-                        final_poster_source = ps_url_from_search_cache
-                    elif pl_on_page and ps_url_from_search_cache:
-                        crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
-                        if crop_pos: final_poster_source = pl_on_page; final_poster_crop_mode = crop_pos
-                        elif SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url): final_poster_source = pl_on_page 
-                        else:
-                            specific_found_dvd = False
-                            if ps_url_from_search_cache:
-                                for sp_candidate_dvd in specific_candidates_on_page:
-                                    if SiteUtil.is_hq_poster(ps_url_from_search_cache, sp_candidate_dvd, proxy_url=proxy_url):
-                                        final_poster_source = sp_candidate_dvd
-                                        specific_found_dvd = True
-                                        break
-                            if not specific_found_dvd:
-                                final_poster_source = ps_url_from_search_cache
-                    elif ps_url_from_search_cache: final_poster_source = ps_url_from_search_cache
-                    elif pl_on_page: final_poster_source = pl_on_page; final_poster_crop_mode = crop_mode_setting
-                    elif specific_candidates_on_page: final_poster_source = specific_candidates_on_page[0]
-                    else: final_poster_source = None
-
-            if final_poster_source is None and ps_url_from_search_cache and not ps_to_poster_setting:
-                logger.debug(f"DMM ({entity.content_type}): No poster source determined, falling back to cached PS: {ps_url_from_search_cache}")
+        # 포스터 결정 로직 (if not skip_default_poster_logic: 내부)
+        if not skip_default_poster_logic:
+            # --- 우선순위 1: PS 강제 포스터 사용 설정 ---
+            if ps_to_poster_setting and ps_url_from_search_cache:
+                logger.debug(f"DMM Poster (Priority 1): 'PS to Poster' setting is ON. Using cached PS: {ps_url_from_search_cache}")
                 final_poster_source = ps_url_from_search_cache
-            elif final_poster_source is None:
-                logger.warning(f"DMM ({entity.content_type}): No poster source could be determined for {code}.")
+                final_poster_crop_mode = None # PS는 크롭 없이 사용
+            
+            # --- 우선순위 2: 크롭 모드 사용자 설정 (PS 강제 사용이 아닐 때) ---
+            # crop_mode_setting 은 __info_settings 에서 code 에 따라 결정된 값 (r, l, c 또는 None)
+            elif crop_mode_setting and pl_on_page: # 사용자 설정 크롭 모드가 있고 PL 이미지가 있을 때
+                logger.debug(f"DMM Poster (Priority 2): User crop_mode_setting ('{crop_mode_setting}') is active. Using PL ('{pl_on_page}') with this crop.")
+                final_poster_source = pl_on_page
+                final_poster_crop_mode = crop_mode_setting
+            
+            # --- 우선순위 3: 특수 Blu-ray 고정 크롭 처리 (위 사용자 설정들이 적용되지 않았을 때) ---
+            else:
+                fixed_crop_applied_for_bluray = False
+                # --- 특수 Blu-ray 800x442 처리 로직 ---
+                if entity.content_type == 'bluray' and pl_on_page:
+                    try:
+                        pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_on_page, proxy_url=proxy_url)
+                        if pl_image_obj_for_fixed_crop:
+                            img_width, img_height = pl_image_obj_for_fixed_crop.size
+                            if img_width == 800 and 438 <= img_height <= 444:
+                                crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
+                                final_poster_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
+                                if final_poster_pil_object:
+                                    final_poster_source = final_poster_pil_object 
+                                    final_poster_crop_mode = None 
+                                    fixed_crop_applied_for_bluray = True
+                    except Exception as e_fixed_crop_bluray:
+                        logger.error(f"DMM Blu-ray: Error during fixed crop: {e_fixed_crop_bluray}")
 
-        # 4. 팬아트 목록 결정
+                # --- 우선순위 4: 일반 포스터 결정 로직 ---
+                if not final_poster_source and not fixed_crop_applied_for_bluray:
+                    logger.debug(f"DMM Poster (Priority 4 attempt): Applying general poster determination logic.")
+                    if ps_url_from_search_cache:
+                        # --- 4-A. is_hq_poster 검사 ---
+                        # PL이 세로형 고화질이고 PS와 유사한지 (가능성 낮음)
+                        if pl_on_page and SiteUtil.is_portrait_high_quality_image(pl_on_page, proxy_url=proxy_url):
+                            if SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url):
+                                final_poster_source = pl_on_page
+
+                        # Specific Arts에서 세로형 고화질 포스터 검사
+                        if final_poster_source is None and specific_candidates_on_page:
+                            for art_candidate in specific_candidates_on_page:
+                                if SiteUtil.is_portrait_high_quality_image(art_candidate, proxy_url=proxy_url):
+                                    if SiteUtil.is_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url):
+                                        final_poster_source = art_candidate; break
+
+                        # --- 4-B. has_hq_poster 검사 ---
+                        if final_poster_source is None:
+                            if pl_on_page:
+                                crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
+                                if crop_pos:
+                                    final_poster_source = pl_on_page
+                                    final_poster_crop_mode = crop_pos
+
+                            # Specific Arts
+                            if final_poster_source is None and specific_candidates_on_page:
+                                for art_candidate in specific_candidates_on_page:
+                                    crop_pos_art = SiteUtil.has_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url)
+                                    if crop_pos_art:
+                                        final_poster_source = art_candidate
+                                        final_poster_crop_mode = crop_pos_art
+                                        break
+
+                        # --- 4-C. 최종 폴백: PS 사용 ---
+                        if final_poster_source is None:
+                            final_poster_source = ps_url_from_search_cache
+                            final_poster_crop_mode = None
+
+                        if final_poster_source:
+                            logger.debug(f"DMM: General logic determined poster: '{str(final_poster_source)[:100]}...', crop: {final_poster_crop_mode}")
+
+                    else: # ps_url_from_search_cache가 없는 경우 (매우 드묾)
+                        logger.warning(f"DMM Poster: ps_url_from_search_cache is missing. Priority 4 logic cannot run effectively.")
+                        if pl_on_page: # PS가 없으면 PL을 기본으로 사용 (크롭모드는 기본 설정값 사용)
+                            final_poster_source = pl_on_page
+                            final_poster_crop_mode = crop_mode_setting
+                        elif specific_candidates_on_page:
+                            final_poster_source = specific_candidates_on_page[0]
+                        else:
+                            logger.warning(f"DMM Poster: No PS, PL, or Specific Arts available for Priority 4 logic.")
+
+            # 모든 로직 후에도 포스터가 결정되지 않은 경우 (안전장치, 거의 발생 안 함)
+            if final_poster_source is None:
+                # 이 시점에서 ps_url_from_search_cache가 있다면 그것을 마지막으로 사용 시도
+                if ps_url_from_search_cache:
+                    logger.debug(f"DMM Poster (Final Fallback): Using PS as poster because all other methods failed.")
+                    final_poster_source = ps_url_from_search_cache
+                    final_poster_crop_mode = None
+                else:
+                    logger.warning(f"DMM ({entity.content_type}): No poster source could be determined for {code} after all checks.")
+
+        # 팬아트 목록 결정
         potential_fanart_candidates = []
         potential_fanart_candidates.extend(specific_candidates_on_page)
         potential_fanart_candidates.extend(other_arts_on_page) 
@@ -1091,7 +1114,7 @@ class SiteDmm:
 
         logger.debug(f"DMM ({entity.content_type}): Final Images Decision - Poster='{final_poster_source}' (Crop='{final_poster_crop_mode}'), Landscape='{final_landscape_source}', Fanarts_to_process({len(arts_urls_for_processing)})='{arts_urls_for_processing[:3]}...'")
 
-        # 5. entity.thumb 및 entity.fanart 채우기
+        # entity.thumb 및 entity.fanart 채우기
         if not (use_image_server and image_mode == '4'):
             if final_poster_source and not skip_default_poster_logic:
                 if not any(t.aspect == 'poster' for t in entity.thumb):
@@ -1137,7 +1160,7 @@ class SiteDmm:
 
                     # 2차 시도 (Fallback): 이전 sampleUrl 방식
                     if not trailer_url_final:
-                        logger.info(f"DMM VR Trailer: New method failed for {cid_part}. Trying fallback (old sampleUrl method).")
+                        logger.debug(f"DMM VR Trailer: New method failed for {cid_part}. Trying fallback (old sampleUrl method).")
                         trailer_url_final = cls._get_dmm_vr_trailer_fallback(cid_part, detail_url, proxy_url)
 
                 elif entity.content_type == 'videoa':

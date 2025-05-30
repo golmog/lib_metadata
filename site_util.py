@@ -36,7 +36,7 @@ class SiteUtil:
             use_temp=True,
             expire_after=timedelta(hours=6),
         )
-        logger.debug("requests_cache.CachedSession initialized successfully.")
+        # logger.debug("requests_cache.CachedSession initialized successfully.")
     except Exception as e:
         logger.debug("requests cache 사용 안함: %s", e)
         session = requests.Session()
@@ -146,27 +146,51 @@ class SiteUtil:
 
     @classmethod
     def get_response(cls, url, **kwargs):
-        proxy_url = kwargs.pop("proxy_url", None)
-        if proxy_url:
-            kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
+        proxy_url_from_arg = kwargs.pop("proxy_url", None)
 
-        kwargs.setdefault("headers", cls.default_headers)
+        proxies_for_this_request = None
+        if proxy_url_from_arg:
+            proxies_for_this_request = {"http": proxy_url_from_arg, "https": proxy_url_from_arg}
+            # logger.debug(f"SiteUtil.get_response for URL='{url}': Using EXPLICIT proxy from argument: {proxies_for_this_request}")
+        else:
+            proxies_for_this_request = {} # 세션 기본 프록시 무시
+            # logger.debug(f"SiteUtil.get_response for URL='{url}': NO explicit proxy from argument. Setting proxies to {proxies_for_this_request} to bypass session proxies for this request.")
 
+        request_headers = kwargs.pop("headers", cls.default_headers.copy())
         method = kwargs.pop("method", "GET")
         post_data = kwargs.pop("post_data", None)
         if post_data:
             method = "POST"
             kwargs["data"] = post_data
 
+        if "javbus.com" in url:
+            request_headers["referer"] = "https://www.javbus.com/"
+
         try:
-            res = cls.session.request(method, url, **kwargs)
+            res = cls.session.request(method, url, headers=request_headers, proxies=proxies_for_this_request, **kwargs)
+
+            #log_source = "FROM CACHE" if hasattr(res, 'from_cache') and res.from_cache else "fetched (NOT from cache or cache expired/missed)"
+
+            #if res.status_code == 200:
+            #    logger.info(f"SiteUtil.get_response: URL '{url}' {log_source}. Status: {res.status_code} OK.")
+            #else:
+            #    logger.warning(f"SiteUtil.get_response: URL '{url}' {log_source}. Status: {res.status_code} (Not 200 OK).")
+
             return res
-        except requests.exceptions.RequestException as e_req:
-            logger.error(f"SiteUtil.get_response: RequestException for URL='{url}'. Proxy='{proxy_url}'. Error: {e_req}")
-            logger.error(traceback.format_exc())
+
+        except requests.exceptions.Timeout as e_timeout:
+            # 에러 로그에 사용하려 했던 프록시 정보 (proxy_url_from_arg)를 명시
+            logger.error(f"SiteUtil.get_response: Timeout for URL='{url}'. Attempted Proxy (from arg)='{proxy_url_from_arg}'. Error: {e_timeout}")
             return None
+        except requests.exceptions.ConnectionError as e_conn:
+            logger.error(f"SiteUtil.get_response: ConnectionError for URL='{url}'. Attempted Proxy (from arg)='{proxy_url_from_arg}'. Error: {e_conn}")
+            return None
+        except requests.exceptions.RequestException as e_req:
+            logger.error(f"SiteUtil.get_response: RequestException (other) for URL='{url}'. Attempted Proxy (from arg)='{proxy_url_from_arg}'. Error: {e_req}")
+            logger.error(traceback.format_exc()) 
+            return None 
         except Exception as e_general:
-            logger.error(f"SiteUtil.get_response: General Exception for URL='{url}'. Proxy='{proxy_url}'. Error: {e_general}")
+            logger.error(f"SiteUtil.get_response: General Exception for URL='{url}'. Attempted Proxy (from arg)='{proxy_url_from_arg}'. Error: {e_general}")
             logger.error(traceback.format_exc())
             return None
 
@@ -289,7 +313,7 @@ class SiteUtil:
                 # logger.debug(f"Image '{image_url}' IS portrait high quality (W: {width}, H: {height}, Ratio: {actual_ratio:.2f}). Criteria: H>={min_height}, Ratio>={aspect_ratio_threshold}")
                 return True
             else:
-                logger.debug(f"Image '{image_url}' is NOT portrait high quality (W: {width}, H: {height}, Ratio: {actual_ratio:.2f}). Criteria: H>={min_height}, Ratio>={aspect_ratio_threshold}")
+                #logger.debug(f"Image '{image_url}' is NOT portrait high quality (W: {width}, H: {height}, Ratio: {actual_ratio:.2f}). Criteria: H>={min_height}, Ratio>={aspect_ratio_threshold}")
                 return False
 
         except Exception as e: 
@@ -498,14 +522,14 @@ class SiteUtil:
         # logger.debug(f"process_image_mode: mode='{image_mode}', source='{log_name}', crop='{crop_mode}'")
 
         if image_mode == "0": 
-            return image_source # 원본 사용
+            return image_source
 
-        if image_mode in ["1", "2"]: # SJVA URL 프록시
-            if not (isinstance(image_source, str) and not os.path.exists(image_source)): # URL이 아니면
+        if image_mode in ["1", "2"]:
+            if not (isinstance(image_source, str) and not os.path.exists(image_source)):
                 logger.debug(f"Image mode {image_mode} (SJVA URL Proxy) called with non-URL source '{log_name}'.")
-                return image_source # 원본 반환 (프록시 불가)
+                return image_source
             
-            api_path = "image_proxy" if image_mode == "1" else "discord_proxy" # SJVA 내 API 엔드포인트 이름
+            api_path = "image_proxy" if image_mode == "1" else "discord_proxy"
             tmp = f"{{ddns}}/metadata/api/{api_path}?url=" + py_urllib.quote_plus(image_source)
             if proxy_url: tmp += "&proxy_url=" + py_urllib.quote_plus(proxy_url)
             if crop_mode: tmp += "&crop_mode=" + py_urllib.quote_plus(crop_mode)
@@ -625,12 +649,12 @@ class SiteUtil:
                                     im_to_process = im_no_lb 
                                     wl_new, hl_new = im_to_process.size
                                     logger.debug(f"save_image_to_server_path: Letterbox removed from '{log_source_info}'. Original: {wl_orig}x{hl_orig}, Now: {wl_new}x{hl_new}")
-                                else:
-                                    logger.warning(f"save_image_to_server_path: Failed to crop letterbox from '{log_source_info}'.")
-                            else:
-                                logger.debug(f"save_image_to_server_path: Invalid letterbox crop pixels for '{log_source_info}'.")
-                        else:
-                            logger.debug(f"save_image_to_server_path: Image '{log_source_info}' ratio ({aspect_ratio_orig:.2f}) not in 4:3 range. No letterbox removal.")
+                        #        else:
+                        #            logger.warning(f"save_image_to_server_path: Failed to crop letterbox from '{log_source_info}'.")
+                        #    else:
+                        #        logger.debug(f"save_image_to_server_path: Invalid letterbox crop pixels for '{log_source_info}'.")
+                        #else:
+                        #    logger.debug(f"save_image_to_server_path: Image '{log_source_info}' ratio ({aspect_ratio_orig:.2f}) not in 4:3 range. No letterbox removal.")
                 except Exception as e_letterbox:
                     logger.error(f"save_image_to_server_path: Error during letterbox removal for '{log_source_info}': {e_letterbox}")
 
@@ -1099,7 +1123,7 @@ class SiteUtil:
         ws, hs = im_sm_obj.size
         wl, hl = im_lg_to_compare.size
         if ws > wl or hs > hl:
-            # logger.debug(f"{function_name_for_log}: Small image ({ws}x{hs}) > large image ({wl}x{hl}).")
+            logger.debug(f"{function_name_for_log}: Small image ({ws}x{hs}) > large image ({wl}x{hl}).")
             return None
 
         positions = ["r", "l", "c"]
@@ -1115,7 +1139,7 @@ class SiteUtil:
                 logger.error(f"{function_name_for_log}: Exception during ahash for pos '{pos}': {e_ahash}")
                 continue
         
-        logger.debug(f"{function_name_for_log}: Primary check (ahash) failed. Trying phash.")
+        # logger.debug(f"{function_name_for_log}: Primary check (ahash) failed. Trying phash.")
         phash_threshold = 10
         for pos in positions:
             try:
@@ -1134,11 +1158,11 @@ class SiteUtil:
 
     @classmethod
     def is_hq_poster(cls, im_sm_source, im_lg_source, proxy_url=None):
-        # logger.debug(f"--- is_hq_poster called ---")
+        logger.debug(f"--- is_hq_poster called ---")
         log_sm_info = f"URL: {im_sm_source}" if isinstance(im_sm_source, str) else f"Type: {type(im_sm_source)}"
         log_lg_info = f"URL: {im_lg_source}" if isinstance(im_lg_source, str) else f"Type: {type(im_lg_source)}"
-        # logger.debug(f"  Small Image Source: {log_sm_info}")
-        # logger.debug(f"  Large Image Source: {log_lg_info}")
+        logger.debug(f"  Small Image Source: {log_sm_info}")
+        logger.debug(f"  Large Image Source: {log_lg_info}")
         
         try:
             if im_sm_source is None or im_lg_source is None:
@@ -1158,7 +1182,7 @@ class SiteUtil:
                 from imagehash import phash 
 
                 ws, hs = im_sm_obj.size; wl, hl = im_lg_obj.size
-                # logger.debug(f"  Sizes: Small=({ws}x{hs}), Large=({wl}x{hl})")
+                logger.debug(f"  Sizes: Small=({ws}x{hs}), Large=({wl}x{hl})")
 
                 ratio_sm = ws / hs if hs != 0 else 0
                 ratio_lg = wl / hl if hl != 0 else 0
@@ -1184,9 +1208,9 @@ class SiteUtil:
                 phash_sm = phash(im_sm_obj); phash_lg = phash(im_lg_obj)
                 hdis_p = phash_sm - phash_lg
                 hdis_sum = hdis_d + hdis_p # 합산 거리
-                # logger.debug(f"  phash distance: {hdis_p}, Combined distance (d+p): {hdis_sum}")
-                result = hdis_sum < 20 # 합산 거리가 20 미만이면 유사하다고 판단
-                # logger.debug(f"  Result: {result} (Combined distance < 20)")
+                logger.debug(f"  phash distance: {hdis_p}, Combined distance (d+p): {hdis_sum}")
+                result = hdis_sum < 24 # 유사도 판단 기준
+                logger.debug(f"  Result: {result} (Combined distance < 24)")
                 return result
 
             except ImportError:

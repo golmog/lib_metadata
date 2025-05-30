@@ -344,7 +344,7 @@ class SiteJav321:
                                 ui_code_for_image = formatted_pid
                             entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image 
                             entity.ui_code = ui_code_for_image; identifier_parsed = True
-                            logger.info(f"Jav321: Identifier (ui_code_for_image) parsed: {ui_code_for_image}")
+                            logger.debug(f"Jav321: Identifier (ui_code_for_image) parsed: {ui_code_for_image}")
                             if entity.tag is None: entity.tag = []
                             if '-' in ui_code_for_image and ui_code_for_image.split('-',1)[0].upper() not in entity.tag:
                                 entity.tag.append(ui_code_for_image.split('-',1)[0].upper())
@@ -492,7 +492,7 @@ class SiteJav321:
                     user_custom_poster_url = web_url
                     entity.thumb.append(EntityThumb(aspect="poster", value=user_custom_poster_url))
                     skip_default_poster_logic = True
-                    logger.info(f"Jav321: Using user custom poster for {ui_code_for_image}: {web_url}")
+                    logger.debug(f"Jav321: Using user custom poster for {ui_code_for_image}: {web_url}")
                     break 
 
             for suffix in landscape_suffixes:
@@ -503,31 +503,21 @@ class SiteJav321:
                     user_custom_landscape_url = web_url
                     entity.thumb.append(EntityThumb(aspect="landscape", value=user_custom_landscape_url))
                     skip_default_landscape_logic = True
-                    logger.info(f"Jav321: Using user custom landscape for {ui_code_for_image}: {web_url}")
+                    logger.debug(f"Jav321: Using user custom landscape for {ui_code_for_image}: {web_url}")
                     break
 
         # === 4. 기본 이미지 처리: 사용자 지정 이미지가 없거나, 팬아트가 더 필요한 경우 실행 ===
-        # 최종적으로 entity.thumb과 entity.fanart에 추가될 이미지 소스들
-        final_poster_source = None         # 포스터로 사용될 최종 이미지 소스 (URL 또는 로컬 파일 경로)
-        final_poster_crop_mode = None    # final_poster_source에 적용될 크롭 모드
-        final_landscape_url_source = None  # 랜드스케이프로 사용될 최종 이미지 URL
-        arts_urls_for_processing = []      # 팬아트로 사용될 최종 이미지 URL 목록
+        final_poster_source = None
+        final_poster_crop_mode = None
+        final_landscape_url_source = None
+        arts_urls_for_processing = []
 
-        # 상세 페이지에서 파싱한 이미지 URL들
         ps_from_detail_page = None
         pl_from_detail_page = None
         all_arts_from_page = []
+        now_printing_path = None # 플레이스홀더 이미지 로컬 경로
+        jav321_special_poster_filepath = None # MGS 스타일 처리 결과 임시 파일 경로
 
-        # 플레이스홀더 이미지("now_printing.jpg")의 로컬 경로
-        now_printing_path = None
-
-        # 유효 후보 변수 초기화
-        valid_ps_candidate = None
-        valid_pl_candidate = None
-        jav321_special_poster_filepath = None
-
-        # 기본 이미지 로직 실행 조건 결정
-        # 사용자 지정 포스터/랜드스케이프가 없거나, 필요한 팬아트 수가 부족할 때
         needs_default_image_processing = not skip_default_poster_logic or \
                                          not skip_default_landscape_logic or \
                                          (entity.fanart is None or (len(entity.fanart) < max_arts and max_arts > 0))
@@ -535,308 +525,283 @@ class SiteJav321:
         if needs_default_image_processing:
             logger.debug(f"Jav321: Running default image logic for {code} (P_skip:{skip_default_poster_logic}, PL_skip:{skip_default_landscape_logic}, FanartNeed:{entity.fanart is None or (len(entity.fanart) < max_arts and max_arts > 0)})...")
             try:
-                # 4-1. 상세 페이지에서 PS, PL, Arts 이미지 URL 파싱
-                img_urls_from_page = cls.__img_urls(tree) 
+                img_urls_from_page = cls.__img_urls(tree) # 상세 페이지에서 PS, PL, Arts 파싱
                 ps_from_detail_page = img_urls_from_page.get('ps')
                 pl_from_detail_page = img_urls_from_page.get('pl')
-                all_arts_from_page = img_urls_from_page.get('arts', []) 
+                all_arts_from_page = img_urls_from_page.get('arts', [])
 
-                # 4-2. 플레이스홀더("now_printing.jpg") 이미지 경로 설정 (이미지 서버 사용 시)
-                if use_image_server and image_server_local_path:
+                # 플레이스홀더 이미지("now_printing.jpg")의 로컬 경로 설정
+                if use_image_server and image_server_local_path: # 이미지 서버 사용할 때만 의미 있음
                     now_printing_path = os.path.join(image_server_local_path, "now_printing.jpg")
                     if not os.path.exists(now_printing_path): 
-                        now_printing_path = None 
+                        # logger.debug(f"Jav321: now_printing.jpg not found at {now_printing_path}. Placeholder check might be ineffective.")
+                        now_printing_path = None
 
                 # --- A. 포스터 소스 결정 ---
                 if not skip_default_poster_logic:
-                    temp_poster_step1 = None 
-                    temp_crop_step1 = None 
+                    # 1. 유효한 PS 후보 결정 (상세페이지 PS 우선, 없으면 검색 캐시 PS. 플레이스홀더 제외)
+                    valid_ps_candidate = None
+                    if ps_from_detail_page:
+                        is_placeholder = False
+                        if now_printing_path and SiteUtil.are_images_visually_same(ps_from_detail_page, now_printing_path, proxy_url=proxy_url):
+                            is_placeholder = True
+                            logger.debug(f"Jav321: Detail page PS ('{ps_from_detail_page}') is a placeholder.")
+                        if not is_placeholder:
+                            valid_ps_candidate = ps_from_detail_page
 
-                    # 4-A-1. 유효한 PS 후보 결정 (플레이스홀더 아닌 것)
-                    is_ps_detail_placeholder = False
-                    if ps_from_detail_page and now_printing_path and SiteUtil.are_images_visually_same(ps_from_detail_page, now_printing_path, proxy_url=proxy_url):
-                        is_ps_detail_placeholder = True
-
-                    if ps_from_detail_page and not is_ps_detail_placeholder:
-                        valid_ps_candidate = ps_from_detail_page
-                    elif ps_url_from_search_cache:
-                        is_search_ps_placeholder = False
+                    if not valid_ps_candidate and ps_url_from_search_cache: # 상세 PS가 없거나 플레이스홀더일 때 캐시 사용
+                        is_placeholder_cache = False
                         if now_printing_path and SiteUtil.are_images_visually_same(ps_url_from_search_cache, now_printing_path, proxy_url=proxy_url):
-                            is_search_ps_placeholder = True
-                        if not is_search_ps_placeholder: valid_ps_candidate = ps_url_from_search_cache
-                        elif ps_from_detail_page : valid_ps_candidate = ps_from_detail_page
+                            is_placeholder_cache = True
+                            logger.debug(f"Jav321: Search cache PS ('{ps_url_from_search_cache}') is a placeholder.")
+                        if not is_placeholder_cache:
+                            valid_ps_candidate = ps_url_from_search_cache
 
-                    # 4-A-2. 유효한 PL 후보 결정 (플레이스홀더 아닌 것)
+                    # valid_ps_candidate가 없으면, 플레이스홀더라 하더라도 상세페이지 PS를 마지막으로 고려
+                    if not valid_ps_candidate and ps_from_detail_page:
+                        logger.warning(f"Jav321: No non-placeholder PS found. Using detail page PS ('{ps_from_detail_page}') even if it might be a placeholder.")
+                        valid_ps_candidate = ps_from_detail_page
+
+
+                    # 2. 유효한 PL 후보 결정 (플레이스홀더 제외)
+                    valid_pl_candidate = None
                     if pl_from_detail_page:
-                        is_pl_detail_placeholder = False
+                        is_placeholder_pl = False
                         if now_printing_path and SiteUtil.are_images_visually_same(pl_from_detail_page, now_printing_path, proxy_url=proxy_url):
-                            is_pl_detail_placeholder = True
-                        if not is_pl_detail_placeholder: valid_pl_candidate = pl_from_detail_page
+                            is_placeholder_pl = True
+                            logger.debug(f"Jav321: Detail page PL ('{pl_from_detail_page}') is a placeholder.")
+                        if not is_placeholder_pl:
+                            valid_pl_candidate = pl_from_detail_page
+                        else: # PL이 플레이스홀더라면 사용하지 않음
+                            logger.warning(f"Jav321: Detail page PL ('{pl_from_detail_page}') is a placeholder and will not be used as valid_pl_candidate.")
 
-                    # 4-A-3. 일반적인 포스터 결정 로직 (MGStage 방식 기반)
-                    # temp_poster_step1 과 temp_crop_step1 은 이 블록 이전에 None 으로 초기화되어 있어야 함 (이미 그렇게 되어 있음)
+
+                    # 3. 일반적인 포스터 결정 로직
+                    temp_poster_source = None; temp_poster_crop_mode = None
                     if ps_to_poster_setting and valid_ps_candidate:
-                        temp_poster_step1 = valid_ps_candidate
-                        # temp_crop_step1 은 None으로 유지
+                        temp_poster_source = valid_ps_candidate
                     elif crop_mode_setting and valid_pl_candidate:
-                        temp_poster_step1 = valid_pl_candidate
-                        temp_crop_step1 = crop_mode_setting
-                    elif valid_pl_candidate and valid_ps_candidate: # PS, PL 모두 유효할 때 HQ 로직
-                        loc = SiteUtil.has_hq_poster(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url)
-                        if loc:
-                            temp_poster_step1 = valid_pl_candidate
-                            temp_crop_step1 = loc
+                        temp_poster_source = valid_pl_candidate
+                        temp_poster_crop_mode = crop_mode_setting
+                    elif valid_pl_candidate and valid_ps_candidate:
+                        loc_hq = SiteUtil.has_hq_poster(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url)
+                        if loc_hq:
+                            temp_poster_source = valid_pl_candidate
+                            temp_poster_crop_mode = loc_hq
                         elif SiteUtil.is_hq_poster(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url):
-                            temp_poster_step1 = valid_pl_candidate
-                    elif valid_ps_candidate and not valid_pl_candidate and not crop_mode_setting and not ps_to_poster_setting:
-                        pass
-                    elif valid_pl_candidate and crop_mode_setting and not ps_to_poster_setting:
-                        temp_poster_step1 = valid_pl_candidate
-                        temp_crop_step1 = crop_mode_setting
+                            temp_poster_source = valid_pl_candidate
 
-                    # 4-A-4. Specific Art 후보를 포스터로 사용 시도 (일반 로직에서 포스터 못 정했고, PS강제설정 아닐 때)
-                    if not temp_poster_step1 and not ps_to_poster_setting:
+                    # Specific Art 후보를 포스터로 사용 시도 (위에서 포스터 못 정했고, PS강제 아니며, PS 있을 때)
+                    if not temp_poster_source and not ps_to_poster_setting and valid_ps_candidate:
                         actual_arts_for_specific = [art for art in all_arts_from_page if art != valid_pl_candidate] if valid_pl_candidate else all_arts_from_page
 
                         specific_art_candidates = []
                         if actual_arts_for_specific:
-                            # 첫 번째 아트를 specific 후보로 추가
                             if actual_arts_for_specific[0] not in specific_art_candidates:
                                 specific_art_candidates.append(actual_arts_for_specific[0])
 
-                            # 마지막 아트가 첫 번째 아트와 다르고, 리스트에 이미 없다면 추가
                             if len(actual_arts_for_specific) > 1 and \
                                actual_arts_for_specific[-1] != actual_arts_for_specific[0] and \
                                actual_arts_for_specific[-1] not in specific_art_candidates:
                                 specific_art_candidates.append(actual_arts_for_specific[-1])
-
-                        logger.debug(f"Jav321: Specific art candidates for poster: {specific_art_candidates}")
-
-                        if valid_ps_candidate:
-                            for sp_candidate in specific_art_candidates:
-                                if SiteUtil.is_hq_poster(valid_ps_candidate, sp_candidate, proxy_url=proxy_url):
-                                    logger.info(f"Jav321: Specific art ('{sp_candidate}') chosen as poster based on HQ check with PS ('{valid_ps_candidate}').")
-                                    temp_poster_step1 = sp_candidate
-                                    temp_crop_step1 = None
-                                    break
-                    
-                    # 4-A-5. 최종 Fallback (그래도 포스터 없으면 유효 PS 사용)
-                    if not temp_poster_step1 and valid_ps_candidate:
-                        logger.debug(f"Jav321: Fallback to PS as poster after PL and Art checks failed.")
-                        temp_poster_step1 = valid_ps_candidate
-                        temp_crop_step1 = None # PS는 보통 크롭 없이 사용
-
-                    logger.debug(f"Jav321: After general poster logic (including art check): temp_poster_step1='{temp_poster_step1}', temp_crop_step1='{temp_crop_step1}'")
-
-                    title_for_vr_check = entity.title if entity.title else "" 
-                    is_vr_content = title_for_vr_check.lower().startswith('[vr]') or \
-                                    title_for_vr_check.lower().startswith('【vr】')
-
-                    skip_mgs_for_vr_and_use_ps = False
-                    # 조건: 일반 로직 결과가 PS이고, VR 콘텐츠이며, PS 강제 설정이 아니고, 유효 PS가 있을 때
-                    if temp_poster_step1 == valid_ps_candidate and \
-                       is_vr_content and \
-                       not ps_to_poster_setting and \
-                       valid_ps_candidate:
-                        skip_mgs_for_vr_and_use_ps = True
-                        logger.info(f"Jav321: VR content ('{title_for_vr_check}') and general logic chose PS. Skipping MGS style processing and using PS ('{valid_ps_candidate}') as poster.")
-
-                    # 4-A-6. MGS 스타일 특별 처리 시도 (VR 스킵 조건이 False일 때만)
-                    if not skip_mgs_for_vr_and_use_ps:
-                        attempt_special_local = False
-                        general_logic_chose_ps = (temp_poster_step1 == valid_ps_candidate)
-
-                        if valid_pl_candidate and valid_ps_candidate and \
-                           not ps_to_poster_setting and general_logic_chose_ps:
-                            try:
-                                pl_image_for_check = SiteUtil.imopen(valid_pl_candidate, proxy_url=proxy_url)
-                                if pl_image_for_check:
-                                    pl_width, pl_height = pl_image_for_check.size
-                                    if pl_height > 0 : 
-                                        original_pl_ratio = pl_width / pl_height
-                                        half_pl_width = pl_width / 2
-                                        is_original_pl_very_wide = (original_pl_ratio >= 1.7)
-                                        is_half_cut_shape_acceptable = False 
-                                        if half_pl_width > 0: 
-                                            is_half_cut_shape_acceptable = (pl_height <= half_pl_width * 1.2)
-                                        if is_original_pl_very_wide and is_half_cut_shape_acceptable:
-                                            attempt_special_local = True
-                                else:
-                                    logger.warning(f"Jav321: Could not open PL ('{valid_pl_candidate}') for MGS style eligibility check (imopen failed).")
-                            except Exception as e_ratio_check:
-                                logger.error(f"Jav321: Error during PL MGS style eligibility check: {e_ratio_check}")
                         
-                        if attempt_special_local:
-                            logger.debug(f"Jav321: Attempting MGS style processing for PL ('{valid_pl_candidate}').")
-                            _temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url)
-                            if _temp_filepath and os.path.exists(_temp_filepath): 
-                                jav321_special_poster_filepath = _temp_filepath # 기존 변수명 사용
-                                logger.info(f"Jav321: MGS style processing successful. Using temp file: {jav321_special_poster_filepath}")
-                            else:
-                                logger.debug(f"Jav321: MGS style processing did not yield a valid file for PL ('{valid_pl_candidate}').")
+                        # logger.debug(f"Jav321: Specific art candidates for poster: {specific_art_candidates}")
+                        for sp_candidate in specific_art_candidates:
+                            # 플레이스홀더인지 확인
+                            is_sp_placeholder = False
+                            if now_printing_path and SiteUtil.are_images_visually_same(sp_candidate, now_printing_path, proxy_url=proxy_url):
+                                is_sp_placeholder = True
 
-                    # 4-A-7. 최종 포스터 소스 및 크롭 모드 결정
-                    if skip_mgs_for_vr_and_use_ps:
-                        final_poster_source = valid_ps_candidate 
-                        final_poster_crop_mode = None
-                    elif jav321_special_poster_filepath:
+                            if not is_sp_placeholder and SiteUtil.is_hq_poster(valid_ps_candidate, sp_candidate, proxy_url=proxy_url):
+                                logger.debug(f"Jav321: Specific art ('{sp_candidate}') chosen as poster by HQ check with PS ('{valid_ps_candidate}').")
+                                temp_poster_source = sp_candidate
+                                temp_poster_crop_mode = None
+                                break
+
+                    # 4. MGS 스타일 특별 처리 시도 (PS와 PL 모두 유효하고, 위에서 PS가 선택되었거나 아무것도 선택 안됐을 때)
+                    attempt_mgs_style = False
+                    if valid_ps_candidate and valid_pl_candidate:
+                        if temp_poster_source == valid_ps_candidate or temp_poster_source is None:
+                            if not ps_to_poster_setting: # PS 강제 아니어야 함
+                                try:
+                                    pl_img_obj_for_check = SiteUtil.imopen(valid_pl_candidate, proxy_url=proxy_url)
+                                    if pl_img_obj_for_check:
+                                        pl_w, pl_h = pl_img_obj_for_check.size
+                                        # 가로가 세로의 1.7배 이상이고, 반으로 잘랐을 때 세로가 가로의 1.2배 이하
+                                        if pl_h > 0 and (pl_w / pl_h >= 1.7) and (pl_h <= (pl_w / 2) * 1.2) :
+                                            attempt_mgs_style = True
+                                except Exception as e_mgs_check: logger.error(f"Jav321: Error checking PL for MGS style: {e_mgs_check}")
+
+                    if attempt_mgs_style:
+                        logger.debug(f"Jav321: Attempting MGS style processing for PL ('{valid_pl_candidate}') with PS ('{valid_ps_candidate}').")
+                        _temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url)
+                        if _temp_filepath and os.path.exists(_temp_filepath):
+                            jav321_special_poster_filepath = _temp_filepath
+                            logger.debug(f"Jav321: MGS style processing successful. Using temp file: {jav321_special_poster_filepath}")
+                        # else: logger.debug(f"Jav321: MGS style processing did not yield a file for PL ('{valid_pl_candidate}').")
+
+
+                    # 5. 최종 포스터 소스 및 크롭 모드 결정
+                    if jav321_special_poster_filepath:
                         final_poster_source = jav321_special_poster_filepath
-                        final_poster_crop_mode = None 
-                    else:
-                        final_poster_source = temp_poster_step1
-                        final_poster_crop_mode = temp_crop_step1
+                        final_poster_crop_mode = None
+                    elif temp_poster_source:
+                        final_poster_source = temp_poster_source
+                        final_poster_crop_mode = temp_poster_crop_mode
+                    elif valid_ps_candidate:
+                        final_poster_source = valid_ps_candidate
+                        final_poster_crop_mode = None
+                    elif valid_pl_candidate :
+                        final_poster_source = valid_pl_candidate
+                        final_poster_crop_mode = crop_mode_setting if crop_mode_setting else 'r'
 
-                    logger.debug(f"Jav321: Final poster decision: source='{final_poster_source}', crop='{final_poster_crop_mode}'")
+                    # logger.debug(f"Jav321: Final poster decision: source='{final_poster_source}', crop='{final_poster_crop_mode}'")
 
                 # --- B. 랜드스케이프 소스 결정 ---
                 if not skip_default_landscape_logic: 
-                    final_landscape_url_source = valid_pl_candidate
+                    if valid_pl_candidate:
+                        final_landscape_url_source = valid_pl_candidate
+                    elif pl_from_detail_page:
+                        logger.warning(f"Jav321: No valid (non-placeholder) PL found. Using original PL ('{pl_from_detail_page}') for landscape, it might be a placeholder.")
+                        final_landscape_url_source = pl_from_detail_page
+
 
                 # --- C. 팬아트 목록 결정 ---
-                temp_fanart_list = []
+                temp_fanart_list_final = []
                 if all_arts_from_page:
-                    sources_to_exclude_for_fanart = set() # 팬아트에서 제외할 URL 집합
-                    if final_landscape_url_source: 
-                        sources_to_exclude_for_fanart.add(final_landscape_url_source)
+                    sources_to_exclude_for_fanart = set()
+                    if final_landscape_url_source: sources_to_exclude_for_fanart.add(final_landscape_url_source)
                     if final_poster_source and isinstance(final_poster_source, str) and final_poster_source.startswith("http"):
                         sources_to_exclude_for_fanart.add(final_poster_source)
 
-                    # MGS 스타일 처리로 포스터가 생성된 경우, 원본 PL도 팬아트에서 제외
-                    if valid_pl_candidate and jav321_special_poster_filepath and final_poster_source == jav321_special_poster_filepath:
+                    if jav321_special_poster_filepath and final_poster_source == jav321_special_poster_filepath and valid_pl_candidate:
                         sources_to_exclude_for_fanart.add(valid_pl_candidate)
-                        logger.debug(f"Jav321: Excluding original PL ('{valid_pl_candidate}') from fanart as MGS style poster was generated.")
 
                     for art_url in all_arts_from_page:
-                        if len(temp_fanart_list) >= max_arts: break # 최대 개수 도달 시 중단
-                        if art_url and art_url not in sources_to_exclude_for_fanart: # 제외 대상 아니고
+                        if len(temp_fanart_list_final) >= max_arts: break
+                        if art_url and art_url not in sources_to_exclude_for_fanart:
                             is_art_placeholder = False
                             if now_printing_path and SiteUtil.are_images_visually_same(art_url, now_printing_path, proxy_url=proxy_url):
-                                is_art_placeholder = True # 플레이스홀더인지 확인
-                            if not is_art_placeholder and art_url not in temp_fanart_list: # 플레이스홀더 아니고 중복 아니면 추가
-                                temp_fanart_list.append(art_url)
-                arts_urls_for_processing = temp_fanart_list
-                logger.debug(f"Jav321: Final fanart list ({len(arts_urls_for_processing)} items): {arts_urls_for_processing[:3]}...")
+                                is_art_placeholder = True
+                            if not is_art_placeholder and art_url not in temp_fanart_list_final:
+                                temp_fanart_list_final.append(art_url)
+                arts_urls_for_processing = temp_fanart_list_final
+                # logger.debug(f"Jav321: Final fanart list ({len(arts_urls_for_processing)} items): {arts_urls_for_processing[:3]}...")
 
                 # --- D. 이미지 최종 처리 및 entity.thumb, entity.fanart에 추가 (이미지 서버 사용 안 할 때) ---
                 if not (use_image_server and image_mode == '4'):
                     # 포스터 추가
                     if final_poster_source and not skip_default_poster_logic and not any(t.aspect == 'poster' for t in entity.thumb):
+                        # final_poster_source가 로컬 파일 경로일 수 있으므로 process_image_mode가 처리 가능한지 확인 필요
                         processed_poster = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
                         if processed_poster: entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster))
+                    
                     # 랜드스케이프 추가
                     if final_landscape_url_source and not skip_default_landscape_logic and not any(t.aspect == 'landscape' for t in entity.thumb):
-                        processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_url_source, proxy_url=proxy_url) # 랜드스케이프는 크롭 없음
+                        processed_landscape = SiteUtil.process_image_mode(image_mode, final_landscape_url_source, proxy_url=proxy_url)
                         if processed_landscape: entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape))
 
                     # 팬아트 추가
-                    if entity.fanart is None: entity.fanart = [] # None 방지
+                    if entity.fanart is None: entity.fanart = []
                     for art_url_item in arts_urls_for_processing:
-                        if len(entity.fanart) >= max_arts: break # 이미 추가된 팬아트 수도 고려
+                        if len(entity.fanart) >= max_arts: break
                         processed_art = SiteUtil.process_image_mode(image_mode, art_url_item, proxy_url=proxy_url)
-                        if processed_art and processed_art not in entity.fanart : # 중복 방지
+                        if processed_art and processed_art not in entity.fanart:
                             entity.fanart.append(processed_art)
+            
             except Exception as e_img_proc_default:
                 logger.exception(f"Jav321: Error during default image processing logic for {code}: {e_img_proc_default}")
 
+
         # === 5. 이미지 서버 저장 로직 (ui_code_for_image 사용) ===
         if use_image_server and image_mode == '4' and ui_code_for_image:
-            logger.info(f"Jav321: Saving images to Image Server for {ui_code_for_image}...")
+            logger.debug(f"Jav321: Saving images to Image Server for {ui_code_for_image}...")
 
-            # PS 저장 (플레이스홀더 아닌 유효 PS 결정 로직 강화)
-            ps_to_save_on_server = None
-            # 1. 상세 페이지 PS가 유효하면 사용
-            if ps_from_detail_page: 
-                is_ps_detail_placeholder_for_save = False
-                if now_printing_path and SiteUtil.are_images_visually_same(ps_from_detail_page, now_printing_path, proxy_url=proxy_url):
-                    is_ps_detail_placeholder_for_save = True
-                if not is_ps_detail_placeholder_for_save:
-                    ps_to_save_on_server = ps_from_detail_page
-            # 2. 상세 페이지 PS가 부적합하고, 검색 캐시 PS가 유효하면 사용
-            if not ps_to_save_on_server and ps_url_from_search_cache:
-                is_search_ps_placeholder_for_save = False
-                if now_printing_path and SiteUtil.are_images_visually_same(ps_url_from_search_cache, now_printing_path, proxy_url=proxy_url):
-                    is_search_ps_placeholder_for_save = True
-                if not is_search_ps_placeholder_for_save: 
-                    ps_to_save_on_server = ps_url_from_search_cache
+            # PS 저장 (이미 위에서 valid_ps_candidate로 플레이스홀더 걸러짐)
+            # if valid_ps_candidate: # valid_ps_candidate는 needs_default_image_processing 블록 내에 있음. 밖으로 빼거나, ps_from_detail_page/search_cache 재활용
+            #    SiteUtil.save_image_to_server_path(valid_ps_candidate, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
+            # else:
+            #    logger.debug(f"Jav321 ImgServ: No valid (non-placeholder) PS to save for {ui_code_for_image}.")
+            
+            # 포스터 저장 (final_poster_source가 플레이스홀더가 아니어야 함)
+            if not skip_default_poster_logic and final_poster_source:
+                is_final_poster_placeholder = False
+                if now_printing_path and isinstance(final_poster_source, str) and final_poster_source.startswith("http") and \
+                   SiteUtil.are_images_visually_same(final_poster_source, now_printing_path, proxy_url=proxy_url):
+                    is_final_poster_placeholder = True
+                
+                if not is_final_poster_placeholder and not any(t.aspect == 'poster' for t in entity.thumb):
+                    p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
+                    if p_path: entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
+                elif is_final_poster_placeholder:
+                    logger.debug(f"Jav321 ImgServ: Final poster source ('{final_poster_source}') is a placeholder. Skipping save.")
 
-            #if ps_to_save_on_server:
-            #    SiteUtil.save_image_to_server_path(ps_to_save_on_server, 'ps', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
-            #else:
-            #    logger.debug(f"Jav321 ImgServ: No valid PS image to save for {ui_code_for_image}.")
+            # 랜드스케이프 저장 (final_landscape_url_source가 플레이스홀더가 아니어야 함)
+            if not skip_default_landscape_logic and final_landscape_url_source:
+                is_final_landscape_placeholder = False
+                if now_printing_path and SiteUtil.are_images_visually_same(final_landscape_url_source, now_printing_path, proxy_url=proxy_url):
+                    is_final_landscape_placeholder = True
 
-            # 포스터 저장
-            if not skip_default_poster_logic and final_poster_source and not any(t.aspect == 'poster' for t in entity.thumb):
-                p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
-                if p_path: entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
+                if not is_final_landscape_placeholder and not any(t.aspect == 'landscape' for t in entity.thumb):
+                    pl_path = SiteUtil.save_image_to_server_path(final_landscape_url_source, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
+                    if pl_path: entity.thumb.append(EntityThumb(aspect="landscape", value=f"{image_server_url}/{pl_path}"))
+                elif is_final_landscape_placeholder:
+                    logger.debug(f"Jav321 ImgServ: Final landscape source ('{final_landscape_url_source}') is a placeholder. Skipping save.")
 
-            # 랜드스케이프 저장
-            if not skip_default_landscape_logic and final_landscape_url_source and not any(t.aspect == 'landscape' for t in entity.thumb):
-                pl_path = SiteUtil.save_image_to_server_path(final_landscape_url_source, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
-                if pl_path: entity.thumb.append(EntityThumb(aspect="landscape", value=f"{image_server_url}/{pl_path}"))
-
-            # 팬아트 저장
+            # 팬아트 저장 (arts_urls_for_processing는 이미 플레이스홀더가 걸러진 리스트)
             if arts_urls_for_processing:
                 if entity.fanart is None: entity.fanart = []
-                # 현재 서버에 저장된 팬아트 URL들을 가져와서 중복 저장 방지 (좀 더 정확한 방법)
-                current_fanart_urls_on_server = set()
-                for thumb_entry in entity.thumb: # 사용자 지정 팬아트도 있을 수 있으므로 entity.thumb도 확인
-                    if thumb_entry.aspect == 'fanart' and isinstance(thumb_entry.value, str):
-                        current_fanart_urls_on_server.add(thumb_entry.value)
-                for fanart_url_str in entity.fanart: # 기존 entity.fanart에 있는 URL도 확인
-                    if isinstance(fanart_url_str, str):
-                        current_fanart_urls_on_server.add(fanart_url_str)
-
+                current_fanart_urls_on_server = set([thumb.value for thumb in entity.thumb if thumb.aspect == 'fanart' and isinstance(thumb.value, str)] + \
+                                                    [fanart_url for fanart_url in entity.fanart if isinstance(fanart_url, str)])
                 processed_fanart_count_server = len(current_fanart_urls_on_server)
 
-                # 팬아트 제외 로직 (이전과 동일)
-                sources_to_exclude_server = set()
-                if final_landscape_url_source: sources_to_exclude_server.add(final_landscape_url_source)
-                if final_poster_source and isinstance(final_poster_source, str) and final_poster_source.startswith("http"):
-                    sources_to_exclude_server.add(final_poster_source)
-                # valid_pl_candidate는 이 범위에서 사용 가능하도록 위에서 결정되어야 함 (현재 코드에서는 needs_default_image_processing 블록 내에 있음)
-                # 이 부분을 사용하려면 valid_pl_candidate를 needs_default_image_processing 블록 밖에서도 접근 가능하게 하거나,
-                # 또는 pl_from_detail_page를 직접 사용 (단, 플레이스홀더일 수 있음)
-                # 여기서는 MGS 스타일 처리가 적용된 경우를 가정하므로, jav321_special_poster_filepath와 final_poster_source를 사용
-                if jav321_special_poster_filepath and final_poster_source == jav321_special_poster_filepath and pl_from_detail_page: # 원본 PL이 존재할 때
-                    sources_to_exclude_server.add(pl_from_detail_page)
-
-
-                for idx, art_url_item_server in enumerate(arts_urls_for_processing):
+                for idx, art_url_item_server in enumerate(arts_urls_for_processing): # 이 리스트는 이미 플레이스홀더 걸러짐
                     if processed_fanart_count_server >= max_arts: break
-                    if art_url_item_server and art_url_item_server not in sources_to_exclude_server:
-                        art_relative_path = SiteUtil.save_image_to_server_path(art_url_item_server, 'art', image_server_local_path, image_path_segment, ui_code_for_image, art_index=idx + 1, proxy_url=proxy_url)
-                        if art_relative_path:
-                            full_art_url_server = f"{image_server_url}/{art_relative_path}"
-                            if full_art_url_server not in current_fanart_urls_on_server: # 중복 저장 방지
-                                entity.fanart.append(full_art_url_server)
-                                current_fanart_urls_on_server.add(full_art_url_server) # 새로 추가된 것도 집합에 반영
-                                processed_fanart_count_server +=1
+                    # arts_urls_for_processing는 제외 로직도 이미 적용됨
+                    art_relative_path = SiteUtil.save_image_to_server_path(art_url_item_server, 'art', image_server_local_path, image_path_segment, ui_code_for_image, art_index=idx + 1, proxy_url=proxy_url)
+                    if art_relative_path:
+                        full_art_url_server = f"{image_server_url}/{art_relative_path}"
+                        if full_art_url_server not in current_fanart_urls_on_server:
+                            entity.fanart.append(full_art_url_server)
+                            current_fanart_urls_on_server.add(full_art_url_server)
+                            processed_fanart_count_server +=1
+
 
         # === 6. 예고편 처리, Shiroutoname 보정 등 ===
-        entity.extras = [] 
         if use_extras:
             try: 
                 trailer_xpath = '//*[@id="vjs_sample_player"]/source/@src'
                 trailer_tags = tree.xpath(trailer_xpath)
                 if trailer_tags:
                     trailer_url = trailer_tags[0].strip()
-                    if trailer_url.startswith("http"):
+                    if trailer_url.startswith("http"): # 유효한 URL인지 확인
                         trailer_title = entity.tagline if entity.tagline else (entity.title if entity.title else code)
                         entity.extras.append(EntityExtra("trailer", trailer_title, "mp4", trailer_url))
-                else:
-                    logger.debug(f"Jav321: Trailer source tag not found for {code}.")
+                # else:
+                    # logger.debug(f"Jav321: Trailer source tag not found for {code}.")
             except Exception as e_trailer:
                 logger.exception(f"Jav321: Error processing trailer for {code}: {e_trailer}")
 
         # Shiroutoname 보정
-        final_entity = entity 
-        if entity.originaltitle: 
+        final_entity = entity
+        if entity.originaltitle:
             try:
-                final_entity = SiteUtil.shiroutoname_info(entity) 
+                # logger.debug(f"Jav321: Calling Shiroutoname correction for {entity.originaltitle}")
+                final_entity = SiteUtil.shiroutoname_info(entity)
+                # logger.debug(f"Jav321: Shiroutoname correction finished. New title (if changed): {final_entity.title}")
             except Exception as e_shirouto: 
                 logger.exception(f"Jav321: Exception during Shiroutoname correction call for {entity.originaltitle}: {e_shirouto}")
-        else:
-            logger.warning(f"Jav321: Skipping Shiroutoname correction because originaltitle is missing for {code}.")
+        # else:
+            # logger.warning(f"Jav321: Skipping Shiroutoname correction because originaltitle is missing for {code}.")
+
+        # MGS 스타일 처리로 생성된 임시 파일 정리
+        if jav321_special_poster_filepath and os.path.exists(jav321_special_poster_filepath):
+            try:
+                os.remove(jav321_special_poster_filepath)
+                logger.debug(f"Jav321: Removed MGS-style temp poster file: {jav321_special_poster_filepath}")
+            except Exception as e_remove_temp:
+                logger.error(f"Jav321: Failed to remove MGS-style temp poster file {jav321_special_poster_filepath}: {e_remove_temp}")
+
 
         logger.info(f"Jav321: __info processing finished for {code}. UI Code: {ui_code_for_image}, PosterSkip: {skip_default_poster_logic}, LandscapeSkip: {skip_default_landscape_logic}, EntityThumbs: {len(entity.thumb)}, EntityFanarts: {len(entity.fanart)}")
         return final_entity
