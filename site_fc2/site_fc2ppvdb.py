@@ -4,6 +4,8 @@ import re
 import json
 import traceback
 import time
+import os
+from framework import path_data
 
 from lxml import html
 
@@ -26,22 +28,75 @@ class SiteFc2ppvdb(object):
     module_char = 'L'
     site_char = 'P'
 
-    @classmethod
-    def search(cls, keyword_num_part, do_trans=False, proxy_url=None, image_mode='0', manual=False, 
-                 not_found_delay_seconds=0, **kwargs):
-        logger.debug(f"[{cls.site_name} Search Keyword(num_part): {keyword_num_part}, manual: {manual}, proxy: {'Yes' if proxy_url else 'No'}, delay: {not_found_delay_seconds}s")
+    ppvdb_default_cookies = {}
 
+    @classmethod
+    def _get_fc2ppvdb_page_content(cls, url, proxy_url=None, use_cloudscraper=True):
+        headers = SiteUtil.default_headers.copy()
+        headers['Referer'] = cls.site_base_url + "/"
+
+        logger.debug(f"[{cls.site_name}] Requesting URL: {url}, use_cloudscraper: {use_cloudscraper}")
+
+        res = None
+        if use_cloudscraper:
+            # logger.debug(f"[{cls.site_name}] Attempting with cloudscraper...")
+            res = SiteUtil.get_response_cs(url, proxy_url=proxy_url, headers=headers, cookies=cls.ppvdb_default_cookies, timeout=20)
+
+        # Cloudscraper 실패 시 또는 cloudscraper 사용 안 할 경우 일반 requests 시도
+        if res is None:
+            if use_cloudscraper:
+                logger.warning(f"[{cls.site_name}] Cloudscraper failed for {url}. Falling back to standard requests.")
+            # else: # 처음부터 Cloudscraper를 사용 안 한 경우
+                # logger.debug(f"[{cls.site_name}] Attempting with requests (cloudscraper not used)...")
+
+            # 기본 쿠키와 함께 일반 requests 호출
+            res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, cookies=cls.ppvdb_default_cookies, timeout=20)
+
+        if res and res.status_code == 200:
+            page_text = res.text
+            try:
+                return html.fromstring(page_text), page_text # 파싱된 tree와 원본 텍스트 반환
+            except Exception as e_parse:
+                logger.error(f"[{cls.site_name}] Failed to parse HTML: {e_parse}. URL: {url}")
+                return None, page_text # 파싱 실패 시 tree는 None, 텍스트는 반환
+        elif res: # 응답은 받았으나 성공(200)이 아닐 때
+            logger.warning(f"[{cls.site_name}] Failed to get page. Status: {res.status_code}. URL: {url}")
+            return None, res.text if hasattr(res, 'text') else None # tree는 None, 텍스트는 반환 (있다면)
+        else: # 응답 객체 자체가 None일 때 (네트워크 오류 등)
+            logger.warning(f"[{cls.site_name}] Failed to get page (response is None). URL: {url}")
+            return None, None # 둘 다 None 반환
+
+    @classmethod
+    def search(cls, keyword_num_part, do_trans=False, proxy_url=None, image_mode='0', manual=False,
+                 not_found_delay_seconds=0, **kwargs):
+        logger.debug(f"[{cls.site_name} Search Keyword(num_part): {keyword_num_part}, manual: {manual}, proxy: {'Yes' if proxy_url else 'No'}, delay: {not_found_delay_seconds}s, image_mode_in_kwargs: {kwargs.get('image_mode', 'N/A')}")
+
+        current_image_mode_for_search = kwargs.get('image_mode', image_mode if image_mode else '0')
         ret = {'ret': 'failed', 'data': []}
+        tree = None
+        response_html_text = None # HTML 저장용
 
         try:
             search_url = f'{cls.site_base_url}/articles/{keyword_num_part}/'
-            # logger.debug(f"[{cls.site_name} Search] Requesting URL: {search_url}")
 
-            tree = SiteUtil.get_tree(search_url, proxy_url=proxy_url)
-            if tree is None:
-                logger.warning(f"[{cls.site_name} Search] Failed to get HTML tree for URL: {search_url}")
-                ret['data'] = 'failed to get tree'
-                if not_found_delay_seconds > 0:
+            tree, response_html_text = cls._get_fc2ppvdb_page_content(search_url, proxy_url=proxy_url, use_cloudscraper=True)
+
+            # --- HTML 파일 저장 로직 (디버깅용) ---
+            if response_html_text: # response_html_text가 None이 아닐 때만 저장 시도
+                temp_filename = f"{cls.site_name}_search_{keyword_num_part}_{P.package_name}.html"
+                temp_filepath = os.path.join(path_data, "tmp", temp_filename)
+                try:
+                    os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
+                    with open(temp_filepath, 'w', encoding='utf-8') as f:
+                        f.write(response_html_text)
+                    logger.debug(f"[{cls.site_name} Search] HTML content saved to: {temp_filepath}")
+                except Exception as e_save:
+                    logger.error(f"[{cls.site_name} Search] Failed to save HTML to {temp_filepath}: {e_save}")
+
+            if tree is None: # _get_fc2ppvdb_page_content에서 tree가 None이면 실패
+                logger.warning(f"[{cls.site_name} Search] Failed to get valid HTML tree for URL: {search_url}.")
+                ret['data'] = 'failed to get tree or redirection page'
+                if not_found_delay_seconds > 0 and ret['data'] != 'not found on site': # 'not found on site' 아닐때만 딜레이
                     logger.info(f"[{cls.site_name} Search] 'failed to get tree', delaying for {not_found_delay_seconds} seconds.")
                     time.sleep(not_found_delay_seconds)
                 return ret
@@ -98,16 +153,31 @@ class SiteFc2ppvdb(object):
                     # logger.debug(f"[{cls.site_name} Search] Parsed year: {item.year}")
             # else: item.year = 0 # 또는 EntityAVSearch 기본값 사용
 
-            # 이미지 URL (파싱된 원본 URL 그대로 사용)
+            # 이미지 URL
+            original_image_url_from_site = None
             img_elements = tree.xpath(f'{info_block_xpath_base}/div[1]/a/img/@src')
             if img_elements:
                 image_url_temp = img_elements[0]
                 if image_url_temp.startswith('/'):
-                    item.image_url = cls.site_base_url + image_url_temp
+                    original_image_url_from_site = cls.site_base_url + image_url_temp
                 else:
-                    item.image_url = image_url_temp
-                # logger.debug(f"[{cls.site_name} Search] Parsed image URL for search result: {item.image_url}")
-            # else: item.image_url = None # 또는 EntityAVSearch 기본값 사용
+                    original_image_url_from_site = image_url_temp
+
+            # === 이미지 URL 처리 ===
+            # manual=True (에이전트 검색 결과)일 때만 이미지 URL을 process_image_mode로 처리
+            if manual and original_image_url_from_site:
+                # LogicJavFc2에서 전달받은 image_mode와 proxy_url 사용
+                # current_image_mode_for_search는 kwargs에서 가져온 image_mode (jav_censored_image_mode)
+                item.image_url = SiteUtil.process_image_mode(
+                    current_image_mode_for_search, 
+                    original_image_url_from_site, 
+                    proxy_url=proxy_url # LogicJavFc2에서 전달받은 프록시
+                )
+                # logger.debug(f"[{cls.site_name} Search Manual] Processed image URL: {original_image_url_from_site} -> {item.image_url} (mode: {current_image_mode_for_search})")
+            elif original_image_url_from_site: # manual=False 이거나 이미지가 있을 경우 원본 URL 사용
+                item.image_url = original_image_url_from_site
+            else: # 이미지가 아예 없는 경우
+                item.image_url = "" # 또는 None
 
             item.ui_code = f'FC2-{keyword_num_part}'
             item.score = 100 
@@ -127,9 +197,9 @@ class SiteFc2ppvdb(object):
 
 
     @classmethod
-    def info(cls, code_module_site_id, do_trans=True, proxy_url=None, image_mode='0', 
-             use_image_server=False, image_server_url=None, image_server_local_path=None, 
-             url_prefix_segment=None, max_arts=0, use_extras=True, 
+    def info(cls, code_module_site_id, do_trans=True, proxy_url=None, image_mode='0',
+             use_image_server=False, image_server_url=None, image_server_local_path=None,
+             url_prefix_segment=None, max_arts=0, use_extras=True,
              use_review=False, **kwargs):
 
         keyword_num_part = code_module_site_id[len(cls.module_char) + len(cls.site_char):]
@@ -140,27 +210,35 @@ class SiteFc2ppvdb(object):
             logger.debug(f"[{cls.site_name} Info] ImgServ URL: {image_server_url}, LocalPath: {image_server_local_path}, PrefixSeg: {url_prefix_segment}")
 
         ret = {'ret': 'failed', 'data': None}
+        tree = None
+        response_html_text = None
 
         try:
             info_url = f'{cls.site_base_url}/articles/{keyword_num_part}/'
-            logger.debug(f"[{cls.site_name} Info] Requesting URL: {info_url}")
+            # logger.debug(f"[{cls.site_name} Info] Requesting URL: {info_url}")
 
-            tree = SiteUtil.get_tree(info_url, proxy_url=proxy_url)
-            if tree is None:
-                logger.warning(f"[{cls.site_name} Info] Failed to get HTML tree for URL: {info_url}")
-                ret['data'] = 'failed to get tree'
+            tree, response_html_text = cls._get_fc2ppvdb_page_content(info_url, proxy_url=proxy_url, use_cloudscraper=True)
+
+            if tree is None: # _get_fc2ppvdb_page_content에서 tree가 None이면 실패
+                logger.warning(f"[{cls.site_name} Info] Failed to get valid HTML tree for URL: {info_url}")
+                ret['data'] = 'failed to get tree or redirection page'
                 return ret
 
             not_found_title_elements = tree.xpath('/html/head/title/text()')
             not_found_h1_elements = tree.xpath('/html/body/div/div/div/main/div/div/h1/text()')
             is_page_not_found = False
-            if not_found_title_elements and 'お探しの商品が見つかりません' in not_found_title_elements[0]:
+            if not_found_title_elements and ('お探しの商品が見つかりません' in not_found_title_elements[0] or 'not found' in not_found_title_elements[0].lower()):
                 is_page_not_found = True
             elif not_found_h1_elements and "404 Not Found" in not_found_h1_elements[0]:
                 is_page_not_found = True
 
+            deleted_page_elements = tree.xpath("//h1[contains(text(), 'このページは削除されました')]")
+            if deleted_page_elements:
+                logger.debug(f"[{cls.site_name} Info] Page deleted on site for code: {code_module_site_id}")
+                is_page_not_found = True
+
             if is_page_not_found:
-                logger.info(f'[{cls.site_name} Info] Page not found on site for code: {code_module_site_id}')
+                logger.info(f'[{cls.site_name} Info] Page not found or deleted on site for code: {code_module_site_id}')
                 ret['data'] = 'not found on site'
                 return ret
 
@@ -185,10 +263,10 @@ class SiteFc2ppvdb(object):
                     poster_url_original = cls.site_base_url + poster_url_temp
                 else:
                     poster_url_original = poster_url_temp
-                logger.debug(f"[{cls.site_name} Info] Original poster URL: {poster_url_original}")
+                #logger.debug(f"[{cls.site_name} Info] Original poster URL: {poster_url_original}")
 
                 if use_image_server and image_mode == '4' and image_server_local_path and image_server_url and url_prefix_segment:
-                    logger.debug(f"[{cls.site_name} Info] Using image server for poster. UI Code for filename: {ui_code_for_images}")
+                    #logger.debug(f"[{cls.site_name} Info] Using image server for poster. UI Code for filename: {ui_code_for_images}")
                     saved_poster_path = SiteUtil.save_image_to_server_path(
                         poster_url_original, 
                         'p',
@@ -221,7 +299,7 @@ class SiteFc2ppvdb(object):
             title_elements = info_element.xpath(title_xpath)
             if title_elements:
                 raw_title = title_elements[0].strip()
-                logger.debug(f"[{cls.site_name} Info] Raw title for tagline/plot: {raw_title}")
+                # logger.debug(f"[{cls.site_name} Info] Raw title for tagline/plot: {raw_title}")
                 entity.tagline = SiteUtil.trans(raw_title, do_trans=do_trans, source='ja', target='ko')
                 entity.plot = entity.tagline 
                 # logger.debug(f"[{cls.site_name} Info] Processed tagline/plot: {entity.tagline}")
@@ -254,7 +332,7 @@ class SiteFc2ppvdb(object):
                 seller_elements_text = info_element.xpath(seller_xpath_text)
                 if seller_elements_text and seller_elements_text[0].strip():
                     seller_name_raw = seller_elements_text[0].strip()
-                    logger.debug(f"[{cls.site_name} Info] Parsed Seller (for Director/Studio) from text: {seller_name_raw}")
+                    #logger.debug(f"[{cls.site_name} Info] Parsed Seller (for Director/Studio) from text: {seller_name_raw}")
                 else:
                     logger.debug(f"[{cls.site_name} Info] Seller (for Director/Studio) not found for {code_module_site_id}")
 
@@ -291,7 +369,7 @@ class SiteFc2ppvdb(object):
                 for gen_text_part in genre_elements:
                     individual_tags = [tag.strip() for tag in re.split(r'[,/\s]+', gen_text_part.strip()) if tag.strip()]
                     raw_genres_from_site.extend(individual_tags)
-                
+
                 processed_genres = set()
                 for item_genre_ja in raw_genres_from_site:
                     if item_genre_ja not in processed_genres:
@@ -327,10 +405,6 @@ class SiteFc2ppvdb(object):
             entity.originaltitle = f'FC2-{keyword_num_part}'
             entity.sorttitle = f'FC2-{keyword_num_part}'
             logger.debug(f"[{cls.site_name} Info] Set fixed title/originaltitle/sorttitle: {entity.title}")
-
-            logger.info(f"[{cls.site_name} Info] Successfully processed info for code: {code_module_site_id}")
-            ret['ret'] = 'success'
-            ret['data'] = entity.as_dict()
 
             # 리뷰 정보 파싱
             entity.review = []

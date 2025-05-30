@@ -553,7 +553,7 @@ class SiteUtil:
             im_opened = cls.imopen(image_source, proxy_url=proxy_url)
             if im_opened is None: return image_source
 
-            # 2. (선택적) 크롭 적용 - 원본 코드에서는 crop_mode를 여기서 적용 안했음.
+            # 2. (선택적) 크롭 적용
             #    만약 crop_mode를 여기서 적용하려면:
             #    if crop_mode:
             #        cropped = cls.imcrop(im_opened, position=crop_mode)
@@ -578,7 +578,7 @@ class SiteUtil:
                 logger.exception(f"process_image_mode: Mode 5 failed to save/proxy image from '{log_name}': {e_save5}")
                 return image_source
             
-        logger.debug(f"process_image_mode: No specific action for mode '{image_mode}'. Returning original source: {image_source}")
+        #logger.debug(f"process_image_mode: No specific action for mode '{image_mode}'. Returning original source: {image_source}")
         return image_source
 
 

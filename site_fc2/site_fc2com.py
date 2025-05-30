@@ -30,9 +30,9 @@ class SiteFc2Com(object):
     fc2_cookies = {
         'wei6H': '1', # 성인 인증 플래그로 추정
         'language': 'ja', # 또는 'en'
-        #'FC2_GDPR': 'true',
-        #'contents_mode': 'digital',
-        #'contents_func_mode': 'buy',
+        'GDPRCHECK': 'true',
+        'contents_mode': 'digital',
+        'contents_func_mode': 'buy',
         #'CONTENTS_FC2_PHPSESSID': '',
     }
 
@@ -58,29 +58,39 @@ class SiteFc2Com(object):
     @classmethod
     def _get_fc2_page_content(cls, url, proxy_url=None, use_cloudscraper=True):
         headers = SiteUtil.default_headers.copy()
-        headers['Referer'] = cls.site_base_url + "/"
+        headers['Referer'] = cls.site_base_url + "/" # adult.contents.fc2.com
         
         logger.debug(f"[{cls.site_name}] Requesting URL: {url} with Referer: {headers['Referer']}, use_cloudscraper: {use_cloudscraper}")
 
         res = None
         if use_cloudscraper:
-            # logger.debug(f"[{cls.site_name}] Attempting with cloudscraper...")
             res = SiteUtil.get_response_cs(url, proxy_url=proxy_url, headers=headers, cookies=cls.fc2_cookies, timeout=20)
         
-        # Cloudscraper 실패 시 또는 cloudscraper 사용 안 할 경우 일반 requests 시도
         if res is None and not use_cloudscraper:
-            logger.debug(f"[{cls.site_name}] Attempting with requests (cloudscraper not used or failed)...")
             res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, cookies=cls.fc2_cookies, timeout=20)
         elif res is None and use_cloudscraper:
             logger.warning(f"[{cls.site_name}] Cloudscraper failed for {url}. Falling back to standard requests.")
             res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, cookies=cls.fc2_cookies, timeout=20)
 
-
         if res and res.status_code == 200:
             page_text = res.text
-            if '<meta http-equiv="Refresh"' in page_text and 'login.php' in page_text:
-                logger.warning(f"[{cls.site_name}] Received redirection page to login for URL: {url}. Cookies: {cls.fc2_cookies}, Headers: {headers}")
+            
+            is_login_page = False
+            if "fc2.com" in res.url and "login.php" in res.url:
+                is_login_page = True
+                logger.warning(f"[{cls.site_name}] Detected redirection to FC2 main login page. Final URL: {res.url}")
+            elif '<meta http-equiv="Refresh"' in page_text and ('login.php' in page_text or 'adult.contents.fc2.com/login/' in res.url or 'adult.contents.fc2.com/accountscenter/' in res.url):
+                is_login_page = True
+                logger.warning(f"[{cls.site_name}] Detected meta refresh or content indicating login/account page. URL: {url}, Final URL: {res.url}")
+            
+            if is_login_page:
+                logger.warning(f"[{cls.site_name}] Treated as login page for URL: {url}. Cookies used: {cls.fc2_cookies}")
                 return None, page_text
+
+            if "お探しのページは見つかりませんでした。" in page_text:
+                logger.info(f"[{cls.site_name}] Page explicitly states 'not found' for URL: {url}")
+                return None, page_text 
+
             try:
                 return html.fromstring(page_text), page_text
             except Exception as e_parse:
@@ -97,100 +107,116 @@ class SiteFc2Com(object):
     @classmethod
     def search(cls, keyword_num_part, do_trans=False, proxy_url=None, image_mode='0', manual=False, **kwargs):
         logger.debug(f"[{cls.site_name} Search] Keyword(num_part): {keyword_num_part}, manual: {manual}, proxy: {'Yes' if proxy_url else 'No'}")
-        ret = {'ret': 'failed', 'data': []}
+        # 기본 반환 상태: 'no_match', data는 빈 리스트
+        ret = {'ret': 'no_match', 'data': []} 
         tree = None
         response_html_text = None
 
         try:
             search_url = f'{cls.site_base_url}/article/{keyword_num_part}/'
-            
-            # _get_fc2_page_content 사용
             tree, response_html_text = cls._get_fc2_page_content(search_url, proxy_url=proxy_url, use_cloudscraper=True)
 
-            # --- HTML 파일 저장 로직 ---
-            if response_html_text:
-                temp_filename = f"{cls.site_name}_search_{keyword_num_part}_{P.package_name}.html"
-                temp_filepath = os.path.join(path_data, "tmp", temp_filename)
-                try:
-                    os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
-                    with open(temp_filepath, 'w', encoding='utf-8') as f:
-                        f.write(response_html_text)
-                    logger.debug(f"[{cls.site_name} Search] HTML content saved to: {temp_filepath}")
-                except Exception as e_save:
-                    logger.error(f"[{cls.site_name} Search] Failed to save HTML to {temp_filepath}: {e_save}")
+            # HTML 저장 로직 (디버깅용)
+            #if response_html_text:
+            #    temp_filename = f"{cls.site_name}_search_{keyword_num_part}_{P.package_name}.html"
+            #    temp_filepath = os.path.join(path_data, "tmp", temp_filename)
+            #    try:
+            #        os.makedirs(os.path.join(path_data, "tmp"), exist_ok=True)
+            #        with open(temp_filepath, 'w', encoding='utf-8') as f:
+            #            f.write(response_html_text)
+            #        logger.debug(f"[{cls.site_name} Search] HTML content saved to: {temp_filepath}")
+            #    except Exception as e_save:
+            #        logger.error(f"[{cls.site_name} Search] Failed to save HTML to {temp_filepath}: {e_save}")
 
             if tree is None:
-                logger.warning(f"[{cls.site_name} Search] Failed to get valid HTML tree for URL: {search_url}.")
-                ret['data'] = 'failed to get tree or redirection page'
-                return ret
-            
-            title_text_nodes = tree.xpath('/html/head/title/text()')
-            if not title_text_nodes :
-                logger.warning(f"[{cls.site_name} Search] No text found in /html/head/title for keyword: {keyword_num_part}. HTML content was saved.")
-                # 이 경우, _get_fc2_page_content에서 tree가 None으로 반환되었어야 함 (리디렉션 감지 시)
-                # 만약 tree는 있지만 title이 없다면 페이지 구조가 다른 것.
-            elif title_text_nodes[0] == 'お探しの商品が見つかりません':
-                logger.debug(f"[{cls.site_name} Search] Page not found for {keyword_num_part} (お探しの商品が見つかりません)")
-                ret['data'] = 'not found on site'
+                failure_reason = "Failed to get or parse page content."
+                if response_html_text and "お探しのページは見つかりませんでした。" in response_html_text:
+                    failure_reason = "Page not found (お探しの商品が見つかりません)"
+                    # ret['ret'] is already 'no_match'
+                    ret['data'] = failure_reason
+                elif response_html_text and ("fc2.com" in response_html_text and "login.php" in response_html_text or \
+                                            '<meta http-equiv="Refresh"' in response_html_text and ('login.php' in response_html_text or 'adult.contents.fc2.com/login/' in response_html_text)):
+                    failure_reason = "Redirected to login page"
+                    ret['ret'] = 'error_site_login_required'
+                    ret['data'] = failure_reason
+                else:
+                    ret['ret'] = 'error_site_page_load'
+                    ret['data'] = failure_reason
+                
+                logger.warning(f"[{cls.site_name} Search] URL: {search_url}. Reason: {failure_reason}.")
                 return ret
 
+            # tree가 존재하면 파싱 시도
             item = EntityAVSearch(cls.site_name)
-            item.code = cls.module_char + cls.site_char + keyword_num_part 
             
-            h3_title_element = tree.xpath('//div[contains(@class, "items_article_headerInfo")]/h3') 
-            if h3_title_element:
-                extracted_title = cls._extract_fc2com_title(h3_title_element[0])
-                if extracted_title: item.title = extracted_title
-                else: item.title = f"FC2-{keyword_num_part}"; logger.warning(f"[{cls.site_name} Search] Title extraction returned empty. Using fallback.")
-            else:
-                item.title = f"FC2-{keyword_num_part}" 
-                logger.warning(f"[{cls.site_name} Search] Title h3 element not found. Using fallback.")
+            # 필수 정보 파싱 (예: 제목)
+            h3_title_element = tree.xpath('//div[contains(@class, "items_article_headerInfo")]/h3')
+            if not h3_title_element:
+                logger.warning(f"[{cls.site_name} Search] Essential title element not found for {search_url}. Assuming no valid item.")
+                ret['data'] = f"Essential title element not found for {keyword_num_part}"
+                return ret
+
+            # --- 실제 아이템 정보 파싱 ---
+            item.code = cls.module_char + cls.site_char + keyword_num_part
+            
+            extracted_title = cls._extract_fc2com_title(h3_title_element[0])
+            item.title = extracted_title if extracted_title else f"FC2-{keyword_num_part}"
             item.title_ko = item.title
 
+            # 연도 파싱
             year_text_elements = tree.xpath('//*[@id="top"]/div[1]/section[1]/div/section/div[2]/div[2]/p/text()')
             if year_text_elements and year_text_elements[0]:
                 year_match = re.search(r'(\d{4})/\d{2}/\d{2}', year_text_elements[0])
                 if year_match: item.year = int(year_match.group(1))
-            
-            img_elements = tree.xpath('//*[@id="top"]/div[1]/section[1]/div/section/div[1]/span/img/@src')
+
+            # 이미지 URL 파싱
+            img_elements = tree.xpath('//div[contains(@class, "items_article_MainitemThumb")]/span/img/@src')
+            if not img_elements:
+                img_elements = tree.xpath('//*[@id="top"]/div[1]/section[1]/div/section/div[1]/span/img/@src')
+
             if img_elements:
                 img_src = img_elements[0]
                 if img_src.startswith('//'): item.image_url = 'https:' + img_src
-                elif img_src.startswith('/'): item.image_url = urljoin(f'{cls.site_base_url}/article/', img_src) # urljoin 베이스 수정
+                elif img_src.startswith('/'): item.image_url = urljoin(f'{cls.site_base_url}/article/', img_src)
                 else: item.image_url = img_src
 
             item.ui_code = f'FC2-{keyword_num_part}'
             item.score = 100
-            ret['data'].append(item.as_dict())
+            
+            ret['data'] = [item.as_dict()]
             ret['ret'] = 'success'
 
-        except IndexError as e_idx:
-            logger.error(f'[{cls.site_name} Search] IndexError for keyword_num_part {keyword_num_part}: {e_idx}')
-            logger.error(f"HTML Content that caused IndexError was saved to tmp folder.")
-            logger.error(traceback.format_exc())
-            ret['ret'] = 'exception'
-            ret['data'] = f"IndexError: {e_idx}"
         except Exception as exception: 
             logger.error(f'[{cls.site_name} Search] Exception for keyword_num_part {keyword_num_part}: {exception}')
             logger.error(traceback.format_exc())
-            ret['ret'] = 'exception'
+            ret['ret'] = 'error_site_exception'
             ret['data'] = str(exception)
-        
+
         return ret
 
 
     @classmethod
     def _modify_fc2_image_url_width(cls, url, target_width=600):
-        """FC2 이미지 URL의 /w숫자/ 부분을 /w{target_width}/로 변경한다."""
         if not url or not isinstance(url, str):
             return url
+        
+        processed_url = url
+        # 1. 프로토콜 보장 (https:)
+        if processed_url.startswith('//'):
+            processed_url = 'https:' + processed_url
+        elif not processed_url.startswith(('http:', 'https:')):
+            pass
+
+        # 2. 너비 수정
         # 예: //contents-thumbnail2.fc2.com/w1280/storage... -> //contents-thumbnail2.fc2.com/w600/storage...
-        modified_url = re.sub(r'/w\d+/', f'/w{target_width}/', url)
-        if modified_url == url:
-            logger.debug(f"[{cls.site_name}] Image URL width modification: No pattern '/w<number>/' found or already target width in '{url}'. Returning original.")
-        else:
-            logger.debug(f"[{cls.site_name}] Image URL width modified: '{url}' -> '{modified_url}' (target: w{target_width})")
-        return modified_url
+        # 또는 https://contents-thumbnail2.fc2.com/w1280/storage... -> https://contents-thumbnail2.fc2.com/w600/storage...
+        final_url = re.sub(r'/w\d+/', f'/w{target_width}/', processed_url)
+        
+        # if final_url != processed_url :
+        #    logger.debug(f"[{cls.site_name}] Image URL width modified: '{url}' -> '{final_url}' (target: w{target_width})")
+        # else:
+            # logger.debug(f"[{cls.site_name}] Image URL width modification: No pattern '/w<number>/' found or already target width in '{url}'. Returning: {final_url}")
+        return final_url
 
 
     @classmethod
@@ -298,9 +324,9 @@ class SiteFc2Com(object):
 
             # 1. 포스터 (p)
             try:
-                poster_img_src_list = tree_info.xpath('//div[contains(@class, "items_article_Mainitem")]//span[contains(@class, "items_article_contents")]/img/@src')
+                poster_img_src_list = tree_info.xpath('//div[contains(@class, "items_article_MainitemThumb")]/span/img/@src')
                 if not poster_img_src_list:
-                    poster_img_src_list = tree_info.xpath('//div[contains(@class, "items_article_Box")]//div[contains(@class, "items_article_sample")]//img/@src')
+                    poster_img_src_list = tree_info.xpath('//*[@id="top"]/div[1]/section[1]/div/section/div[1]/span/img/@src')
 
                 if poster_img_src_list:
                     poster_img_src = poster_img_src_list[0]
@@ -319,36 +345,32 @@ class SiteFc2Com(object):
             except Exception as e_poster: 
                 logger.error(f'[{cls.site_name} Info] 포스터 처리 중 예외: {e_poster}')
 
-            # 2. & 3. 랜드스케이프(pl) 및 팬아트(art)
+            # 2. 팬아트(art)
             sample_image_links_xpath = '//section[contains(@class, "items_article_SampleImages")]//ul[contains(@class, "items_article_SampleImagesArea")]/li/a/@href'
             sample_image_links = tree_info.xpath(sample_image_links_xpath)
 
             if sample_image_links:
-                # 랜드스케이프(pl) - 첫 번째 샘플 이미지
-                art_href_for_pl = sample_image_links[0]
-                modified_art_href_for_pl = cls._modify_fc2_image_url_width(art_href_for_pl)
-                pl_url_original = 'https:' + modified_art_href_for_pl if modified_art_href_for_pl.startswith('//') \
-                    else (urljoin(info_url, modified_art_href_for_pl) if modified_art_href_for_pl.startswith('/') else modified_art_href_for_pl)
-                if use_image_server and image_mode == '4':
-                    saved_pl_path = SiteUtil.save_image_to_server_path(pl_url_original, 'pl', image_server_local_path, url_prefix_segment, ui_code_for_images, proxy_url=proxy_url)
-                    if saved_pl_path: entity.thumb.append(EntityThumb(aspect='landscape', value=f"{image_server_url}/{saved_pl_path}"))
-                else:
-                    processed_pl_url = SiteUtil.process_image_mode(image_mode, pl_url_original, proxy_url=proxy_url)
-                    if processed_pl_url: entity.thumb.append(EntityThumb(aspect='landscape', value=processed_pl_url))
-
-                # 팬아트(art) - 두 번째 샘플 이미지부터 (max_arts 존중)
-                if max_arts > 0 and len(sample_image_links) > 1:
-                    for idx, art_href in enumerate(sample_image_links[1:]):
+                logger.debug(f"[{cls.site_name} Info] Found {len(sample_image_links)} sample images for arts.")
+                if max_arts > 0:
+                    for idx, art_href_raw in enumerate(sample_image_links):
                         if len(entity.fanart) >= max_arts: break
-                        modified_art_href = cls._modify_fc2_image_url_width(art_href)
-                        art_url_original = 'https:' + modified_art_href if modified_art_href.startswith('//') \
-                            else (urljoin(info_url, modified_art_href) if modified_art_href.startswith('/') else modified_art_href)
+
+                        art_url_original = cls._modify_fc2_image_url_width(art_href_raw)
+                        if art_url_original.startswith('/'): # 만약을 위한 상대경로 처리
+                            art_url_original = urljoin(info_url, art_url_original)
+
                         if use_image_server and image_mode == '4':
-                            saved_art_path = SiteUtil.save_image_to_server_path(art_url_original, 'art', image_server_local_path, url_prefix_segment, ui_code_for_images, art_index=idx, proxy_url=proxy_url) # art_index는 0부터
+                            # art_index는 0부터 시작하도록 수정 (또는 1부터 시작하도록 통일)
+                            # SiteUtil.save_image_to_server_path의 art_index는 1부터 시작한다고 가정되어 있음
+                            saved_art_path = SiteUtil.save_image_to_server_path(art_url_original, 'art', image_server_local_path, url_prefix_segment, ui_code_for_images, art_index=idx + 1, proxy_url=proxy_url)
                             if saved_art_path: entity.fanart.append(f"{image_server_url}/{saved_art_path}")
                         else:
                             processed_art_url = SiteUtil.process_image_mode(image_mode, art_url_original, proxy_url=proxy_url)
                             if processed_art_url: entity.fanart.append(processed_art_url)
+                else:
+                    logger.debug(f"[{cls.site_name} Info] max_arts is 0, skipping fanart processing.")
+            else:
+                logger.debug(f"[{cls.site_name} Info] 샘플 이미지(팬아트용) XPath 결과 없음.")
 
             # --- 엑스트라 (Sample Video) 파싱 시작 ---
             entity.extras = []
@@ -359,7 +381,6 @@ class SiteFc2Com(object):
                 if video_tag_list:
                     video_tag = video_tag_list[0]
                     video_src_raw = video_tag.get('src')
-                    # video_poster_raw = video_tag.get('poster') # 트레일러 썸네일은 pl로 대체하므로 사용 안 함
 
                     if video_src_raw:
                         video_url_final = video_src_raw
