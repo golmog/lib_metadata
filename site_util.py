@@ -107,7 +107,10 @@ class SiteUtil:
                 res = scraper.post(url, data=post_data, cookies=cookies, **kwargs)
             else: # GET
                 res = scraper.get(url, cookies=cookies, **kwargs)
-            
+
+            if res.status_code == 429:
+                return res
+
             if res.status_code != 200:
                 logger.warning(f"SiteUtil.get_response_cs: Received status code {res.status_code} for URL='{url}'. Proxy='{proxy_url}'.")
                 if res.status_code == 403:
