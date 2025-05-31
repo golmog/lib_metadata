@@ -182,8 +182,6 @@ class SiteMgstageDvd(SiteMgstage):
         image_mode="0",
         max_arts=10,
         use_extras=True,
-        ps_to_poster=False, 
-        crop_mode=None,     
         **kwargs          
     ):
         use_image_server = kwargs.get('use_image_server', False)
@@ -191,9 +189,9 @@ class SiteMgstageDvd(SiteMgstage):
         image_server_url = kwargs.get('image_server_url', '').rstrip('/') if use_image_server else ''
         image_server_local_path = kwargs.get('image_server_local_path', '') if use_image_server else ''
         image_path_segment = kwargs.get('url_prefix_segment', 'unknown/unknown')
-        ps_to_poster_setting = ps_to_poster
-        crop_mode_setting = crop_mode
-        
+        ps_to_poster_labels_str = kwargs.get('ps_to_poster_labels_str', '')
+        crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '')
+
         logger.debug(f"Image Server Mode Check ({cls.module_char}): image_mode={image_mode}, use_image_server={use_image_server}")
 
         cached_data = cls._ps_url_cache.get(code, {}) 
@@ -201,7 +199,7 @@ class SiteMgstageDvd(SiteMgstage):
 
         url = cls.site_base_url + f"/product/product_detail/{code[2:]}/"
         tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.headers)
-        if tree is None: 
+        if tree is None:
             logger.error(f"MGStage ({cls.module_char}): Failed to get page tree for {code}. URL: {url}")
             return None
 
@@ -219,7 +217,7 @@ class SiteMgstageDvd(SiteMgstage):
             if h1_tags:
                 h1_text_raw_unmodified = h1_tags[0]
                 original_h1_text_for_vr_check = h1_text_raw_unmodified.strip()
-                h1_text_processed = h1_text_raw_unmodified
+                h1_text_processed = original_h1_text_for_vr_check
                 for ptn in cls.PTN_TEXT_SUB: h1_text_processed = ptn.sub("", h1_text_processed)
                 entity.tagline = SiteUtil.trans(h1_text_processed.strip(), do_trans=do_trans)
             else: logger.warning(f"MGStage ({cls.module_char}): H1 title tag not found for {code}.")
@@ -385,19 +383,51 @@ class SiteMgstageDvd(SiteMgstage):
             if not skip_default_landscape_logic:
                 final_landscape_url_source = pl_url
 
+        # --- 현재 아이템에 대한 PS 강제 사용 여부 및 크롭 모드 결정 ---
+        apply_ps_to_poster_for_this_item = False
+        forced_crop_mode_for_this_item = None
+
+        if hasattr(entity, 'ui_code') and entity.ui_code:
+            # 1. entity.ui_code에서 비교용 레이블 추출
+            label_from_ui_code = ""
+            if '-' in entity.ui_code:
+                temp_label_part = entity.ui_code.split('-',1)[0]
+                label_from_ui_code = temp_label_part.upper()
+
+            if label_from_ui_code:
+                # 2. PS 강제 사용 여부 결정
+                if ps_to_poster_labels_str:
+                    ps_force_labels_list = [x.strip().upper() for x in ps_to_poster_labels_str.split(',') if x.strip()]
+                    if label_from_ui_code in ps_force_labels_list:
+                        apply_ps_to_poster_for_this_item = True
+                        logger.debug(f"[{cls.site_name} Info] PS to Poster WILL BE APPLIED for label '{label_from_ui_code}' based on settings.")
+                
+                # 3. 크롭 모드 결정 (PS 강제 사용이 아닐 때만 의미 있을 수 있음)
+                if crop_mode_settings_str:
+                    for line in crop_mode_settings_str.splitlines():
+                        if not line.strip(): continue
+                        parts = [x.strip() for x in line.split(":", 1)]
+                        if len(parts) == 2:
+                            setting_label = parts[0].upper()
+                            setting_mode = parts[1].lower()
+                            if setting_label == label_from_ui_code and setting_mode in ["r", "l", "c"]:
+                                forced_crop_mode_for_this_item = setting_mode
+                                logger.debug(f"[{cls.site_name} Info] Forced crop mode '{forced_crop_mode_for_this_item}' WILL BE APPLIED for label '{label_from_ui_code}'.")
+                                break 
+
         # 포스터 결정 로직 (if not skip_default_poster_logic: 내부)
         if not skip_default_poster_logic:
-            # 1. PS 강제 포스터 사용 설정 (최우선)
-            if ps_to_poster_setting and ps_url_from_search_cache:
-                logger.debug(f"MGStage ({cls.module_char}): Poster determined by 'PS to Poster' setting: {ps_url_from_search_cache}")
+            # 1. PS 강제 포스터 사용 설정
+            if apply_ps_to_poster_for_this_item and ps_url_from_search_cache:
+                logger.debug(f"[{cls.site_name} Info] Poster determined by FORCED 'ps_to_poster' setting. Using PS: {ps_url_from_search_cache}")
                 final_poster_source = ps_url_from_search_cache
                 final_poster_crop_mode = None
 
             # 2. 크롭 모드 사용자 설정 (PS 강제 사용 아닐 때)
-            elif crop_mode_setting and pl_url:
-                logger.debug(f"MGStage ({cls.module_char}): Poster determined by user 'crop_mode_setting' ('{crop_mode_setting}') with PL: {pl_url}")
+            elif forced_crop_mode_for_this_item and pl_url: # 또는 valid_pl_candidate
+                logger.debug(f"[{cls.site_name} Info] Poster determined by FORCED 'crop_mode={forced_crop_mode_for_this_item}'. Using PL: {pl_url}")
                 final_poster_source = pl_url
-                final_poster_crop_mode = crop_mode_setting
+                final_poster_crop_mode = forced_crop_mode_for_this_item
 
             # 3. 일반 비교 로직 + MGS Special 처리 (위 사용자 설정에서 결정 안 됐을 때)
             else:

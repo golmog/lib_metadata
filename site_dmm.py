@@ -4,6 +4,7 @@ import re
 import urllib.parse as py_urllib_parse
 from lxml import html, etree
 import os
+from PIL import Image
 
 # lib_metadata 패키지 내 다른 모듈 import
 from .entity_av import EntityAVSearch
@@ -615,15 +616,15 @@ class SiteDmm:
     @classmethod
     def __info( 
         cls, code, do_trans=True, proxy_url=None, image_mode="0", max_arts=10, 
-        use_extras=True, ps_to_poster=False, crop_mode=None, **kwargs 
+        use_extras=True, **kwargs 
     ):
         # === 1. 설정값 로드, 캐시 로드, 페이지 로딩, Entity 초기화 ===
         use_image_server = kwargs.get('use_image_server', False)
         image_server_url = kwargs.get('image_server_url', '').rstrip('/') if use_image_server else ''
         image_server_local_path = kwargs.get('image_server_local_path', '') if use_image_server else ''
         image_path_segment = kwargs.get('url_prefix_segment', 'unknown/unknown')
-        ps_to_poster_setting = ps_to_poster
-        crop_mode_setting = crop_mode
+        ps_to_poster_labels_str = kwargs.get('ps_to_poster_labels_str', '')
+        crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '')
 
         cached_data = cls._ps_url_cache.get(code, {})
         ps_url_from_search_cache = cached_data.get('ps') 
@@ -985,7 +986,7 @@ class SiteDmm:
 
         # === 4. 이미지 정보 추출 및 처리 ===
         raw_image_urls = cls.__img_urls(tree, content_type=entity.content_type)
-        pl_on_page = raw_image_urls.get('pl')
+        pl_url = raw_image_urls.get('pl')
         specific_candidates_on_page = raw_image_urls.get('specific_poster_candidates', []) 
         other_arts_on_page = raw_image_urls.get('arts', [])
 
@@ -995,103 +996,173 @@ class SiteDmm:
         arts_urls_for_processing = [] 
 
         if not skip_default_landscape_logic:
-            final_landscape_source = pl_on_page
+            final_landscape_source = pl_url
+
+        # --- 현재 아이템에 대한 PS 강제 사용 여부 및 크롭 모드 결정 ---
+        apply_ps_to_poster_for_this_item = False
+        forced_crop_mode_for_this_item = None
+
+        if hasattr(entity, 'ui_code') and entity.ui_code:
+            # 1. entity.ui_code에서 비교용 레이블 추출
+            label_from_ui_code = ""
+            if '-' in entity.ui_code:
+                temp_label_part = entity.ui_code.split('-',1)[0]
+                label_from_ui_code = temp_label_part.upper()
+
+            if label_from_ui_code:
+                # 2. PS 강제 사용 여부 결정
+                if ps_to_poster_labels_str:
+                    ps_force_labels_list = [x.strip().upper() for x in ps_to_poster_labels_str.split(',') if x.strip()]
+                    if label_from_ui_code in ps_force_labels_list:
+                        apply_ps_to_poster_for_this_item = True
+                        logger.debug(f"[{cls.site_name} Info] PS to Poster WILL BE APPLIED for label '{label_from_ui_code}' based on settings.")
+                
+                # 3. 크롭 모드 결정 (PS 강제 사용이 아닐 때만 의미 있을 수 있음)
+                if crop_mode_settings_str:
+                    for line in crop_mode_settings_str.splitlines():
+                        if not line.strip(): continue
+                        parts = [x.strip() for x in line.split(":", 1)]
+                        if len(parts) == 2:
+                            setting_label = parts[0].upper()
+                            setting_mode = parts[1].lower()
+                            if setting_label == label_from_ui_code and setting_mode in ["r", "l", "c"]:
+                                forced_crop_mode_for_this_item = setting_mode
+                                logger.debug(f"[{cls.site_name} Info] Forced crop mode '{forced_crop_mode_for_this_item}' WILL BE APPLIED for label '{label_from_ui_code}'.")
+                                break
 
         # 포스터 결정 로직 (if not skip_default_poster_logic: 내부)
         if not skip_default_poster_logic:
-            # --- 우선순위 1: PS 강제 포스터 사용 설정 ---
-            if ps_to_poster_setting and ps_url_from_search_cache:
-                logger.debug(f"DMM Poster (Priority 1): 'PS to Poster' setting is ON. Using cached PS: {ps_url_from_search_cache}")
-                final_poster_source = ps_url_from_search_cache
-                final_poster_crop_mode = None # PS는 크롭 없이 사용
-            
-            # --- 우선순위 2: 크롭 모드 사용자 설정 (PS 강제 사용이 아닐 때) ---
-            # crop_mode_setting 은 __info_settings 에서 code 에 따라 결정된 값 (r, l, c 또는 None)
-            elif crop_mode_setting and pl_on_page: # 사용자 설정 크롭 모드가 있고 PL 이미지가 있을 때
-                logger.debug(f"DMM Poster (Priority 2): User crop_mode_setting ('{crop_mode_setting}') is active. Using PL ('{pl_on_page}') with this crop.")
-                final_poster_source = pl_on_page
-                final_poster_crop_mode = crop_mode_setting
-            
-            # --- 우선순위 3: 특수 Blu-ray 고정 크롭 처리 (위 사용자 설정들이 적용되지 않았을 때) ---
-            else:
-                fixed_crop_applied_for_bluray = False
-                # --- 특수 Blu-ray 800x442 처리 로직 ---
-                if entity.content_type == 'bluray' and pl_on_page:
-                    try:
-                        pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_on_page, proxy_url=proxy_url)
-                        if pl_image_obj_for_fixed_crop:
-                            img_width, img_height = pl_image_obj_for_fixed_crop.size
-                            if img_width == 800 and 438 <= img_height <= 444:
-                                crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
-                                final_poster_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
-                                if final_poster_pil_object:
-                                    final_poster_source = final_poster_pil_object 
-                                    final_poster_crop_mode = None 
-                                    fixed_crop_applied_for_bluray = True
-                    except Exception as e_fixed_crop_bluray:
-                        logger.error(f"DMM Blu-ray: Error during fixed crop: {e_fixed_crop_bluray}")
-
-                # --- 우선순위 4: 일반 포스터 결정 로직 ---
-                if not final_poster_source and not fixed_crop_applied_for_bluray:
-                    logger.debug(f"DMM Poster (Priority 4 attempt): Applying general poster determination logic.")
-                    if ps_url_from_search_cache:
-                        # --- 4-A. is_hq_poster 검사 ---
-                        # PL이 세로형 고화질이고 PS와 유사한지 (가능성 낮음)
-                        if pl_on_page and SiteUtil.is_portrait_high_quality_image(pl_on_page, proxy_url=proxy_url):
-                            if SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url):
-                                final_poster_source = pl_on_page
-
-                        # Specific Arts에서 세로형 고화질 포스터 검사
-                        if final_poster_source is None and specific_candidates_on_page:
-                            for art_candidate in specific_candidates_on_page:
-                                if SiteUtil.is_portrait_high_quality_image(art_candidate, proxy_url=proxy_url):
-                                    if SiteUtil.is_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url):
-                                        final_poster_source = art_candidate; break
-
-                        # --- 4-B. has_hq_poster 검사 ---
-                        if final_poster_source is None:
-                            if pl_on_page:
-                                crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_on_page, proxy_url=proxy_url)
-                                if crop_pos:
-                                    final_poster_source = pl_on_page
-                                    final_poster_crop_mode = crop_pos
-
-                            # Specific Arts
-                            if final_poster_source is None and specific_candidates_on_page:
-                                for art_candidate in specific_candidates_on_page:
-                                    crop_pos_art = SiteUtil.has_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url)
-                                    if crop_pos_art:
-                                        final_poster_source = art_candidate
-                                        final_poster_crop_mode = crop_pos_art
-                                        break
-
-                        # --- 4-C. 최종 폴백: PS 사용 ---
-                        if final_poster_source is None:
-                            final_poster_source = ps_url_from_search_cache
-                            final_poster_crop_mode = None
-
-                        if final_poster_source:
-                            logger.debug(f"DMM: General logic determined poster: '{str(final_poster_source)[:100]}...', crop: {final_poster_crop_mode}")
-
-                    else: # ps_url_from_search_cache가 없는 경우 (매우 드묾)
-                        logger.warning(f"DMM Poster: ps_url_from_search_cache is missing. Priority 4 logic cannot run effectively.")
-                        if pl_on_page: # PS가 없으면 PL을 기본으로 사용 (크롭모드는 기본 설정값 사용)
-                            final_poster_source = pl_on_page
-                            final_poster_crop_mode = crop_mode_setting
-                        elif specific_candidates_on_page:
-                            final_poster_source = specific_candidates_on_page[0]
-                        else:
-                            logger.warning(f"DMM Poster: No PS, PL, or Specific Arts available for Priority 4 logic.")
-
-            # 모든 로직 후에도 포스터가 결정되지 않은 경우 (안전장치, 거의 발생 안 함)
-            if final_poster_source is None:
-                # 이 시점에서 ps_url_from_search_cache가 있다면 그것을 마지막으로 사용 시도
-                if ps_url_from_search_cache:
-                    logger.debug(f"DMM Poster (Final Fallback): Using PS as poster because all other methods failed.")
+            # --- ps_url_from_search_cache 존재 유무에 따른 분기 ---
+            if ps_url_from_search_cache: # PS URL이 있는 경우
+                # 1. PS 강제 포스터 사용 설정
+                if apply_ps_to_poster_for_this_item and ps_url_from_search_cache:
+                    logger.debug(f"[{cls.site_name} Info] Poster determined by FORCED 'ps_to_poster' setting. Using PS: {ps_url_from_search_cache}")
                     final_poster_source = ps_url_from_search_cache
                     final_poster_crop_mode = None
+
+                # 2. 크롭 모드 사용자 설정 (PS 강제 사용 아닐 때)
+                elif forced_crop_mode_for_this_item and pl_url: # 또는 valid_pl_candidate
+                    logger.debug(f"[{cls.site_name} Info] Poster determined by FORCED 'crop_mode={forced_crop_mode_for_this_item}'. Using PL: {pl_url}")
+                    final_poster_source = pl_url
+                    final_poster_crop_mode = forced_crop_mode_for_this_item
+
+                logger.debug(f"DMM Poster: PS URL ('{ps_url_from_search_cache}') found. Proceeding with comparison-based logic.")
+                if final_poster_source is None: # 사용자 설정에서 결정 안 됐을 때
+                    # --- 우선순위 3: 일반 포스터 결정 로직 (is_hq_poster, has_hq_poster) ---
+                    logger.debug(f"DMM Poster (Priority 3 attempt with PS): Applying general poster determination logic.")
+
+                    # 3-A: is_hq_poster
+                    if pl_url and SiteUtil.is_portrait_high_quality_image(pl_url, proxy_url=proxy_url):
+                        if SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url):
+                            final_poster_source = pl_url
+                            # final_poster_crop_mode는 None
+
+                    if final_poster_source is None and specific_candidates_on_page:
+                        for art_candidate in specific_candidates_on_page:
+                            if SiteUtil.is_portrait_high_quality_image(art_candidate, proxy_url=proxy_url):
+                                if SiteUtil.is_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url):
+                                    final_poster_source = art_candidate; break
+
+                    # 3-B: has_hq_poster
+                    if final_poster_source is None: # is_hq_poster에서 못 찾았으면
+                        if pl_url:
+                            crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
+                            if crop_pos:
+                                final_poster_source = pl_url
+                                final_poster_crop_mode = crop_pos
+
+                        if final_poster_source is None and specific_candidates_on_page: # PL에서도 못 찾았으면
+                            for art_candidate in specific_candidates_on_page:
+                                crop_pos_art = SiteUtil.has_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url)
+                                if crop_pos_art:
+                                    final_poster_source = art_candidate
+                                    final_poster_crop_mode = crop_pos_art; break
+
+                    # --- 3-C. 특수 고정 크롭 처리 (해상도 기반) ---
+                    # is_hq/has_hq 로직 이후, PS 폴백 이전에 위치
+                    # 아직 포스터가 결정되지 않았거나, PS로 결정된 경우 + PL이 있을 때 시도
+                    if (final_poster_source is None or final_poster_source == ps_url_from_search_cache) and pl_url:
+                        logger.debug(f"DMM Poster (Priority 3-C attempt with PS): Applying fixed-size crop logic for PL: {pl_url}")
+                        try:
+                            pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_url, proxy_url=proxy_url)
+                            if pl_image_obj_for_fixed_crop:
+                                img_width, img_height = pl_image_obj_for_fixed_crop.size
+                                if img_width == 800 and 438 <= img_height <= 444:
+                                    crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
+                                    cropped_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
+                                    if cropped_pil_object:
+                                        final_poster_source = cropped_pil_object 
+                                        final_poster_crop_mode = None
+                                        logger.debug(f"DMM: Fixed-size crop (resolution based) applied to PL (with PS present). Poster source is now a PIL object.")
+                        except Exception as e_fixed_crop_dmm_ps:
+                            logger.error(f"DMM: Error during fixed-size crop attempt (with PS present): {e_fixed_crop_dmm_ps}")
+
+                    if final_poster_source and not isinstance(final_poster_source, Image.Image):
+                        logger.debug(f"DMM (with PS): General/Fixed Crop determined poster: '{str(final_poster_source)[:100]}...', crop: {final_poster_crop_mode}")
+
+                    # --- 우선순위 4 (PS 있는 경우의 폴백): PS 사용 ---
+                    if final_poster_source is None:
+                        logger.debug(f"DMM Poster (Priority 4 with PS - Fallback): Using PS as poster.")
+                        final_poster_source = ps_url_from_search_cache
+                        final_poster_crop_mode = None
+                    # else: 이미 위에서 결정됨
+
+            else: # ps_url_from_search_cache가 없는 경우
+                logger.warning(f"DMM Poster: ps_url_from_search_cache is missing. Applying PL-based or Art-based logic only.")
+                if final_poster_source is None: # 사용자 설정에서 결정 안 됐을 때
+                    # PS가 없으므로 is_hq_poster, has_hq_poster 등 PS 비교 로직은 실행 불가.
+                    # 고정 크기 크롭은 PL만으로 가능하므로 시도.
+                    fixed_crop_applied_no_ps = False
+                    if pl_url:
+                        logger.debug(f"DMM Poster (PS Missing - Prio 3-C attempt): Applying fixed-size crop logic for PL: {pl_url}")
+                        try:
+                            pl_image_obj_for_fixed_crop_no_ps = SiteUtil.imopen(pl_url, proxy_url=proxy_url)
+                            if pl_image_obj_for_fixed_crop_no_ps:
+                                img_width_no_ps, img_height_no_ps = pl_image_obj_for_fixed_crop_no_ps.size
+                                if img_width_no_ps == 800 and 436 <= img_height_no_ps <= 444:
+                                    crop_box_fixed_no_ps = (img_width_no_ps - 380, 0, img_width_no_ps, img_height_no_ps) 
+                                    cropped_pil_object_no_ps = pl_image_obj_for_fixed_crop_no_ps.crop(crop_box_fixed_no_ps)
+                                    if cropped_pil_object_no_ps:
+                                        final_poster_source = cropped_pil_object_no_ps
+                                        final_poster_crop_mode = None
+                                        fixed_crop_applied_no_ps = True
+                                        logger.debug(f"DMM: Fixed-size crop (PS Missing) applied to PL. Poster source is now a PIL object.")
+                        except Exception as e_fixed_crop_dmm_no_ps:
+                            logger.error(f"DMM: Error during fixed-size crop attempt (PS Missing): {e_fixed_crop_dmm_no_ps}")
+
+                    # 고정 크롭 후에도 포스터가 결정되지 않았으면 PL 또는 첫번째 Art 사용
+                    if final_poster_source is None: # 고정 크롭 실패 또는 조건 미달 시
+                        if pl_url: # 사용자 crop_mode_setting이 Prio 2에서 이미 적용되었을 수 있음
+                            logger.debug(f"DMM Poster (PS Missing - Fallback): Using PL.")
+                            final_poster_source = pl_url
+                            final_poster_crop_mode = crop_mode_setting if crop_mode_setting else 'r'
+                        elif specific_candidates_on_page:
+                            logger.debug(f"DMM Poster (PS Missing - Fallback): No PL, using first specific art.")
+                            final_poster_source = specific_candidates_on_page[0]
+                            final_poster_crop_mode = None
+                        else:
+                            logger.error(f"DMM CRITICAL (PS Missing): No poster source could be determined.")
+
+            # --- 최종 안전장치 폴백 ---
+            # 위 모든 로직 후에도 final_poster_source가 None이면 (이론상 거의 발생 안 함)
+            if final_poster_source is None:
+                logger.warning(f"DMM Poster (Final Safety Fallback): All methods failed.")
+                if ps_url_from_search_cache: 
+                    final_poster_source = ps_url_from_search_cache; final_poster_crop_mode = None
+                elif pl_url:
+                    final_poster_source = pl_url; final_poster_crop_mode = crop_mode_setting if crop_mode_setting else 'r'
+                elif specific_candidates_on_page:
+                    final_poster_source = specific_candidates_on_page[0]; final_poster_crop_mode = None
                 else:
-                    logger.warning(f"DMM ({entity.content_type}): No poster source could be determined for {code} after all checks.")
+                    logger.error(f"DMM CRITICAL (Final Safety Fallback): No PS, PL, or Arts available for {code}.")
+
+
+            # 최종 결정된 포스터 정보 로깅
+            if final_poster_source:
+                logger.debug(f"DMM: Final Poster Decision - Source type: {type(final_poster_source)}, Crop: {final_poster_crop_mode}")
+                if isinstance(final_poster_source, str): logger.debug(f"  Source URL/Path: {final_poster_source[:150]}")
+            else:
+                logger.error(f"DMM CRITICAL: Poster could not be determined for {code}.")
 
         # 팬아트 목록 결정
         potential_fanart_candidates = []
@@ -1146,7 +1217,7 @@ class SiteDmm:
                 if art_relative_path: entity.fanart.append(f"{image_server_url}/{art_relative_path}")
 
         if use_extras:
-            entity.extras = [] 
+            entity.extras = []
             # 기본 트레일러 제목 설정 (JSON에서 못 가져올 경우 사용)
             default_trailer_title = entity.tagline if entity.tagline and entity.tagline != entity.ui_code else entity.ui_code
             trailer_url_final = None
@@ -1167,7 +1238,7 @@ class SiteDmm:
                     trailer_url_final, title_from_json = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url, proxy_url, entity.content_type)
                     if title_from_json: trailer_title_to_use = title_from_json
 
-                elif entity.content_type == 'dvd' or entity.content_type == 'bluray': 
+                elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
                     onclick_trailer = tree.xpath('//a[@id="sample-video1"]/@onclick | //a[contains(@onclick,"gaEventVideoStart")]/@onclick')
                     if onclick_trailer:
                         match_json = re.search(r"gaEventVideoStart\s*\(\s*'(\{.*?\})'\s*,\s*'(\{.*?\})'\s*\)", onclick_trailer[0])

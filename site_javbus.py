@@ -162,17 +162,15 @@ class SiteJavbus:
         proxy_url=None,
         image_mode="0",
         max_arts=10,
-        use_extras=True, 
-        ps_to_poster=False,
-        crop_mode=None,
+        use_extras=True,
         **kwargs 
     ):
         use_image_server = kwargs.get('use_image_server', False)
         image_server_url = kwargs.get('image_server_url', '').rstrip('/') if use_image_server else ''
         image_server_local_path = kwargs.get('image_server_local_path', '') if use_image_server else ''
         image_path_segment = kwargs.get('url_prefix_segment', 'unknown/unknown')
-        ps_to_poster_setting = ps_to_poster 
-        crop_mode_setting = crop_mode     
+        ps_to_poster_labels_str = kwargs.get('ps_to_poster_labels_str', '')
+        crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '')
         cf_clearance_cookie_value_from_kwargs = kwargs.get('cf_clearance_cookie', None)
 
         original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
@@ -375,7 +373,8 @@ class SiteJavbus:
         final_poster_source = None; final_poster_crop_mode = None
         final_landscape_url_source = None
         arts_urls_for_processing = []
-        mgs_style_poster_filepath = None # SiteUtil.get_mgs_half_pl_poster_info_local 결과 (파일 경로)
+        mgs_style_poster_filepath = None
+        fixed_size_crop_applied_for_javbus = False # Javbus용 고정 크롭 플래그
 
         needs_default_image_processing = not skip_default_poster_logic or \
                                          not skip_default_landscape_logic or \
@@ -391,96 +390,178 @@ class SiteJavbus:
 
             if not skip_default_landscape_logic and pl_url:
                 final_landscape_url_source = pl_url
-                logger.debug(f"JavBus: Default landscape set to PL: {pl_url}")
+                # logger.debug(f"JavBus: Default landscape set to PL: {pl_url}")
 
-            if not skip_default_poster_logic:
-                if ps_to_poster_setting:
-                    if ps_url:
-                        logger.debug(f"JavBus: Poster determined by 'PS to Poster' setting: {ps_url}")
-                        final_poster_source = ps_url
-                    elif pl_url:
-                        logger.debug(f"JavBus: 'PS to Poster' set, but PS missing. Using PL as poster: {pl_url}")
-                        final_poster_source = pl_url
-                    final_poster_crop_mode = None
-                elif crop_mode_setting and pl_url:
-                    logger.debug(f"JavBus: Poster determined by user 'crop_mode_setting' ('{crop_mode_setting}') with PL: {pl_url}")
-                    final_poster_source = pl_url
-                    final_poster_crop_mode = crop_mode_setting
-                else:
-                    if ps_url:
+            # --- 현재 아이템에 대한 PS 강제 사용 여부 및 크롭 모드 결정 ---
+            apply_ps_to_poster_for_this_item = False
+            forced_crop_mode_for_this_item = None
+
+            if hasattr(entity, 'ui_code') and entity.ui_code:
+                # 1. entity.ui_code에서 비교용 레이블 추출
+                label_from_ui_code = ""
+                if '-' in entity.ui_code:
+                    temp_label_part = entity.ui_code.split('-',1)[0]
+                    label_from_ui_code = temp_label_part.upper()
+
+                if label_from_ui_code:
+                    # 2. PS 강제 사용 여부 결정
+                    if ps_to_poster_labels_str:
+                        ps_force_labels_list = [x.strip().upper() for x in ps_to_poster_labels_str.split(',') if x.strip()]
+                        if label_from_ui_code in ps_force_labels_list:
+                            apply_ps_to_poster_for_this_item = True
+                            logger.debug(f"[{cls.site_name} Info] PS to Poster WILL BE APPLIED for label '{label_from_ui_code}' based on settings.")
+                    
+                    # 3. 크롭 모드 결정 (PS 강제 사용이 아닐 때만 의미 있을 수 있음)
+                    if crop_mode_settings_str:
+                        for line in crop_mode_settings_str.splitlines():
+                            if not line.strip(): continue
+                            parts = [x.strip() for x in line.split(":", 1)]
+                            if len(parts) == 2:
+                                setting_label = parts[0].upper()
+                                setting_mode = parts[1].lower()
+                                if setting_label == label_from_ui_code and setting_mode in ["r", "l", "c"]:
+                                    forced_crop_mode_for_this_item = setting_mode
+                                    logger.debug(f"[{cls.site_name} Info] Forced crop mode '{forced_crop_mode_for_this_item}' WILL BE APPLIED for label '{label_from_ui_code}'.")
+                                    break 
+
+                # 포스터 결정 로직 (if not skip_default_poster_logic: 내부)
+                if not skip_default_poster_logic:
+                    if ps_url: # PS URL이 있는 경우 (비교 기반 로직 가능)
+                        # 1. PS 강제 포스터 사용 설정
+                        if apply_ps_to_poster_for_this_item and ps_url:
+                            logger.debug(f"[{cls.site_name} Info] Poster determined by FORCED 'ps_to_poster' setting. Using PS: {ps_url}")
+                            final_poster_source = ps_url
+                            final_poster_crop_mode = None
+
+                        # 2. 크롭 모드 사용자 설정 (PS 강제 사용 아닐 때)
+                        elif forced_crop_mode_for_this_item and pl_url: # 또는 valid_pl_candidate
+                            logger.debug(f"[{cls.site_name} Info] Poster determined by FORCED 'crop_mode={forced_crop_mode_for_this_item}'. Using PL: {pl_url}")
+                            final_poster_source = pl_url
+                            final_poster_crop_mode = forced_crop_mode_for_this_item
+
+                    logger.debug(f"JavBus Poster: PS URL ('{ps_url}') found. Proceeding with comparison-based logic.")
+                    if final_poster_source is None: # 사용자 설정에서 결정 안 됐을 때
+                        # --- 우선순위 3: 일반 포스터 결정 로직 (is_hq_poster, has_hq_poster) ---
                         specific_arts_candidates = []
                         if all_arts_from_page:
                             if all_arts_from_page[0] not in specific_arts_candidates: specific_arts_candidates.append(all_arts_from_page[0])
                             if len(all_arts_from_page) > 1 and all_arts_from_page[-1] != all_arts_from_page[0] and all_arts_from_page[-1] not in specific_arts_candidates:
                                 specific_arts_candidates.append(all_arts_from_page[-1])
 
+                        # 3-A: is_hq_poster
                         if pl_url and SiteUtil.is_portrait_high_quality_image(pl_url, proxy_url=proxy_url):
                             if SiteUtil.is_hq_poster(ps_url, pl_url, proxy_url=proxy_url):
                                 final_poster_source = pl_url
-                                logger.debug(f"JavBus: Poster set to PL by is_hq_poster: {pl_url}")
-
                         if final_poster_source is None and specific_arts_candidates:
                             for art_candidate in specific_arts_candidates:
                                 if SiteUtil.is_portrait_high_quality_image(art_candidate, proxy_url=proxy_url):
                                     if SiteUtil.is_hq_poster(ps_url, art_candidate, proxy_url=proxy_url):
-                                        final_poster_source = art_candidate
-                                        logger.debug(f"JavBus: Poster set to Art by is_hq_poster: {art_candidate}")
-                                        break
+                                        final_poster_source = art_candidate; break
+
+                        # 3-B: has_hq_poster
                         if final_poster_source is None:
                             if pl_url:
                                 crop_pos = SiteUtil.has_hq_poster(ps_url, pl_url, proxy_url=proxy_url)
                                 if crop_pos:
                                     final_poster_source = pl_url
                                     final_poster_crop_mode = crop_pos
-                                    logger.debug(f"JavBus: Poster set to PL by has_hq_poster (crop: {crop_pos}): {pl_url}")
-
                             if final_poster_source is None and specific_arts_candidates:
                                 for art_candidate in specific_arts_candidates:
                                     crop_pos_art = SiteUtil.has_hq_poster(ps_url, art_candidate, proxy_url=proxy_url)
                                     if crop_pos_art:
                                         final_poster_source = art_candidate
-                                        final_poster_crop_mode = crop_pos_art
-                                        logger.debug(f"JavBus: Poster set to Art by has_hq_poster (crop: {crop_pos_art}): {art_candidate}")
-                                        break
-                    else:
-                        logger.debug("JavBus: PS URL is missing, skipping is_hq_poster/has_hq_poster. Proceeding to MGS-style or PL.")
+                                        final_poster_crop_mode = crop_pos_art; break
 
-                    # --- 3-C. MGS-style 처리 시도 (get_mgs_half_pl_poster_info_local) ---
-                    if ps_url and (final_poster_source is None or final_poster_source == ps_url):
-                        if pl_url:
-                            logger.debug(f"JavBus: Attempting MGS-style processing for PL ('{pl_url}') with PS ('{ps_url}').")
+                        if final_poster_source: logger.debug(f"JavBus: General logic (is_hq/has_hq) determined poster: '{str(final_poster_source)[:100]}...', crop: {final_poster_crop_mode}")
+
+                        # --- 3-C: 특수 고정 크기 크롭 (해상도 기반) ---
+                        if (final_poster_source is None or (ps_url and final_poster_source == ps_url)) and pl_url:
+                            logger.debug(f"JavBus Poster (Prio 3-C attempt): Applying fixed-size crop logic for PL: {pl_url}")
+                            try:
+                                pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_url, proxy_url=proxy_url)
+                                if pl_image_obj_for_fixed_crop:
+                                    img_width, img_height = pl_image_obj_for_fixed_crop.size
+                                    if img_width == 800 and 436 <= img_height <= 444:
+                                        crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
+                                        cropped_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
+                                        if cropped_pil_object:
+                                            final_poster_source = cropped_pil_object
+                                            final_poster_crop_mode = None
+                                            fixed_size_crop_applied_for_javbus = True
+                                            logger.debug(f"JavBus: Fixed-size crop (resolution based) applied to PL. Poster source is now a PIL object.")
+                                    # else: logger.debug(f"JavBus PL ({img_width}x{img_height}) does not meet fixed-size crop criteria.")
+                            except Exception as e_fixed_crop_javbus:
+                                logger.error(f"JavBus: Error during fixed-size crop attempt: {e_fixed_crop_javbus}")
+
+
+                        # --- 우선순위 4: MGS 스타일 처리 (PS, PL 모두 필요) ---
+                        if (final_poster_source is None or final_poster_source == ps_url) and \
+                           not fixed_size_crop_applied_for_javbus and pl_url: # ps_url은 이미 있다고 가정됨
+                            logger.debug(f"JavBus Poster (Prio 4 attempt with PS): Attempting MGS-style processing for PL ('{pl_url}') with PS ('{ps_url}').")
                             temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url, pl_url, proxy_url=proxy_url)
                             if temp_filepath and os.path.exists(temp_filepath):
                                 mgs_style_poster_filepath = temp_filepath
                                 final_poster_source = mgs_style_poster_filepath
                                 final_poster_crop_mode = None
-                                logger.debug(f"JavBus: MGS-style processing successful. Using temp file: {final_poster_source}")
-                            else:
-                                logger.debug(f"JavBus: MGS-style processing failed or no suitable file.")
-                        else:
-                            logger.debug("JavBus: PL URL is missing, cannot attempt MGS-style processing.")
-                    elif not ps_url:
-                        logger.debug("JavBus: PS URL is missing, cannot attempt MGS-style processing.")
+                                logger.debug(f"JavBus: MGS-style processing successful with PS. Using temp file: {final_poster_source}")
 
-                    if final_poster_source is None:
-                        if ps_url:
-                            logger.debug(f"JavBus: General logic and MGS-style failed/skipped. Falling back to PS: {ps_url}")
-                            final_poster_source = ps_url
+                        # --- 우선순위 5: 최종 폴백 (PS가 있는 경우) ---
+                        if final_poster_source is None:
+                            logger.debug(f"JavBus Poster (Prio 5 with PS - Fallback): Using PS.")
+                            final_poster_source = ps_url # PS가 있으므로 PS를 최우선 폴백으로
                             final_poster_crop_mode = None
-                        elif pl_url:
-                            logger.debug(f"JavBus: General logic and MGS-style failed/skipped. No PS. Falling back to PL: {pl_url}")
-                            final_poster_source = pl_url
-                            final_poster_crop_mode = crop_mode_setting if crop_mode_setting else 'r'
-                        else:
-                            logger.warning(f"JavBus: No PS or PL available for fallback poster.")
+                        elif final_poster_source == ps_url and pl_url and not mgs_style_poster_filepath and not fixed_size_crop_applied_for_javbus:
+                            # 만약 is_hq, has_hq, 고정크롭, MGS 스타일 모두 실패하고 PS가 선택되었는데,
+                            # PL이 있고 사용자 크롭모드 설정도 있었다면 PL+크롭모드를 고려해볼 수 있으나,
+                            # 이 경우는 이미 Prio 2에서 처리되었어야 함. 여기서는 PS가 최종.
+                            pass
 
+                else: # PS URL이 없는 경우 (비교 기반 로직 대부분 실행 불가)
+                    logger.warning(f"JavBus Poster: PS URL is missing. Applying PL-based or Art-based logic only.")
+                    if final_poster_source is None: # 사용자 설정(Prio 2: crop_mode + PL)에서 결정 안 됐을 때
+                        # PS가 없으므로 is_hq_poster, has_hq_poster, MGS 스타일은 불가능.
+                        # 고정 크기 크롭은 PL만으로 가능하므로 시도.
+                        if pl_url: # PL이 있어야 고정 크기 크롭 시도 가능
+                            logger.debug(f"JavBus Poster (PS Missing - Prio 3-C attempt): Applying fixed-size crop logic for PL: {pl_url}")
+                            try:
+                                pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_url, proxy_url=proxy_url)
+                                if pl_image_obj_for_fixed_crop:
+                                    img_width, img_height = pl_image_obj_for_fixed_crop.size
+                                    if img_width == 800 and 436 <= img_height <= 444:
+                                        crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
+                                        cropped_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
+                                        if cropped_pil_object:
+                                            final_poster_source = cropped_pil_object
+                                            final_poster_crop_mode = None
+                                            fixed_size_crop_applied_for_javbus = True # 플래그 설정
+                                            logger.debug(f"JavBus: Fixed-size crop (PS Missing) applied to PL. Poster source is now a PIL object.")
+                            except Exception as e_fixed_crop_javbus_no_ps:
+                                logger.error(f"JavBus: Error during fixed-size crop attempt (PS Missing): {e_fixed_crop_javbus_no_ps}")
+
+                        # 고정 크롭 후에도 포스터가 결정되지 않았으면 PL 또는 첫번째 Art 사용
+                        if final_poster_source is None:
+                            if pl_url: # Prio 2 (사용자 crop_mode)가 이미 여기서 처리했을 가능성 높음
+                                logger.debug(f"JavBus Poster (PS Missing - Fallback): Using PL.")
+                                final_poster_source = pl_url
+                                final_poster_crop_mode = crop_mode_setting if crop_mode_setting else 'r' # Prio 2와 동일
+                            elif all_arts_from_page:
+                                logger.debug(f"JavBus Poster (PS Missing - Fallback): No PL, using first Art.")
+                                final_poster_source = all_arts_from_page[0]
+                                final_poster_crop_mode = None
+                            else:
+                                logger.error(f"JavBus CRITICAL (PS Missing): No poster source could be determined.")
+
+                # 최종 안전장치 (위 모든 로직 후에도 final_poster_source가 None이면)
                 if final_poster_source is None:
-                    if pl_url:
-                        logger.warning(f"JavBus: CRITICAL - No poster source could be determined. Using PL as last resort: {pl_url}")
-                        final_poster_source = pl_url
-                        final_poster_crop_mode = 'r'
+                    logger.warning(f"JavBus Poster (Final Safety Fallback): All methods failed.")
+                    if ps_url: # 정말 마지막으로 PS라도
+                        final_poster_source = ps_url; final_poster_crop_mode = None
+                    elif pl_url: # 그것도 없으면 PL
+                        final_poster_source = pl_url; final_poster_crop_mode = crop_mode_setting if crop_mode_setting else 'r'
+                    elif all_arts_from_page: # 그것도 없으면 첫 Art
+                        final_poster_source = all_arts_from_page[0]; final_poster_crop_mode = None
                     else:
-                        logger.error(f"JavBus: CRITICAL - No poster source could be determined for {code}, and no PL available.")
+                        logger.error(f"JavBus CRITICAL (Final Safety Fallback): No PS, PL, or Arts available.")
 
             if all_arts_from_page:
                 temp_fanart_list_jb = []
