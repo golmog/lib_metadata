@@ -725,8 +725,7 @@ class SiteJavdb:
                             else: trailer_url_final = "https:" + trailer_url_raw 
                         
                         trailer_title_to_use = entity.tagline if entity.tagline else entity.ui_code
-                        final_trans_trailer_title = SiteUtil.trans(trailer_title_to_use, do_trans=do_trans)
-                        entity.extras.append(EntityExtra("trailer", final_trans_trailer_title, "mp4", trailer_url_final))
+                        entity.extras.append(EntityExtra("trailer", trailer_title_to_use, "mp4", trailer_url_final))
 
             # === 7. 최종 entity.code 값 변경 (ui_code 기반) ===
             if hasattr(entity, 'ui_code') and entity.ui_code and entity.ui_code.lower() != original_code_for_url.lower():

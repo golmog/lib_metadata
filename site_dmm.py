@@ -1228,20 +1228,21 @@ class SiteDmm:
 
         if use_extras:
             entity.extras = []
-
             trailer_title_for_extra = entity.tagline if entity.tagline else entity.ui_code
             trailer_url_final = None
 
             try:
-                if entity.content_type == 'vr':
-                    trailer_url_final, _ = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url, proxy_url, entity.content_type)
+                cid_part = code[len(cls.module_char)+len(cls.site_char):]
+                detail_url_for_referer = detail_url
 
+                if entity.content_type == 'vr':
+                    trailer_url_final, title_from_json = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url_for_referer, proxy_url, entity.content_type)
+                    # title_from_json은 사용하지 않음
                     if not trailer_url_final:
-                        logger.debug(f"DMM VR Trailer: New method failed for {cid_part}. Trying fallback (old sampleUrl method).")
-                        trailer_url_final = cls._get_dmm_vr_trailer_fallback(cid_part, detail_url, proxy_url)
+                        trailer_url_final = cls._get_dmm_vr_trailer_fallback(cid_part, detail_url_for_referer, proxy_url)
 
                 elif entity.content_type == 'videoa':
-                    trailer_url_final, _ = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url, proxy_url, entity.content_type)
+                    trailer_url_final, _ = cls._get_dmm_video_trailer_from_args_json(cid_part, detail_url_for_referer, proxy_url, entity.content_type)
 
                 elif entity.content_type == 'dvd' or entity.content_type == 'bluray':
                     onclick_trailer = tree.xpath('//a[@id="sample-video1"]/@onclick | //a[contains(@onclick,"gaEventVideoStart")]/@onclick')
@@ -1254,12 +1255,11 @@ class SiteDmm:
                                 if video_data.get("video_url"):
                                     trailer_url_final = video_data["video_url"]
                             except json.JSONDecodeError as e_json_dvd:
-                                logger.error(f"DMM DVD/BR Trailer: JSONDecodeError - {e_json_dvd}. Data: {video_data_str[:100]}")
-
+                                logger.error(f"DMM DVD/BR Trailer: JSONDecodeError - {e_json_dvd}.")
+                
                 if trailer_url_final:
-                    final_trans_trailer_title = SiteUtil.trans(trailer_title_for_extra, do_trans=do_trans)
-                    entity.extras.append(EntityExtra("trailer", final_trans_trailer_title, "mp4", trailer_url_final))
-
+                    entity.extras.append(EntityExtra("trailer", trailer_title_for_extra, "mp4", trailer_url_final))
+            
             except Exception as e_trailer_main: 
                 logger.exception(f"DMM ({entity.content_type}): Main trailer processing error: {e_trailer_main}")
 

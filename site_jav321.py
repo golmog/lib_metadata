@@ -750,8 +750,7 @@ class SiteJav321:
                     trailer_url = trailer_tags[0].strip()
                     if trailer_url.startswith("http"):
                         trailer_title = entity.tagline if entity.tagline else entity.ui_code
-                        final_trans_trailer_title = SiteUtil.trans(trailer_title, do_trans=do_trans)
-                        entity.extras.append(EntityExtra("trailer", final_trans_trailer_title, "mp4", trailer_url))
+                        entity.extras.append(EntityExtra("trailer", trailer_title, "mp4", trailer_url))
             except Exception as e_trailer:
                 logger.exception(f"Jav321: Error processing trailer for {code}: {e_trailer}")
 
