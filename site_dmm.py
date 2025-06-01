@@ -193,7 +193,7 @@ class SiteDmm:
                     continue
 
                 href = primary_href_candidate # 최종 href 할당 (경로 필터링에 사용)
-                logger.debug(f"DMM Search Item: Determined href for path check: '{href}'")
+                #logger.debug(f"DMM Search Item: Determined href for path check: '{href}'")
 
                 # 경로 필터링 (href 사용)
                 try:
@@ -293,7 +293,7 @@ class SiteDmm:
 
                 current_score_val = 0
 
-                logger.debug(f"DMM Score Compare: dmm_keyword_for_url='{dmm_keyword_for_url}', item_code_for_strict_compare='{item_code_for_strict_compare}', item_ui_code_base_for_score='{item_ui_code_base_for_score}'")
+                #logger.debug(f"DMM Score Compare: dmm_keyword_for_url='{dmm_keyword_for_url}', item_code_for_strict_compare='{item_code_for_strict_compare}', item_ui_code_base_for_score='{item_ui_code_base_for_score}'")
 
                 # 점수 부여
                 if dmm_keyword_for_url and item_code_for_strict_compare and dmm_keyword_for_url == item_code_for_strict_compare: 
