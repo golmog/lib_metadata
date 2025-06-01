@@ -11,7 +11,7 @@ logger = P.logger
 
 
 class SiteMgstage:
-    site_name = "mgs"
+    site_name = "mgsdvd"
     site_char = "M"
     site_base_url = "https://www.mgstage.com"
     module_char = None
@@ -34,7 +34,24 @@ class SiteMgstage:
     PTN_RATING = re.compile(r"\s(?P<rating>[\d\.]+)点\s.+\s(?P<vote>\d+)\s件")
 
     @classmethod
-    def __search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False):
+    def get_label_from_ui_code(cls, ui_code_str: str) -> str:
+        if not ui_code_str or not isinstance(ui_code_str, str): return ""
+        
+        ui_code_upper = ui_code_str.upper()
+        if '-' in ui_code_upper:
+            return ui_code_upper.split('-', 1)[0]
+        else:
+            return ui_code_upper 
+
+    @classmethod
+    def __search(
+        cls,
+        keyword,
+        do_trans=True,
+        proxy_url=None, image_mode="0",
+        manual=False,
+        priority_label_setting_str=""
+        ):
         keyword = keyword.strip().lower()
         if keyword[-3:-1] == "cd":
             keyword = keyword[:-3]
@@ -100,7 +117,23 @@ class SiteMgstage:
                     item.score = 60 - (len(ret) * 10)
                 if item.score < 0:
                     item.score = 0
-                ret.append(item.as_dict())
+
+                item_dict = item.as_dict()
+
+                item_dict['is_priority_label_site'] = False
+                item_dict['site_key'] = cls.site_name
+
+                if item_dict.get('ui_code') and priority_label_setting_str:
+                    label_to_check = cls.get_label_from_ui_code(item_dict['ui_code'])
+                    if label_to_check:
+                        priority_labels_set = {lbl.strip().upper() for lbl in priority_label_setting_str.split(',') if lbl.strip()}
+                        if label_to_check in priority_labels_set:
+                            item_dict['is_priority_label_site'] = True
+                            logger.debug(f"MGStage Search ({cls.module_char}): Item '{item_dict['ui_code']}' matched priority label '{label_to_check}'. Setting is_priority_label_site=True.")
+
+                ret.append(item_dict)
+
+                logger.debug(f"MGStage Search: Type={item_dict['content_type']}, Score={item_dict['score']}, Code={item_dict['code']}, UI Code={item_dict['ui_code']}, Title(KO)='{item_dict['title_ko']}', Priority={item_dict['is_priority_label_site']}")
             except Exception:
                 logger.exception("개별 검색 결과 처리 중 예외:")
         return sorted(ret, key=lambda k: k["score"], reverse=True)
@@ -117,6 +150,7 @@ class SiteMgstage:
             proxy_url_arg = kwargs.get('proxy_url', None)
             image_mode_arg = kwargs.get('image_mode', "0")
             manual_arg = kwargs.get('manual', False)
+            priority_label_str_arg = kwargs.get('priority_label_setting_str', "")
 
             if len(tmps) == 2:
                 label, code_part = tmps
@@ -136,7 +170,8 @@ class SiteMgstage:
                                           do_trans=do_trans_arg,
                                           proxy_url=proxy_url_arg,
                                           image_mode=image_mode_arg,
-                                          manual=manual_arg)
+                                          manual=manual_arg,
+                                          priority_label_setting_str=priority_label_str_arg)
                         if _d:
                             data += _d
                             if idx > 0:
@@ -148,7 +183,8 @@ class SiteMgstage:
                                     do_trans=do_trans_arg,
                                     proxy_url=proxy_url_arg,
                                     image_mode=image_mode_arg,
-                                    manual=manual_arg)
+                                    manual=manual_arg,
+                                    priority_label_setting_str=priority_label_str_arg)
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
             ret["ret"] = "exception"
@@ -161,7 +197,7 @@ class SiteMgstage:
 
 class SiteMgstageDvd(SiteMgstage):
     module_char = "C"
-    search_module_query = "&type=dvd" # Dvd 검색용 파라미터
+    # search_module_query = "&type=dvd"
 
     @classmethod
     def __img_urls(cls, tree):
@@ -170,7 +206,9 @@ class SiteMgstageDvd(SiteMgstage):
 
         arts = tree.xpath('//*[@id="sample-photo"]//ul/li/a/@href')
         if pl and "pb_e_" in pl:
-            arts.insert(0, pl.replace("pb_e_", "pf_e_"))
+            potential_pf = pl.replace("pb_e_", "pf_e_")
+            if potential_pf not in arts:
+                arts.insert(0, potential_pf)
         return {"pl": pl, "arts": arts}
 
     @classmethod
@@ -182,17 +220,17 @@ class SiteMgstageDvd(SiteMgstage):
         image_mode="0",
         max_arts=10,
         use_extras=True,
+        ps_to_poster_labels_str="", 
+        crop_mode_settings_str="",
+        priority_label_setting_str="",
         **kwargs          
     ):
-        use_image_server = kwargs.get('use_image_server', False)
         use_image_server = kwargs.get('use_image_server', False)
         image_server_url = kwargs.get('image_server_url', '').rstrip('/') if use_image_server else ''
         image_server_local_path = kwargs.get('image_server_local_path', '') if use_image_server else ''
         image_path_segment = kwargs.get('url_prefix_segment', 'unknown/unknown')
-        ps_to_poster_labels_str = kwargs.get('ps_to_poster_labels_str', '')
-        crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '')
 
-        logger.debug(f"Image Server Mode Check ({cls.module_char}): image_mode={image_mode}, use_image_server={use_image_server}")
+        # logger.debug(f"Image Server Mode Check ({cls.module_char}): image_mode={image_mode}, use_image_server={use_image_server}")
 
         cached_data = cls._ps_url_cache.get(code, {}) 
         ps_url_from_search_cache = cached_data.get('ps')
@@ -205,12 +243,12 @@ class SiteMgstageDvd(SiteMgstage):
 
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
-        entity.thumb = []; entity.fanart = []; entity.extras = []
-        if hasattr(entity, 'ratings'):
-            entity.ratings = []
+        entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
+
         ui_code_for_image = ""
         identifier_parsed = False
         original_h1_text_for_vr_check = ""
+
         try:
             logger.debug(f"MGStage ({cls.module_char}): Parsing metadata for {code}...")
             h1_tags = tree.xpath('//h1[@class="tag"]/text()')
@@ -350,6 +388,33 @@ class SiteMgstageDvd(SiteMgstage):
                 logger.error(f"MGStage ({cls.module_char}): Returning None due to critical metadata parsing failure (no identifier).")
                 return None
 
+        label_from_ui_code_for_settings = ""
+        if hasattr(entity, 'ui_code') and entity.ui_code:
+            ui_code_for_image = entity.ui_code
+            label_from_ui_code_for_settings = cls.get_label_from_ui_code(entity.ui_code)
+            logger.debug(f"[{cls.site_name} Info] Extracted label for settings: '{label_from_ui_code_for_settings}' from ui_code '{entity.ui_code}'")
+        else:
+            logger.warning(f"[{cls.site_name} Info] entity.ui_code not found after parsing. Using fallback for image filenames.")
+            ui_code_for_image = code[len(cls.module_char)+len(cls.site_char):].upper().replace("_", "-")
+
+        apply_ps_to_poster_for_this_item = False
+        forced_crop_mode_for_this_item = None
+
+        # 포스터 예외처리 플래그 결정
+        apply_ps_to_poster_for_this_item = False
+        forced_crop_mode_for_this_item = None
+        if label_from_ui_code_for_settings:
+            if ps_to_poster_labels_str:
+                ps_force_labels_set = {lbl.strip().upper() for lbl in ps_to_poster_labels_str.split(',') if lbl.strip()}
+                if label_from_ui_code_for_settings in ps_force_labels_set:
+                    apply_ps_to_poster_for_this_item = True
+            if crop_mode_settings_str:
+                for line in crop_mode_settings_str.splitlines():
+                    if not line.strip(): continue
+                    parts = [x.strip() for x in line.split(":", 1)]
+                    if len(parts) == 2 and parts[0].upper() == label_from_ui_code_for_settings and parts[1].lower() in ["r", "l", "c"]:
+                        forced_crop_mode_for_this_item = parts[1].lower(); break
+
         user_custom_poster_url = None; user_custom_landscape_url = None
         skip_default_poster_logic = False; skip_default_landscape_logic = False
         if use_image_server and image_server_local_path and image_server_url and ui_code_for_image:
@@ -379,183 +444,150 @@ class SiteMgstageDvd(SiteMgstage):
             pl_url = img_urls_from_page.get('pl')
             all_arts = img_urls_from_page.get('arts', [])
 
-            # 랜드스케이프 결정 (기본)
-            if not skip_default_landscape_logic:
+            # 랜드스케이프 결정 (기본: pl_url)
+            if not skip_default_landscape_logic and pl_url:
                 final_landscape_url_source = pl_url
 
-        # --- 현재 아이템에 대한 PS 강제 사용 여부 및 크롭 모드 결정 ---
-        apply_ps_to_poster_for_this_item = False
-        forced_crop_mode_for_this_item = None
+            # 포스터 결정 로직 (사용자 지정 포스터가 없을 때)
+            if not skip_default_poster_logic:
+                logger.debug(f"[{cls.site_name} Info] Default poster logic started. apply_ps_flag={apply_ps_to_poster_for_this_item}, forced_crop_mode='{forced_crop_mode_for_this_item}'")
 
-        if hasattr(entity, 'ui_code') and entity.ui_code:
-            # 1. entity.ui_code에서 비교용 레이블 추출
-            label_from_ui_code = ""
-            if '-' in entity.ui_code:
-                temp_label_part = entity.ui_code.split('-',1)[0]
-                label_from_ui_code = temp_label_part.upper()
+                # --- 우선순위 1: "포스터 예외처리 2" (사용자 지정 크롭 모드) ---
+                if forced_crop_mode_for_this_item and pl_url:
+                    logger.info(f"[{cls.site_name} Info] Poster determined by 예외처리 2 (크롭 지정: '{forced_crop_mode_for_this_item}'). Using PL: {pl_url}")
+                    final_poster_source = pl_url
+                    final_poster_crop_mode = forced_crop_mode_for_this_item
 
-            if label_from_ui_code:
-                # 2. PS 강제 사용 여부 결정
-                if ps_to_poster_labels_str:
-                    ps_force_labels_list = [x.strip().upper() for x in ps_to_poster_labels_str.split(',') if x.strip()]
-                    if label_from_ui_code in ps_force_labels_list:
-                        apply_ps_to_poster_for_this_item = True
-                        logger.debug(f"[{cls.site_name} Info] PS to Poster WILL BE APPLIED for label '{label_from_ui_code}' based on settings.")
-                
-                # 3. 크롭 모드 결정 (PS 강제 사용이 아닐 때만 의미 있을 수 있음)
-                if crop_mode_settings_str:
-                    for line in crop_mode_settings_str.splitlines():
-                        if not line.strip(): continue
-                        parts = [x.strip() for x in line.split(":", 1)]
-                        if len(parts) == 2:
-                            setting_label = parts[0].upper()
-                            setting_mode = parts[1].lower()
-                            if setting_label == label_from_ui_code and setting_mode in ["r", "l", "c"]:
-                                forced_crop_mode_for_this_item = setting_mode
-                                logger.debug(f"[{cls.site_name} Info] Forced crop mode '{forced_crop_mode_for_this_item}' WILL BE APPLIED for label '{label_from_ui_code}'.")
-                                break 
+                # --- 위에서 포스터가 결정되지 않았고, PS Cache가 있는 경우의 로직 ---
+                if ps_url_from_search_cache: 
+                    logger.debug(f"[{cls.site_name} Info] PS cache exists. Evaluating PS-based poster options.")
 
-        # 포스터 결정 로직 (if not skip_default_poster_logic: 내부)
-        if not skip_default_poster_logic:
-            # 1. PS 강제 포스터 사용 설정
-            if apply_ps_to_poster_for_this_item and ps_url_from_search_cache:
-                logger.debug(f"[{cls.site_name} Info] Poster determined by FORCED 'ps_to_poster' setting. Using PS: {ps_url_from_search_cache}")
-                final_poster_source = ps_url_from_search_cache
-                final_poster_crop_mode = None
-
-            # 2. 크롭 모드 사용자 설정 (PS 강제 사용 아닐 때)
-            elif forced_crop_mode_for_this_item and pl_url: # 또는 valid_pl_candidate
-                logger.debug(f"[{cls.site_name} Info] Poster determined by FORCED 'crop_mode={forced_crop_mode_for_this_item}'. Using PL: {pl_url}")
-                final_poster_source = pl_url
-                final_poster_crop_mode = forced_crop_mode_for_this_item
-
-            # 3. 일반 비교 로직 + MGS Special 처리 (위 사용자 설정에서 결정 안 됐을 때)
-            else:
-                if ps_url_from_search_cache: # PS가 있어야 비교 가능
-                    # --- 3-A. is_hq_poster 검사 (세로 이미지 직접 비교) ---
-                    specific_arts_candidates = []
-                    if all_arts:
-                        if all_arts[0] not in specific_arts_candidates: specific_arts_candidates.append(all_arts[0])
-                        if len(all_arts) > 1 and all_arts[-1] != all_arts[0] and all_arts[-1] not in specific_arts_candidates:
-                            specific_arts_candidates.append(all_arts[-1])
-
-                    if pl_url and SiteUtil.is_portrait_high_quality_image(pl_url, proxy_url=proxy_url):
-                        if SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url):
-                            final_poster_source = pl_url
-
-                    if final_poster_source is None and specific_arts_candidates:
-                        for art_candidate in specific_arts_candidates:
-                            if SiteUtil.is_portrait_high_quality_image(art_candidate, proxy_url=proxy_url):
-                                if SiteUtil.is_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url):
-                                    final_poster_source = art_candidate; break
-
-                    # --- 3-B. has_hq_poster 검사 (가로 이미지를 크롭하여 비교) ---
-                    if final_poster_source is None:
-                        if pl_url:
-                            crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
-                            if crop_pos: final_poster_source = pl_url; final_poster_crop_mode = crop_pos
-
-                        # Specific Arts 크롭
-                        if final_poster_source is None and specific_arts_candidates:
-                            for art_candidate in specific_arts_candidates:
-                                crop_pos_art = SiteUtil.has_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url)
-                                if crop_pos_art:
-                                    final_poster_source = art_candidate
-                                    final_poster_crop_mode = crop_pos_art
-                                    logger.debug(f"MGStage ({cls.module_char}): Specific Art ('{art_candidate}') chosen as poster via has_hq_poster (crop: {crop_pos_art}).")
-                                    break
-
-                    # --- 3-C. MGS Special 처리 시도 ---
-                    try_mgs_special_now = False
-                    if (final_poster_source is None or final_poster_source == ps_url_from_search_cache):
-                        if pl_url and ps_url_from_search_cache:
-                            try:
-                                pl_image_for_check = SiteUtil.imopen(pl_url, proxy_url=proxy_url)
-                                if pl_image_for_check:
-                                    pl_w, pl_h = pl_image_for_check.size
-                                    # MGS Special 시도 조건: PL이 가로로 충분히 넓고, 반으로 잘랐을 때 적절한 비율
-                                    if pl_h > 0 and (pl_w / pl_h >= 1.7) and (pl_h <= (pl_w / 2) * 1.2):
-                                        try_mgs_special_now = True
-                            except Exception as e_ratio_mgs_cond: logger.error(f"MGStage ({cls.module_char}): Error checking PL ratio for MGS special: {e_ratio_mgs_cond}")
-
-                    if try_mgs_special_now:
-                        logger.debug(f"MGStage ({cls.module_char}): Attempting MGS style processing for PL ('{pl_url}').")
-                        temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
-                        if temp_filepath and os.path.exists(temp_filepath):
-                            # MGS Special 성공 시, 이것을 최종 포스터로 사용 (이전 is_hq/has_hq 결과 덮어씀)
-                            final_poster_source = temp_filepath
-                            final_poster_crop_mode = None
-                            logger.debug(f"MGStage ({cls.module_char}): MGS style processing successful. Using: {final_poster_source}")
-                        else:
-                            logger.debug(f"MGStage ({cls.module_char}): MGS style processing failed or no suitable file. Poster decision remains based on prior checks (if any).")
-
-                    # --- 3-D. 최종 폴백: PS 사용 (위 모든 단계에서 결정 못했거나, MGS Special 실패 후에도 PS가 최선일 때) ---
-                    if final_poster_source is None:
-                        logger.debug(f"MGStage ({cls.module_char}): General logic and MGS special failed/skipped. Falling back to PS.")
+                    # --- 우선순위 2: "포스터 예외처리 1" (PS 강제 사용) ---
+                    if apply_ps_to_poster_for_this_item:
+                        logger.info(f"[{cls.site_name} Info] Poster determined by 예외처리 1 (PS 강제). Using PS: {ps_url_from_search_cache}")
                         final_poster_source = ps_url_from_search_cache
                         final_poster_crop_mode = None
 
-                else: # ps_url_from_search_cache가 없는 경우
-                    logger.warning(f"MGStage ({cls.module_char}): ps_url_from_search_cache is missing. Cannot run general/MGS poster logic.")
-                    if pl_url: final_poster_source = pl_url; final_poster_crop_mode = crop_mode_setting
-                    elif all_arts: final_poster_source = all_arts[0]
-                    else: logger.warning(f"MGStage ({cls.module_char}): No PS, PL, or Arts available.")
+                    # --- 우선순위 3: 일반적인 포스터 결정 로직 ---
+                    else:
+                        logger.debug(f"[{cls.site_name} Info] No forced settings applied (with PS). Applying general poster determination.")
 
-            # 모든 로직 후에도 포스터가 결정되지 않은 경우 (안전장치)
-            if final_poster_source is None:
-                if ps_url_from_search_cache:
-                    logger.debug(f"MGStage ({cls.module_char}): Final fallback, using cached PS because all methods failed.")
-                    final_poster_source = ps_url_from_search_cache
-                    final_poster_crop_mode = None
+                        specific_arts_candidates = []
+                        if all_arts:
+                            if all_arts[0]: specific_arts_candidates.append(all_arts[0])
+                            if len(all_arts) > 1 and all_arts[-1] != all_arts[0]:
+                                specific_arts_candidates.append(all_arts[-1])
+
+                        # 3-A. is_hq_poster 검사
+                        if pl_url and SiteUtil.is_portrait_high_quality_image(pl_url, proxy_url=proxy_url):
+                            if SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url):
+                                final_poster_source = pl_url
+                                # final_poster_crop_mode = None
+                                logger.debug(f"[{cls.site_name} Info] Poster set to PL by is_hq_poster: {pl_url}")
+
+                        if final_poster_source is None and specific_arts_candidates:
+                            for art_candidate in specific_arts_candidates:
+                                if art_candidate == pl_url: 
+                                    continue
+                                if SiteUtil.is_portrait_high_quality_image(art_candidate, proxy_url=proxy_url):
+                                    if SiteUtil.is_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url):
+                                        final_poster_source = art_candidate
+                                        # final_poster_crop_mode = None
+                                        logger.debug(f"[{cls.site_name} Info] Poster set to Art by is_hq_poster: {art_candidate}")
+                                        break
+
+                        # 3-B. has_hq_poster 검사
+                        if final_poster_source is None:
+                            if pl_url:
+                                crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
+                                if crop_pos:
+                                    final_poster_source = pl_url
+                                    final_poster_crop_mode = crop_pos
+
+                            if final_poster_source is None and specific_arts_candidates:
+                                for art_candidate in specific_arts_candidates:
+                                    if art_candidate == pl_url: continue
+                                    crop_pos_art = SiteUtil.has_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url)
+                                    if crop_pos_art:
+                                        final_poster_source = art_candidate
+                                        final_poster_crop_mode = crop_pos_art; break
+
+                        # 3-C. MGS Special 처리
+                        if (final_poster_source is None or final_poster_source == ps_url_from_search_cache) and pl_url:
+                            logger.debug(f"[{cls.site_name} Info] Attempting MGS style processing for PL ('{pl_url}') & PS ('{ps_url_from_search_cache}').")
+                            temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
+                            if temp_filepath and os.path.exists(temp_filepath):
+                                mgs_special_poster_filepath = temp_filepath
+                                final_poster_source = mgs_special_poster_filepath
+                                final_poster_crop_mode = None
+                                logger.debug(f"[{cls.site_name} Info] MGS style processing successful. Using temp file: {mgs_special_poster_filepath}")
+
+                        # 3-D. 최종 폴백: PS 사용
+                        if final_poster_source is None:
+                            logger.debug(f"[{cls.site_name} Info] General/MGS special failed (with PS). Falling back to PS.")
+                            final_poster_source = ps_url_from_search_cache
+                            final_poster_crop_mode = None
+
                 else:
-                    logger.warning(f"MGStage ({cls.module_char}): CRITICAL - No poster source could be determined for {code}.")
+                    logger.debug(f"[{cls.site_name} Info] No PS url found. Skipping poster processing")
 
-        # 팬아트 목록 결정
-        arts_urls_for_processing = []
-        if all_arts: # all_arts 변수가 정의되어 있을 때만 실행
-            temp_fanart_list_mg = []
-            sources_to_exclude_for_fanart_mg = set()
-            if final_landscape_url_source: sources_to_exclude_for_fanart_mg.add(final_landscape_url_source)
-            if final_poster_source and isinstance(final_poster_source, str) and final_poster_source.startswith("http"):
-                sources_to_exclude_for_fanart_mg.add(final_poster_source)
-            if pl_url and mgs_special_poster_filepath and final_poster_source == mgs_special_poster_filepath: # MGS 처리 시 원본 PL 제외
-                sources_to_exclude_for_fanart_mg.add(pl_url)
+                # 최종 결정된 포스터 정보 로깅
+                if final_poster_source:
+                    logger.debug(f"[{cls.site_name} Info] Final Poster Decision - Source type: {type(final_poster_source)}, Crop: {final_poster_crop_mode}")
+                    if isinstance(final_poster_source, str): logger.debug(f"  Source URL/Path: {final_poster_source[:150]}")
+                else:
+                    logger.error(f"[{cls.site_name} Info] CRITICAL: No poster source could be determined for {code}")
+                    final_poster_source = None
+                    final_poster_crop_mode = None
 
-            now_printing_path_mg = None # 플레이스홀더 경로
-            if use_image_server and image_server_local_path:
-                now_printing_path_mg = os.path.join(image_server_local_path, "now_printing.jpg")
-                if not os.path.exists(now_printing_path_mg): now_printing_path_mg = None
+            # 팬아트 목록 결정
+            arts_urls_for_processing = []
+            if all_arts:
+                temp_fanart_list_mg = []
+                sources_to_exclude_for_fanart_mg = set()
+                if final_landscape_url_source: sources_to_exclude_for_fanart_mg.add(final_landscape_url_source)
+                if final_poster_source and isinstance(final_poster_source, str) and final_poster_source.startswith("http"):
+                    sources_to_exclude_for_fanart_mg.add(final_poster_source)
 
-            for art_url_item_mg in all_arts:
-                if len(temp_fanart_list_mg) >= max_arts: break
-                if art_url_item_mg and art_url_item_mg not in sources_to_exclude_for_fanart_mg:
-                    is_art_placeholder_mg = False
-                    if now_printing_path_mg and SiteUtil.are_images_visually_same(art_url_item_mg, now_printing_path_mg, proxy_url=proxy_url):
-                        is_art_placeholder_mg = True
-                    if not is_art_placeholder_mg and art_url_item_mg not in temp_fanart_list_mg:
-                        temp_fanart_list_mg.append(art_url_item_mg)
-            arts_urls_for_processing = temp_fanart_list_mg
+                if pl_url and mgs_special_poster_filepath and final_poster_source == mgs_special_poster_filepath:
+                    sources_to_exclude_for_fanart_mg.add(pl_url)
+
+                for art_url_item_mg in all_arts:
+                    if len(temp_fanart_list_mg) >= max_arts: break
+                    if art_url_item_mg and art_url_item_mg not in sources_to_exclude_for_fanart_mg:
+                        if art_url_item_mg not in temp_fanart_list_mg:
+                            temp_fanart_list_mg.append(art_url_item_mg)
+                arts_urls_for_processing = temp_fanart_list_mg
 
         logger.debug(f"MGStage ({cls.module_char}): Final Images Decision - Poster='{str(final_poster_source)[:100]}...' (Crop='{final_poster_crop_mode}'), Landscape='{final_landscape_url_source}', Fanarts_to_process({len(arts_urls_for_processing)})='{arts_urls_for_processing[:3]}...'")
 
+        # --- 이미지 최종 적용 (서버 저장 또는 프록시) ---
         if use_image_server and image_mode == '4' and ui_code_for_image:
-            logger.debug(f"MGStage ({cls.module_char}): Saving images to Image Server for {ui_code_for_image}...")
-
+            # 포스터 저장
             if not skip_default_poster_logic and final_poster_source:
-                p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
-                if p_path and not any(t.aspect == 'poster' and t.value.endswith(p_path) for t in entity.thumb): entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
+                if not any(t.aspect == 'poster' for t in entity.thumb):
+                    p_path = SiteUtil.save_image_to_server_path(final_poster_source, 'p', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
+                    if p_path: entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
+            # 랜드스케이프 저장
             if not skip_default_landscape_logic and final_landscape_url_source:
-                pl_path = SiteUtil.save_image_to_server_path(final_landscape_url_source, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
-                if pl_path and not any(t.aspect == 'landscape' and t.value.endswith(pl_path) for t in entity.thumb): entity.thumb.append(EntityThumb(aspect="landscape", value=f"{image_server_url}/{pl_path}"))
+                if not any(t.aspect == 'landscape' for t in entity.thumb):
+                    pl_path = SiteUtil.save_image_to_server_path(final_landscape_url_source, 'pl', image_server_local_path, image_path_segment, ui_code_for_image, proxy_url=proxy_url)
+                    if pl_path: entity.thumb.append(EntityThumb(aspect="landscape", value=f"{image_server_url}/{pl_path}"))
+            # 팬아트 저장
             if arts_urls_for_processing:
-                processed_fanart_count_server = 0; sources_to_exclude_server = {final_poster_source, final_landscape_url_source}
-                if pl_url and 'mgs_special_poster_filepath' in locals() and mgs_special_poster_filepath and final_poster_source == mgs_special_poster_filepath:
-                    sources_to_exclude_server.add(pl_url)
+                if entity.fanart is None: entity.fanart = []
+                current_fanart_urls_on_server = {fanart_url for fanart_url in entity.fanart if isinstance(fanart_url, str) and fanart_url.startswith(image_server_url)}
+                processed_fanart_count_server = len(current_fanart_urls_on_server)
+
                 for idx, art_url in enumerate(arts_urls_for_processing):
                     if processed_fanart_count_server >= max_arts: break
-                    if art_url and art_url not in sources_to_exclude_server:
-                        art_relative_path = SiteUtil.save_image_to_server_path(art_url, 'art', image_server_local_path, image_path_segment, ui_code_for_image, art_index=idx + 1, proxy_url=proxy_url)
-                        if art_relative_path: entity.fanart.append(f"{image_server_url}/{art_relative_path}"); processed_fanart_count_server += 1
+                    art_relative_path = SiteUtil.save_image_to_server_path(art_url, 'art', image_server_local_path, image_path_segment, ui_code_for_image, art_index=idx + 1, proxy_url=proxy_url)
+                    if art_relative_path:
+                        full_art_url_server = f"{image_server_url}/{art_relative_path}"
+                        if full_art_url_server not in current_fanart_urls_on_server:
+                            entity.fanart.append(full_art_url_server)
+                            current_fanart_urls_on_server.add(full_art_url_server)
+                            processed_fanart_count_server +=1
 
         if use_extras:
             try:

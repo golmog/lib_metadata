@@ -7,7 +7,7 @@ from PIL import Image
 from typing import Union, Tuple
 
 from .entity_av import EntityAVSearch
-from .entity_base import EntityMovie, EntityActor, EntityThumb, EntityExtra, EntityRatings
+from .entity_base import EntityMovie, EntityActor, EntityThumb
 from .plugin import P
 from .site_util import SiteUtil
 
@@ -64,11 +64,20 @@ class SiteJavbus:
             return None
 
     @classmethod
-    def __search(cls, keyword, do_trans=True, proxy_url=None, image_mode="0", manual=False, cf_clearance_cookie=None):
-        keyword = keyword.strip().lower()
-        if keyword[-3:-1] == "cd": keyword = keyword[:-3]
-        keyword = keyword.replace(" ", "-")
-        url = f"{cls.site_base_url}/search/{keyword}"
+    def __search(
+        cls,
+        keyword,
+        do_trans=True,
+        proxy_url=None,
+        image_mode="0",
+        manual=False,
+        cf_clearance_cookie=None,
+        priority_label_setting_str=""
+        ):
+        keyword_processed = keyword.strip().lower()
+        if keyword_processed[-3:-1] == "cd": keyword_processed = keyword_processed[:-3]
+        keyword_processed = keyword_processed.replace(" ", "-")
+        url = f"{cls.site_base_url}/search/{keyword_processed}"
 
         tree = cls._get_javbus_page_tree(url, proxy_url=proxy_url, cf_clearance_cookie=cf_clearance_cookie)
         if tree is None:
@@ -96,9 +105,26 @@ class SiteJavbus:
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 else:
                     item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
-                item.score = 100 if keyword.lower() == item.ui_code.lower() else 60 - (len(ret) * 10)
+                item.score = 100 if keyword_processed.lower() == item.ui_code.lower() else 60 - (len(ret) * 10)
                 if item.score < 0: item.score = 0
-                ret.append(item.as_dict())
+
+                item_dict = item.as_dict()
+
+                item_dict['is_priority_label_site'] = False
+                item_dict['site_key'] = cls.site_name
+
+                if item_dict.get('ui_code') and priority_label_setting_str:
+                    label_to_check = ""
+                    if '-' in item_dict['ui_code']:
+                        label_to_check = item_dict['ui_code'].split('-', 1)[0].upper()
+                    else:
+                        match_label_no_hyphen = re.match(r'^([A-Z]+)', item_dict['ui_code'].upper())
+                        if match_label_no_hyphen: label_to_check = match_label_no_hyphen.group(1)
+                        else: label_to_check = item_dict['ui_code'].upper()
+                        logger.debug(f"Javbus Search: Item '{item_dict['ui_code']}' matched priority label '{label_to_check}'. Setting is_priority_label_site=True.")
+
+                ret.append(item_dict)
+
             except Exception: logger.exception("개별 검색 결과 처리 중 예외:")
         return sorted(ret, key=lambda k: k["score"], reverse=True)
 
@@ -111,12 +137,14 @@ class SiteJavbus:
             image_mode_arg = kwargs.get('image_mode', "0")
             manual_arg = kwargs.get('manual', False)
             cf_clearance_cookie_arg = kwargs.get('cf_clearance_cookie', None)
+            priority_label_str_arg = kwargs.get('priority_label_setting_str', "")
             data = cls.__search(keyword, 
                                 do_trans=do_trans_arg, 
                                 proxy_url=proxy_url_arg, 
                                 image_mode=image_mode_arg, 
                                 manual=manual_arg,
-                                cf_clearance_cookie=cf_clearance_cookie_arg)
+                                cf_clearance_cookie=cf_clearance_cookie_arg,
+                                priority_label_setting_str=priority_label_str_arg)
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
             ret["ret"] = "exception"; ret["data"] = str(exception)
@@ -162,7 +190,6 @@ class SiteJavbus:
         proxy_url=None,
         image_mode="0",
         max_arts=10,
-        use_extras=True,
         **kwargs 
     ):
         use_image_server = kwargs.get('use_image_server', False)
@@ -188,7 +215,7 @@ class SiteJavbus:
 
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
-        entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
+        entity.thumb = []; entity.fanart = []
 
         identifier_parsed_flag = False
         actual_raw_title_text_from_h3 = ""
@@ -426,22 +453,20 @@ class SiteJavbus:
 
                 # 포스터 결정 로직 (if not skip_default_poster_logic: 내부)
                 if not skip_default_poster_logic:
-                    if ps_url: # PS URL이 있는 경우 (비교 기반 로직 가능)
-                        # 1. PS 강제 포스터 사용 설정
+                    # 1. 크롭 모드 사용자 설정 (PS 강제 사용 아닐 때)
+                    if forced_crop_mode_for_this_item and pl_url: # 또는 valid_pl_candidate
+                        logger.debug(f"[{cls.site_name} Info] Poster determined by FORCED 'crop_mode={forced_crop_mode_for_this_item}'. Using PL: {pl_url}")
+                        final_poster_source = pl_url
+                        final_poster_crop_mode = forced_crop_mode_for_this_item
+
+                    if ps_url:
+                        # 2. PS 강제 포스터 사용 설정
                         if apply_ps_to_poster_for_this_item and ps_url:
                             logger.debug(f"[{cls.site_name} Info] Poster determined by FORCED 'ps_to_poster' setting. Using PS: {ps_url}")
                             final_poster_source = ps_url
                             final_poster_crop_mode = None
 
-                        # 2. 크롭 모드 사용자 설정 (PS 강제 사용 아닐 때)
-                        elif forced_crop_mode_for_this_item and pl_url: # 또는 valid_pl_candidate
-                            logger.debug(f"[{cls.site_name} Info] Poster determined by FORCED 'crop_mode={forced_crop_mode_for_this_item}'. Using PL: {pl_url}")
-                            final_poster_source = pl_url
-                            final_poster_crop_mode = forced_crop_mode_for_this_item
-
-                    logger.debug(f"JavBus Poster: PS URL ('{ps_url}') found. Proceeding with comparison-based logic.")
-                    if final_poster_source is None: # 사용자 설정에서 결정 안 됐을 때
-                        # --- 우선순위 3: 일반 포스터 결정 로직 (is_hq_poster, has_hq_poster) ---
+                        # 3. 일반 포스터 결정 로직 (is_hq_poster, has_hq_poster) ---
                         specific_arts_candidates = []
                         if all_arts_from_page:
                             if all_arts_from_page[0] not in specific_arts_candidates: specific_arts_candidates.append(all_arts_from_page[0])
@@ -449,7 +474,7 @@ class SiteJavbus:
                                 specific_arts_candidates.append(all_arts_from_page[-1])
 
                         # 3-A: is_hq_poster
-                        if pl_url and SiteUtil.is_portrait_high_quality_image(pl_url, proxy_url=proxy_url):
+                        if final_poster_source is None and pl_url and SiteUtil.is_portrait_high_quality_image(pl_url, proxy_url=proxy_url):
                             if SiteUtil.is_hq_poster(ps_url, pl_url, proxy_url=proxy_url):
                                 final_poster_source = pl_url
                         if final_poster_source is None and specific_arts_candidates:
@@ -474,7 +499,18 @@ class SiteJavbus:
 
                         if final_poster_source: logger.debug(f"JavBus: General logic (is_hq/has_hq) determined poster: '{str(final_poster_source)[:100]}...', crop: {final_poster_crop_mode}")
 
-                        # --- 3-C: 특수 고정 크기 크롭 (해상도 기반) ---
+                        # 4. MGS 스타일 처리
+                        if (final_poster_source is None or final_poster_source == ps_url) and \
+                           not fixed_size_crop_applied_for_javbus and pl_url:
+                            logger.debug(f"JavBus Poster (Prio 4 attempt with PS): Attempting MGS-style processing for PL ('{pl_url}') with PS ('{ps_url}').")
+                            temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url, pl_url, proxy_url=proxy_url)
+                            if temp_filepath and os.path.exists(temp_filepath):
+                                mgs_style_poster_filepath = temp_filepath
+                                final_poster_source = mgs_style_poster_filepath
+                                final_poster_crop_mode = None
+                                logger.debug(f"JavBus: MGS-style processing successful with PS. Using temp file: {final_poster_source}")
+
+                        # 5. 특수 고정 크기 크롭 (해상도 기반)
                         if (final_poster_source is None or (ps_url and final_poster_source == ps_url)) and pl_url:
                             logger.debug(f"JavBus Poster (Prio 3-C attempt): Applying fixed-size crop logic for PL: {pl_url}")
                             try:
@@ -493,75 +529,23 @@ class SiteJavbus:
                             except Exception as e_fixed_crop_javbus:
                                 logger.error(f"JavBus: Error during fixed-size crop attempt: {e_fixed_crop_javbus}")
 
-
-                        # --- 우선순위 4: MGS 스타일 처리 (PS, PL 모두 필요) ---
-                        if (final_poster_source is None or final_poster_source == ps_url) and \
-                           not fixed_size_crop_applied_for_javbus and pl_url: # ps_url은 이미 있다고 가정됨
-                            logger.debug(f"JavBus Poster (Prio 4 attempt with PS): Attempting MGS-style processing for PL ('{pl_url}') with PS ('{ps_url}').")
-                            temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url, pl_url, proxy_url=proxy_url)
-                            if temp_filepath and os.path.exists(temp_filepath):
-                                mgs_style_poster_filepath = temp_filepath
-                                final_poster_source = mgs_style_poster_filepath
-                                final_poster_crop_mode = None
-                                logger.debug(f"JavBus: MGS-style processing successful with PS. Using temp file: {final_poster_source}")
-
-                        # --- 우선순위 5: 최종 폴백 (PS가 있는 경우) ---
+                        # 6. PS 사용
                         if final_poster_source is None:
-                            logger.debug(f"JavBus Poster (Prio 5 with PS - Fallback): Using PS.")
-                            final_poster_source = ps_url # PS가 있으므로 PS를 최우선 폴백으로
+                            logger.debug(f"Jav321 Poster (with PS - Fallback): Using PS.")
+                            final_poster_source = ps_url
                             final_poster_crop_mode = None
-                        elif final_poster_source == ps_url and pl_url and not mgs_style_poster_filepath and not fixed_size_crop_applied_for_javbus:
-                            # 만약 is_hq, has_hq, 고정크롭, MGS 스타일 모두 실패하고 PS가 선택되었는데,
-                            # PL이 있고 사용자 크롭모드 설정도 있었다면 PL+크롭모드를 고려해볼 수 있으나,
-                            # 이 경우는 이미 Prio 2에서 처리되었어야 함. 여기서는 PS가 최종.
-                            pass
 
-                else: # PS URL이 없는 경우 (비교 기반 로직 대부분 실행 불가)
-                    logger.warning(f"JavBus Poster: PS URL is missing. Applying PL-based or Art-based logic only.")
-                    if final_poster_source is None: # 사용자 설정(Prio 2: crop_mode + PL)에서 결정 안 됐을 때
-                        # PS가 없으므로 is_hq_poster, has_hq_poster, MGS 스타일은 불가능.
-                        # 고정 크기 크롭은 PL만으로 가능하므로 시도.
-                        if pl_url: # PL이 있어야 고정 크기 크롭 시도 가능
-                            logger.debug(f"JavBus Poster (PS Missing - Prio 3-C attempt): Applying fixed-size crop logic for PL: {pl_url}")
-                            try:
-                                pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_url, proxy_url=proxy_url)
-                                if pl_image_obj_for_fixed_crop:
-                                    img_width, img_height = pl_image_obj_for_fixed_crop.size
-                                    if img_width == 800 and 436 <= img_height <= 444:
-                                        crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
-                                        cropped_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
-                                        if cropped_pil_object:
-                                            final_poster_source = cropped_pil_object
-                                            final_poster_crop_mode = None
-                                            fixed_size_crop_applied_for_javbus = True # 플래그 설정
-                                            logger.debug(f"JavBus: Fixed-size crop (PS Missing) applied to PL. Poster source is now a PIL object.")
-                            except Exception as e_fixed_crop_javbus_no_ps:
-                                logger.error(f"JavBus: Error during fixed-size crop attempt (PS Missing): {e_fixed_crop_javbus_no_ps}")
-
-                        # 고정 크롭 후에도 포스터가 결정되지 않았으면 PL 또는 첫번째 Art 사용
-                        if final_poster_source is None:
-                            if pl_url: # Prio 2 (사용자 crop_mode)가 이미 여기서 처리했을 가능성 높음
-                                logger.debug(f"JavBus Poster (PS Missing - Fallback): Using PL.")
-                                final_poster_source = pl_url
-                                final_poster_crop_mode = crop_mode_setting if crop_mode_setting else 'r' # Prio 2와 동일
-                            elif all_arts_from_page:
-                                logger.debug(f"JavBus Poster (PS Missing - Fallback): No PL, using first Art.")
-                                final_poster_source = all_arts_from_page[0]
-                                final_poster_crop_mode = None
-                            else:
-                                logger.error(f"JavBus CRITICAL (PS Missing): No poster source could be determined.")
-
-                # 최종 안전장치 (위 모든 로직 후에도 final_poster_source가 None이면)
-                if final_poster_source is None:
-                    logger.warning(f"JavBus Poster (Final Safety Fallback): All methods failed.")
-                    if ps_url: # 정말 마지막으로 PS라도
-                        final_poster_source = ps_url; final_poster_crop_mode = None
-                    elif pl_url: # 그것도 없으면 PL
-                        final_poster_source = pl_url; final_poster_crop_mode = crop_mode_setting if crop_mode_setting else 'r'
-                    elif all_arts_from_page: # 그것도 없으면 첫 Art
-                        final_poster_source = all_arts_from_page[0]; final_poster_crop_mode = None
                     else:
-                        logger.error(f"JavBus CRITICAL (Final Safety Fallback): No PS, PL, or Arts available.")
+                        logger.debug(f"[{cls.site_name} Info] No PS url found. Skipping poster processing")
+
+                    # 최종 결정된 포스터 정보 로깅
+                    if final_poster_source:
+                        logger.debug(f"[{cls.site_name} Info] Final Poster Decision - Source type: {type(final_poster_source)}, Crop: {final_poster_crop_mode}")
+                        if isinstance(final_poster_source, str): logger.debug(f"  Source URL/Path: {final_poster_source[:150]}")
+                    else:
+                        logger.error(f"[{cls.site_name} Info] CRITICAL: No poster source could be determined for {code}")
+                        final_poster_source = None
+                        final_poster_crop_mode = None
 
             if all_arts_from_page:
                 temp_fanart_list_jb = []
@@ -639,33 +623,6 @@ class SiteJavbus:
                     if processed_art_url and processed_art_url not in entity.fanart:
                         entity.fanart.append(processed_art_url)
                         current_fanart_processed_count += 1
-
-        if use_extras:
-            try:
-                script_text_nodes = tree.xpath("//script[contains(text(), 'var gid =')]/text()")
-                if script_text_nodes:
-                    script_content = script_text_nodes[0]
-                    gid_match = re.search(r"var gid = (\d+);", script_content)
-                    uc_match = re.search(r"var uc = (\d+);", script_content)
-                    if gid_match and uc_match:
-                        gid = gid_match.group(1); uc = uc_match.group(1)
-                        magnet_api_url = f"{cls.site_base_url}/ajax/uncledatoolsbyajax.php?gid={gid}&lang=zh&uc={uc}"
-                        api_headers = SiteUtil.default_headers.copy()
-                        api_headers['Referer'] = url
-                        api_headers['X-Requested-With'] = 'XMLHttpRequest'
-                        api_headers['Accept'] = 'text/html, */*; q=0.01'
-                        magnet_cookies = {'age': 'verified', 'dv': '1', 'existmag': 'mag'}
-                        if cf_clearance_cookie_value_from_kwargs:
-                            magnet_cookies['cf_clearance'] = cf_clearance_cookie_value_from_kwargs
-                        magnet_tree = SiteUtil.get_tree(magnet_api_url, headers=api_headers, cookies=magnet_cookies, proxy_url=proxy_url)
-                        if magnet_tree is not None:
-                            magnet_links = magnet_tree.xpath("//tr/td[1]/a/@href")
-                            magnet_titles = magnet_tree.xpath("//tr/td[1]/a/text()")
-                            for i, magnet_link in enumerate(magnet_links):
-                                if "magnet:?xt=urn:btih:" in magnet_link:
-                                    title_extra = magnet_titles[i].strip() if i < len(magnet_titles) else f"Magnet {i+1}"
-                                    entity.extras.append(EntityExtra("magnet", title_extra, "magnet", magnet_link))
-            except Exception as e_extra: logger.exception(f"JavBus: Error processing extras (magnets): {e_extra}")
 
         final_entity = entity
         if final_entity.ui_code:
