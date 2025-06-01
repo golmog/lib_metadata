@@ -600,7 +600,7 @@ class SiteMgstageDvd(SiteMgstage):
                     res_json_trailer = SiteUtil.get_response(api_url_trailer, proxy_url=proxy_url, headers=api_headers_trailer).json()
                     if res_json_trailer and res_json_trailer.get("url"):
                         trailer_base = res_json_trailer["url"].split(".ism")[0]; trailer_final_url = trailer_base + ".mp4"
-                        trailer_title_text = entity.tagline if entity.tagline else (entity.title if entity.title else code) 
+                        trailer_title_text = entity.tagline if entity.tagline else entity.ui_code 
                         entity.extras.append(EntityExtra("trailer", trailer_title_text, "mp4", trailer_final_url))
             except Exception as e_trailer_proc_dvd:
                 logger.exception(f"MGStage ({cls.module_char}): Error processing trailer: {e_trailer_proc_dvd}")
