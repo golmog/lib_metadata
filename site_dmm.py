@@ -420,7 +420,7 @@ class SiteDmm:
                     base_title = base_title.replace('（DOD）', '').strip()
 
                 # 아이템 우선순위 값 (낮을수록 좋음)
-                # 0: 일반판, 1: 아울렛만, 2: DOD만, 3: 아울렛+DOD
+                # 0: 일반판, 1: DOD만, 2: 아울렛만, 3: 아울렛+DOD
                 priority_score = 0
                 if is_outlet and is_dod:
                     priority_score = 3
