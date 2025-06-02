@@ -739,7 +739,7 @@ class SiteUtil:
             else: # FC2가 아닌 다른 path_segment의 경우 (기존 로직)
                 ui_code_parts = ui_code.split('-')
                 label_part = ui_code_parts[0].upper() if ui_code_parts else "UNKNOWN_LABEL"
-                first_char_of_label = label_part[0] if label_part and label_part[0].isalpha() else '0-9' # 숫자로 시작하면 '0-9' 폴더 (기존 first_char 변수명 유지 위해 변경)
+                first_char_of_label = label_part[0] if label_part and label_part[0].isalpha() else '09' # 숫자로 시작하면 '0-9' 폴더 (기존 first_char 변수명 유지 위해 변경)
 
                 relative_dir_parts.append(first_char_of_label)
                 relative_dir_parts.append(label_part)
