@@ -399,50 +399,66 @@ class SiteDmm:
                 else: filtered_after_bluray.append(item_to_check_bluray) 
             else: filtered_after_bluray.append(item_to_check_bluray)
 
-        # --- 2.5단계: DVD 중 DOD 변형판 필터링 ---
-        logger.debug(f"DMM Search: Starting DOD variant filtering. Items before: {len(filtered_after_bluray)}")
-        final_filtered_list = []
-        processed_base_titles_for_dod_check = set() # 이미 처리된 기본 제목 기록
+        # --- 2.5단계: 접두사/접미사 변형판 필터링 (DOD 및 아울렛 포함) ---
+        logger.debug(f"DMM Search: Starting Variant filtering (DOD, Outlet). Items before: {len(filtered_after_bluray)}")
 
-        # DOD가 없는 일반판을 우선적으로 final_filtered_list에 추가하기 위해 먼저 순회
-        temp_non_dod_dvds = []
-        temp_dod_dvds = []
-        other_types = []
+        title_variants_map = {}
+        other_content_types = [] # DVD/Blu-ray가 아닌 타입은 그대로 유지
 
-        for item_dod_filter in filtered_after_bluray:
-            if item_dod_filter.get('content_type') == 'dvd':
-                item_title = item_dod_filter.get('title', "")
-                if item_title.endswith('（DOD）'):
-                    temp_dod_dvds.append(item_dod_filter)
+        for item_to_filter in filtered_after_bluray:
+            content_type = item_to_filter.get('content_type')
+            original_title = item_to_filter.get('title', "")
+
+            if content_type == 'dvd' or content_type == 'bluray':
+                is_outlet = original_title.startswith('【アウトレット】')
+                is_dod = original_title.endswith('（DOD）')
+
+                base_title = original_title
+                if is_outlet:
+                    base_title = base_title.replace('【アウトレット】', '', 1).strip()
+                if is_dod:
+                    base_title = base_title.replace('（DOD）', '').strip()
+
+                # 아이템 우선순위 값 (낮을수록 좋음)
+                # 0: 일반판, 1: 아울렛만, 2: DOD만, 3: 아울렛+DOD
+                priority_score = 0
+                if is_outlet and is_dod:
+                    priority_score = 3
+                elif is_dod:
+                    priority_score = 2
+                elif is_outlet:
+                    priority_score = 1
+
+                item_to_filter['_variant_priority'] = priority_score # 임시 필드 추가
+
+                if base_title not in title_variants_map:
+                    title_variants_map[base_title] = item_to_filter
                 else:
-                    temp_non_dod_dvds.append(item_dod_filter)
-            else: # DVD가 아닌 타입은 그대로 유지
-                other_types.append(item_dod_filter)
-        
-        # 1. DOD가 없는 DVD를 먼저 final_filtered_list에 추가하고, 그 기본 제목을 기록
-        for non_dod_item in temp_non_dod_dvds:
-            final_filtered_list.append(non_dod_item)
-            item_title = non_dod_item.get('title', "")
-            base_title = item_title # DOD가 없으므로 이것이 기본 제목
-            if base_title: # 비어있지 않은 제목만 기록
-                processed_base_titles_for_dod_check.add(base_title.strip())
+                    # 이미 해당 기본 제목의 아이템이 있다면, 우선순위 비교
+                    existing_item = title_variants_map[base_title]
+                    if priority_score < existing_item.get('_variant_priority', 99):
+                        # 현재 아이템이 우선순위가 더 높으면 교체
+                        logger.debug(f"DMM Variant Filter: Replacing item for base title '{base_title}'. Old: '{existing_item.get('title')}' (prio {existing_item.get('_variant_priority')}), New: '{original_title}' (prio {priority_score})")
+                        title_variants_map[base_title] = item_to_filter
+                    elif priority_score == existing_item.get('_variant_priority', 99):
+                        # 우선순위가 같다면 (예: 일반판 vs 일반판 - 거의 발생 안 함, 또는 아울렛 vs 아울렛)
+                        # 여기서는 추가적인 비교 없이 기존 것을 유지하거나, 다른 기준으로 선택 (예: 코드가 더 짧은 것 등)
+                        # 일단은 기존 것 유지
+                        logger.debug(f"DMM Variant Filter: Item for base title '{base_title}' with same priority {priority_score}. Keeping existing: '{existing_item.get('title')}' over '{original_title}'")
+                        pass
 
-        # 2. DOD가 있는 DVD를 순회하며, 동일한 기본 제목의 일반판이 이미 추가되었는지 확인
-        for dod_item in temp_dod_dvds:
-            item_title = dod_item.get('title', "")
-            base_title_of_dod = item_title.replace('（DOD）', '').strip() # DOD 제거한 기본 제목
-            
-            if base_title_of_dod and base_title_of_dod in processed_base_titles_for_dod_check:
-                logger.debug(f"DMM Search: Excluding DOD variant '{dod_item.get('code')}' (Title: {item_title}) as non-DOD version with base title '{base_title_of_dod}' already exists.")
-            else: # 일반판이 없거나, 기본 제목이 다르면 DOD판도 추가
-                final_filtered_list.append(dod_item)
-                if base_title_of_dod: # 이 DOD판의 기본 제목도 기록 (만약 일반판이 아예 없었던 경우)
-                    processed_base_titles_for_dod_check.add(base_title_of_dod)
-        
-        # 3. DVD가 아닌 다른 타입 아이템들 다시 추가
-        final_filtered_list.extend(other_types)
-        
-        logger.debug(f"DMM Search: DOD variant filtering complete. Items after: {len(final_filtered_list)}")
+            else: # DVD/Blu-ray가 아닌 타입은 그대로 리스트에 추가
+                other_content_types.append(item_to_filter)
+
+        # title_variants_map에서 최종 선택된 아이템들을 리스트로 변환
+        final_filtered_list = list(title_variants_map.values())
+        final_filtered_list.extend(other_content_types) # 다른 타입 아이템들 다시 합치기
+
+        # 임시 필드 제거
+        for item_final in final_filtered_list:
+            item_final.pop('_variant_priority', None)
+
+        logger.debug(f"DMM Search: Variant filtering complete. Items after: {len(final_filtered_list)}")
 
         # --- 3단계: 최종 결과 처리 ---
         final_result = final_filtered_list
