@@ -424,9 +424,9 @@ class SiteDmm:
                 priority_score = 0
                 if is_outlet and is_dod:
                     priority_score = 3
-                elif is_dod:
-                    priority_score = 2
                 elif is_outlet:
+                    priority_score = 2
+                elif is_dod:
                     priority_score = 1
 
                 item_to_filter['_variant_priority'] = priority_score # 임시 필드 추가
