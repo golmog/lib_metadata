@@ -16,7 +16,7 @@ class P(object):
     blueprint = menu = None
 
     plugin_info = {
-        'version' : '0.2.0.4',
+        'version' : '0.2.0.5',
         'type' : 'library',
         'name' : package_name,
         'category_name' : 'library',

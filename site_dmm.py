@@ -6,9 +6,6 @@ from lxml import html, etree
 import os
 from PIL import Image
 
-from framework import path_data # SJVA의 데이터 경로
-from lxml import etree # lxml.html 대신 etree를 사용하여 pretty_print 가능
-
 # lib_metadata 패키지 내 다른 모듈 import
 from .entity_av import EntityAVSearch
 from .entity_base import EntityActor, EntityExtra, EntityMovie, EntityRatings, EntityThumb
@@ -55,14 +52,14 @@ class SiteDmm:
     @classmethod
     def _ensure_age_verified(cls, proxy_url=None):
         if not cls.age_verified or cls.last_proxy_used != proxy_url:
-            logger.debug("Checking/Performing DMM age verification...")
+            logger.debug("Checking/Performing DMM age verification.")
             cls.last_proxy_used = proxy_url
             session_cookies = SiteUtil.session.cookies
             domain_checks = ['.dmm.co.jp', '.dmm.com']
             if any('age_check_done' in session_cookies.get_dict(domain=d) and session_cookies.get_dict(domain=d)['age_check_done'] == '1' for d in domain_checks):
-                logger.debug("Age verification cookie found in SiteUtil.session.")
+                #logger.debug("Age verification cookie found in SiteUtil.session.")
                 cls.age_verified = True; return True
-            logger.debug("Attempting DMM age verification via confirmation GET...")
+            #logger.debug("Attempting DMM age verification via confirmation GET...")
             try:
                 target_rurl = cls.fanza_av_url
                 confirm_path = f"/age_check/=/declared=yes/?rurl={py_urllib_parse.quote(target_rurl, safe='')}"
@@ -70,29 +67,153 @@ class SiteDmm:
                 confirm_headers = cls._get_request_headers(referer=cls.site_base_url + "/")
                 confirm_response = SiteUtil.get_response( age_check_confirm_url, method='GET', proxy_url=proxy_url, headers=confirm_headers, allow_redirects=False, verify=False )
                 if confirm_response.status_code == 302 and 'age_check_done=1' in confirm_response.headers.get('Set-Cookie', ''):
-                    logger.debug("Age confirmation successful via Set-Cookie.")
+                    #logger.debug("Age confirmation successful via Set-Cookie.")
                     final_cookies = SiteUtil.session.cookies
                     if any('age_check_done' in final_cookies.get_dict(domain=d) and final_cookies.get_dict(domain=d)['age_check_done'] == '1' for d in domain_checks):
-                        logger.debug("age_check_done=1 confirmed in session."); cls.age_verified = True; return True
+                        #logger.debug("age_check_done=1 confirmed in session.")
+                        cls.age_verified = True; return True
                     else:
-                        logger.warning("Set-Cookie received, but not updated in session. Trying manual set...")
+                        logger.warning("Set-Cookie received, but not updated in session. Trying manual set.")
                         SiteUtil.session.cookies.set("age_check_done", "1", domain=".dmm.co.jp", path="/"); SiteUtil.session.cookies.set("age_check_done", "1", domain=".dmm.com", path="/")
-                        logger.debug("Manually set age_check_done cookie."); cls.age_verified = True; return True
+                        #logger.debug("Manually set age_check_done cookie.")
+                        cls.age_verified = True; return True
                 else: logger.warning(f"Age check failed (Status:{confirm_response.status_code} or cookie missing).")
             except Exception as e: logger.exception(f"Age verification exception: {e}")
             cls.age_verified = False; return False
         else:
-            logger.debug("Age verification already done."); return True
+            #logger.debug("Age verification already done.")
+            return True
 
     @classmethod
     def get_label_from_ui_code(cls, ui_code_str: str) -> str:
         if not ui_code_str or not isinstance(ui_code_str, str): return ""
-        
         ui_code_upper = ui_code_str.upper()
+
+        # PTN_ID와 유사한 패턴으로 ID 계열 레이블 먼저 확인 (예: "16ID-045" -> "16ID")
+        id_match = re.match(r'^(\d*[A-Z]+ID)', ui_code_upper) # 예: 16ID, 25ID, ID (숫자 없거나, 있거나)
+        if id_match:
+            return id_match.group(1)
+        
+        # 일반적인 경우 (하이픈 앞부분)
         if '-' in ui_code_upper:
             return ui_code_upper.split('-', 1)[0]
+        
+        # 하이픈 없는 경우 (예: HAGE001)
+        match_alpha_prefix = re.match(r'^([A-Z]+)', ui_code_upper)
+        if match_alpha_prefix:
+            return match_alpha_prefix.group(1)
+            
+        return ui_code_upper # 최후의 경우 전체 반환
+
+    @classmethod
+    def _parse_ui_code_from_cid(cls, cid_part_raw: str, content_type: str) -> tuple:
+        processed_cid = cid_part_raw.lower()
+        # --- 1. (선택적) 알려진 일반 접두사/접미사 제거 ---
+        # 예: h_, n_, _a, _b 등. 이 부분은 기존 코드의 것을 활용하거나 추가
+        prefix_match = re.match(r'^([hn]_\d?)(.*)', processed_cid)
+        if prefix_match:
+            # prefix_val = prefix_match.group(1) # 필요시 보관
+            processed_cid = prefix_match.group(2)
+        
+        suffix_strip_match = re.match(r'^(.*\d+)([a-z]+)$', processed_cid)
+        if suffix_strip_match:
+            processed_cid = suffix_strip_match.group(1)
+
+        # --- 변수 초기화 ---
+        label_num_ui_final = "" # 최종 UI 코드용 숫자 (3자리 패딩)
+        label_num_raw_for_score = "" # 점수 계산용 원본 숫자 (패딩 없음)
+        remaining_for_label_parse = processed_cid # 레이블 파싱 대상 문자열
+
+        # expected_num_len: cid에서 숫자 부분을 식별하기 위한 기대 길이 (타입별로 다름)
+        expected_num_len_for_cid_parse = 5 if content_type == 'videoa' or content_type == 'vr' else 3
+
+        # --- 2. 숫자 부분 추출 (cid 파싱용 기대 길이 사용) ---
+        extracted_num_str_intermediate = "" # 초기 숫자 추출 결과 (아직 앞 0 제거 전)
+
+        num_match_specific_len = re.match(rf'^(.*?)(\d{{{expected_num_len_for_cid_parse}}})$', processed_cid)
+        if num_match_specific_len:
+            remaining_for_label_parse = num_match_specific_len.group(1)
+            extracted_num_str_intermediate = num_match_specific_len.group(2)
+        else: # 기대 길이의 숫자를 못 찾은 경우, 일반 숫자 추출
+            num_match_general = re.match(r'^(.*?_?)(\d+)$', processed_cid)
+            if num_match_general:
+                remaining_for_label_parse = num_match_general.group(1)
+                extracted_num_str_intermediate = num_match_general.group(2)
+            else:
+                logger.debug(f"DMM Parse: No numeric part found in '{processed_cid}' for cid parsing.")
+                # extracted_num_str_intermediate 는 "" 유지
+                
+        # extracted_num_str_intermediate 에 대한 후처리
+        if extracted_num_str_intermediate:
+            label_num_raw_for_score = extracted_num_str_intermediate # 점수용은 초기 추출된 원본 사용
+
+            # UI용 숫자 처리:
+            # 1. 앞부분의 '0' 제거 (단, 숫자 전체가 '0' 이거나 '00' 등인 경우는 하나는 남김)
+            num_stripped = extracted_num_str_intermediate.lstrip('0')
+            if not num_stripped and extracted_num_str_intermediate: # 모두 0이었던 경우 (예: "0", "00")
+                num_stripped = "0" # 최소한 하나의 0은 유지
+
+            # 2. 최소 3자리로 패딩
+            label_num_ui_final = num_stripped.zfill(3)
         else:
-            return ui_code_upper 
+            # 숫자 부분이 아예 없었던 경우
+            label_num_raw_for_score = ""
+            label_num_ui_final = ""
+
+        # --- 3. 레이블 부분 추출 (remaining_for_label_parse 사용) ---
+        label_ui_part = "" # 최종 UI 코드용 레이블 (예: 16ID, SSIS)
+        score_label_part = "" # 최종 점수 계산용 레이블 (예: 16id, ssis)
+
+        if 'id' in remaining_for_label_parse.lower():
+            idnn_match = re.match(r'^(.*?)(id)(\d{2})$', remaining_for_label_parse, re.I)
+            if idnn_match:
+                label_series = idnn_match.group(3)
+                label_chars = idnn_match.group(2).lower()
+                label_ui_part = (label_series + label_chars).upper() # 예: 16ID
+                score_label_part = label_series + label_chars      # 예: 16id
+            else:
+                nnid_match = re.match(r'^(.*?)(\d{2})(id)$', remaining_for_label_parse, re.I)
+                if nnid_match:
+                    label_series = nnid_match.group(2)
+                    label_chars = nnid_match.group(3).lower()
+                    label_ui_part = (label_series + label_chars).upper() # 예: 16ID
+                    score_label_part = label_series + label_chars      # 예: 16id
+                # IDNN/NNID 외 'id' 포함 케이스는 아래 일반 로직에서 처리
+                
+        if not label_ui_part: # 'id'가 없거나, 위 특정 ID 패턴에 해당하지 않으면
+            # 일반 레이블 추출: 앞의 숫자/언더스코어 제외, 알파벳으로 시작하는 부분
+            general_label_match = re.match(r'^(?:\d*_)?([a-z][a-z0-9]*)$', remaining_for_label_parse, re.I)
+            if general_label_match:
+                extracted_label = general_label_match.group(1)
+                label_ui_part = extracted_label.upper()
+                score_label_part = extracted_label.lower()
+            else:
+                if remaining_for_label_parse: # 숫자만 있었거나 빈 문자열이 아닌 경우
+                    label_ui_part = remaining_for_label_parse.upper()
+                    score_label_part = remaining_for_label_parse.lower()
+                else: # 숫자만 있었고, remaining_for_label_parse가 비었다면 label_ui_part도 ""
+                    logger.warning(f"DMM Parse: Label part is empty after num extraction from '{cid_part_raw}'")
+
+        # --- 4. 최종 UI 코드 조합 ---
+        ui_code_final = ""
+        if label_ui_part and label_num_ui_final:
+            ui_code_final = f"{label_ui_part}-{label_num_ui_final}"
+        elif label_ui_part:
+            ui_code_final = label_ui_part.upper()
+        elif label_num_ui_final: # 거의 없음
+            ui_code_final = f"-{label_num_ui_final}" # 예: -045
+        else: # 둘 다 없으면 원본 사용
+            ui_code_final = cid_part_raw.upper()
+            if not score_label_part: score_label_part = ui_code_final.lower() # 점수용 레이블도 채움
+
+        if not score_label_part and label_ui_part: # score_label_part가 비었는데 label_ui_part는 있을 경우
+            score_label_part = label_ui_part.lower()
+        elif not score_label_part: # 최후의 경우
+            score_label_part = cid_part_raw.lower().replace("-","") # 하이픈 제거한 원본 소문자
+
+        logger.debug(f"DMM Parse: '{cid_part_raw}' ({content_type}) -> UI Code='{ui_code_final}', ScoreLabel='{score_label_part}', ScoreNumRaw='{label_num_raw_for_score}'")
+        return ui_code_final, score_label_part, label_num_raw_for_score
+
 
     @classmethod
     def __search(
@@ -171,24 +292,21 @@ class SiteDmm:
             #except Exception as e_save_html: logger.error(f"DMM Search: Failed to save HTML for no items: {e_save_html}")
             return []
 
-        ret_temp_before_filtering = [];
+        ret_temp_before_filtering = []
         score = 60
 
-        # --- 1단계: 모든 검색 결과 일단 파싱하여 ret 리스트 생성 ---
         for node in lists[:10]:
             try:
                 item = EntityAVSearch(cls.site_name)
                 href = None; original_ps_url = None; content_type = "unknown" 
 
-                # --- 링크 및 이미지 URL 추출 (새로운 HTML 구조에 맞게 node 내부에서 다시 XPath 적용) ---
+                # 1. 기본적인 정보 파싱
                 title_link_tags_in_node = node.xpath('.//a[.//p[contains(@class, "text-link")]]') 
-                img_link_tags_in_node = node.xpath('.//a[./img[@alt="Product"]]') # alt="Product" 이미지를 가진 a
+                img_link_tags_in_node = node.xpath('.//a[./img[@alt="Product"]]')
 
                 primary_href_candidate = None
-                # 제목 링크가 존재하고, 그 href에 cid가 있다면 우선 사용
                 if title_link_tags_in_node and title_link_tags_in_node[0].attrib.get("href", "").lower().count('/cid=') > 0 :
                     primary_href_candidate = title_link_tags_in_node[0].attrib.get("href", "").lower()
-                # 그렇지 않고 이미지 링크가 존재하고, 그 href에 cid가 있다면 사용
                 elif img_link_tags_in_node and img_link_tags_in_node[0].attrib.get("href", "").lower().count('/cid=') > 0 :
                     primary_href_candidate = img_link_tags_in_node[0].attrib.get("href", "").lower()
 
@@ -196,7 +314,7 @@ class SiteDmm:
                     logger.debug("DMM Search Item: No primary link with cid found. Skipping.")
                     continue
 
-                href = primary_href_candidate # 최종 href 할당 (경로 필터링에 사용)
+                href = primary_href_candidate
                 #logger.debug(f"DMM Search Item: Determined href for path check: '{href}'")
 
                 # 경로 필터링 (href 사용)
@@ -251,68 +369,53 @@ class SiteDmm:
                     logger.debug(f"DMM Search Item: Duplicate code and type, skipping: {item.code} ({item.content_type})")
                     continue
 
+                # 2. item.ui_code 파싱 및 설정 (DMM의 cid로부터 최종 ui_code 생성)
+                cid_part_for_parse = item.code[len(cls.module_char)+len(cls.site_char):]
+                parsed_ui_code, label_for_score, num_raw_for_score = cls._parse_ui_code_from_cid(cid_part_for_parse, item.content_type)
+                item.ui_code = parsed_ui_code.upper()
+
                 # 제목 접두사 추가
                 type_prefix = ""
                 if content_type == 'dvd': type_prefix = "[DVD] "
                 elif content_type == 'videoa': type_prefix = "[Digital] "
                 elif content_type == 'bluray': type_prefix = "[Blu-ray] "
-                if not item.title or item.title == "Not Found":
-                    match_real_no_for_title = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
-                    default_title = match_real_no_for_title.group("real").upper() + "-" + str(int(match_real_no_for_title.group("no"))).zfill(3) if match_real_no_for_title else item.code[2:].upper()
-                    item.title = type_prefix + default_title
 
-                # 점수 계산
-                item_label_part_from_item = ""
-                item_number_part_from_item = ""
+                # 3. item.title 설정
+                title_p_tags_node = node.xpath('.//p[contains(@class, "text-link") and contains(@class, "line-clamp-2")]')
+                raw_title_node = title_p_tags_node[0].text_content().strip() if title_p_tags_node else ""
+                item.title = raw_title_node if raw_title_node and raw_title_node != "Not Found" else item.ui_code
+                item.title = type_prefix + item.title
 
-                source_for_item_parts = item.code[2:].lower()
-                match_for_item_parts = cls.PTN_SEARCH_REAL_NO.search(source_for_item_parts)
-
-                if match_for_item_parts:
-                    item_label_part_from_item = match_for_item_parts.group("real")
-                    item_number_part_from_item = match_for_item_parts.group("no")
-                else:
-                    temp_code_for_fallback_score = source_for_item_parts
-                    m_fallback_score = re.match(r"([a-z]+)(\d+.*)", temp_code_for_fallback_score)
-                    if m_fallback_score:
-                        item_label_part_from_item = m_fallback_score.group(1)
-                        num_match_fallback = re.match(r"(\d+)", m_fallback_score.group(2))
-                        item_number_part_from_item = num_match_fallback.group(1) if num_match_fallback else ""
-                    else:
-                        item_label_part_from_item = temp_code_for_fallback_score
-                    logger.warning(f"DMM Score: PTN_SEARCH_REAL_NO failed for item parts from '{source_for_item_parts}'. Fallback: label='{item_label_part_from_item}', num='{item_number_part_from_item}'")
-
-                # 비교용 5자리 패딩된 아이템 코드 생성
+                # 4. item.score 계산
+                # 점수 계산용 코드 생성
                 item_code_for_strict_compare = ""
-                if item_label_part_from_item and item_number_part_from_item:
-                    item_code_for_strict_compare = item_label_part_from_item + item_number_part_from_item.zfill(5)
-                elif item_label_part_from_item:
-                    item_code_for_strict_compare = item_label_part_from_item
-
                 item_ui_code_base_for_score = ""
-                if match_for_item_parts :
-                    item_ui_code_base_for_score = match_for_item_parts.group("real") + match_for_item_parts.group("no")
-                else:
-                    item_ui_code_base_for_score = source_for_item_parts
-
-                current_score_val = 0
+                if label_for_score and num_raw_for_score:
+                    item_code_for_strict_compare = label_for_score + num_raw_for_score.zfill(5)
+                    item_ui_code_base_for_score = label_for_score + num_raw_for_score
+                elif item.ui_code:
+                    cleaned_ui_code_for_score = item.ui_code.replace("-","").lower()
+                    item_code_for_strict_compare = cleaned_ui_code_for_score
+                    item_ui_code_base_for_score = cleaned_ui_code_for_score
 
                 #logger.debug(f"DMM Score Compare: dmm_keyword_for_url='{dmm_keyword_for_url}', item_code_for_strict_compare='{item_code_for_strict_compare}', item_ui_code_base_for_score='{item_ui_code_base_for_score}'")
 
                 # 점수 부여
+                current_score_val = 0
+
                 if dmm_keyword_for_url and item_code_for_strict_compare and dmm_keyword_for_url == item_code_for_strict_compare: 
                     current_score_val = 100
                 elif item_ui_code_base_for_score == dmm_keyword_for_url:
                     current_score_val = 100
                 elif item_ui_code_base_for_score.replace("0", "") == dmm_keyword_for_url.replace("0", ""): 
                     current_score_val = 80
-                elif dmm_keyword_for_url in item_ui_code_base_for_score: 
+                elif dmm_keyword_for_url in item_ui_code_base_for_score:
                     current_score_val = score
-                elif len(keyword_tmps_for_dmm) == 2 and keyword_tmps_for_dmm[0] in item.code.lower() and keyword_tmps_for_dmm[1] in item.code.lower(): 
+                elif len(keyword_tmps_for_dmm) == 2 and keyword_tmps_for_dmm[0] in item.code.lower() and keyword_tmps_for_dmm[1] in item.code.lower():
                     current_score_val = score
                 elif len(keyword_tmps_for_dmm) > 0 and \
                     (keyword_tmps_for_dmm[0] in item.code.lower() or \
-                    (len(keyword_tmps_for_dmm) > 1 and keyword_tmps_for_dmm[1] in item.code.lower())): 
+                    (len(keyword_tmps_for_dmm) > 1 and keyword_tmps_for_dmm[1] in item.code.lower())):
                     current_score_val = 60
                 else: 
                     current_score_val = 20
@@ -320,40 +423,26 @@ class SiteDmm:
                 item.score = current_score_val
                 if current_score_val < 100 and score > 20: score -= 5
 
-                # UI 코드 생성
-                match_real_no_ui = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
-                if match_real_no_ui:
-                    real_ui = match_real_no_ui.group("real").upper(); no_ui = match_real_no_ui.group("no")
-                    try: item.ui_code = f"{real_ui}-{str(int(no_ui)).zfill(3)}"
-                    except ValueError: item.ui_code = f"{real_ui}-{no_ui}"
-                else: 
-                    tmp_ui = item.code[2:].upper();
-                    if tmp_ui.startswith("H_"): tmp_ui = tmp_ui[2:]
-                    m_ui_fallback = re.match(r"([a-zA-Z]+)(\d+.*)", tmp_ui) 
-                    if m_ui_fallback:
-                        real_f = m_ui_fallback.group(1); rest_f = m_ui_fallback.group(2); num_m_f = re.match(r"(\d+)", rest_f)
-                        item.ui_code = f"{real_f}-{str(int(num_m_f.group(1))).zfill(3)}" if num_m_f else f"{real_f}-{rest_f}"
-                    else: item.ui_code = tmp_ui
-
-                # 매뉴얼 모드
+                # 5. manual 플래그에 따른 item.image_url 및 item.title_ko 최종 처리
                 if manual:
                     _image_mode = "1" if image_mode != "0" else image_mode
                     try: item.image_url = SiteUtil.process_image_mode(_image_mode, original_ps_url, proxy_url=proxy_url)
                     except Exception as e_img: logger.error(f"DMM Search: ImgProcErr (manual):{e_img}")
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + type_prefix + item.title
 
+                # 6. EntityAVSearch 객체를 dict로 변환
                 item_dict = item.as_dict()
 
-                # 캐시 저장
+                # 7. 캐시 저장
                 if item_dict.get('code') and original_ps_url and item_dict.get('content_type'):
                     code_key_cache = item_dict['code']
                     content_type_cache = item_dict['content_type']
-                    
+
                     if code_key_cache not in cls._ps_url_cache:
                         cls._ps_url_cache[code_key_cache] = {}
-                    
+
                     cls._ps_url_cache[code_key_cache][content_type_cache] = original_ps_url
-                    
+
                     current_main_type_cache = cls._ps_url_cache[code_key_cache].get('main_content_type')
                     should_update_main_cache = True
                     if current_main_type_cache:
@@ -361,12 +450,12 @@ class SiteDmm:
                             if cls.CONTENT_TYPE_PRIORITY.index(content_type_cache) >= cls.CONTENT_TYPE_PRIORITY.index(current_main_type_cache):
                                 should_update_main_cache = False
                         except ValueError: pass 
-                    
+
                     if should_update_main_cache:
                         cls._ps_url_cache[code_key_cache]['main_content_type'] = content_type_cache
                     # logger.debug(f"DMM PS Cache: Updated for '{code_key_cache}', type '{content_type_cache}'. Main: '{cls._ps_url_cache[code_key_cache].get('main_content_type')}'")
 
-                # === "지정 레이블 최우선" 플래그 설정 ===
+                # 8. "지정 레이블 최우선" 플래그 설정
                 item_dict['is_priority_label_site'] = False 
                 item_dict['site_key'] = cls.site_name
 
@@ -502,31 +591,8 @@ class SiteDmm:
 
     @classmethod
     def __img_urls(cls, tree, content_type='unknown', now_printing_path=None, proxy_url=None):
-        logger.debug(f"DMM __img_urls: Extracting raw image URLs for type: {content_type}")
+        #logger.debug(f"DMM __img_urls: Extracting raw image URLs for type: {content_type}")
         img_urls_dict = {'ps': "", 'pl': "", 'arts': [], 'specific_poster_candidates': []}
-
-        # === 임시 HTML 저장 코드 (디버깅용) ===
-        if content_type == 'dvd' or content_type == 'bluray': # DVD/Blu-ray 타입일 때만 저장
-            if tree is not None: # tree 객체가 있을 때만
-                try:
-                    # 파일명에 content_type과 현재 시간을 넣어 고유하게 만듦
-                    from datetime import datetime
-                    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S%f")
-                    # code 정보는 이 함수에 직접 전달되지 않으므로, content_type으로만 구분
-                    # 만약 code 정보가 필요하면 __info에서 tree와 함께 code도 전달해야 함
-                    debug_filename = f"dmm_img_urls_debug_{content_type}_{timestamp_str}.html"
-                    debug_html_path = os.path.join(path_data, 'tmp', debug_filename)
-
-                    os.makedirs(os.path.join(path_data, 'tmp'), exist_ok=True) 
-                    with open(debug_html_path, 'w', encoding='utf-8') as f:
-                        # lxml.etree를 사용하여 보기 좋게 포맷된 HTML 저장
-                        f.write(etree.tostring(tree, pretty_print=True, encoding='unicode'))
-                    logger.info(f"DMM __img_urls ({content_type}): Debug HTML content saved to: {debug_html_path}")
-                except Exception as e_save_html:
-                    logger.error(f"DMM __img_urls ({content_type}): Failed to save debug HTML content: {e_save_html}")
-            else:
-                logger.warning(f"DMM __img_urls ({content_type}): Tree is None, cannot save HTML for debugging.")
-        # === 임시 HTML 저장 코드 끝 ===
 
         try:
             if content_type == 'videoa' or content_type == 'vr':
@@ -534,14 +600,14 @@ class SiteDmm:
                 if not sample_image_links: # a 태그가 없는 경우 img src 직접 사용
                     all_img_tags_src = tree.xpath('//div[@id="sample-image-block"]//img/@src')
                     if not all_img_tags_src: return img_urls_dict # 이미지조차 없으면 반환
-                    
+
                     # 첫 번째 이미지를 PL로, 나머지를 Art로
                     if all_img_tags_src:
                         pl_candidate_url = py_urllib_parse.urljoin(cls.site_base_url, all_img_tags_src[0].strip())
                         # 플레이스홀더 검사
                         if not (now_printing_path and SiteUtil.are_images_visually_same(pl_candidate_url, now_printing_path, proxy_url=proxy_url)):
                             img_urls_dict['pl'] = pl_candidate_url
-                        
+
                         temp_arts_from_img_tags = []
                         for src in all_img_tags_src[1:]:
                             art_url = py_urllib_parse.urljoin(cls.site_base_url, src.strip())
@@ -572,13 +638,13 @@ class SiteDmm:
                         final_image_url = py_urllib_parse.urljoin(cls.site_base_url, href)
                     elif img_src and re.search(r'\.(jpg|jpeg|png|webp)$', img_src, re.IGNORECASE): # 아니면 img_src 사용
                         final_image_url = py_urllib_parse.urljoin(cls.site_base_url, img_src)
-                    
+
                     if final_image_url and final_image_url not in seen_urls_in_videoa_vr:
                         # 플레이스홀더 검사
                         if not (now_printing_path and SiteUtil.are_images_visually_same(final_image_url, now_printing_path, proxy_url=proxy_url)):
                             temp_arts_list_for_processing.append(final_image_url)
                             seen_urls_in_videoa_vr.add(final_image_url)
-                
+
                 # PL 결정 (파일명 기반 또는 첫 번째 이미지)
                 processed_pl_v = None
                 for url_idx, url_item in enumerate(temp_arts_list_for_processing):
@@ -593,7 +659,7 @@ class SiteDmm:
                     processed_pl_v = temp_arts_list_for_processing[0]
 
                 img_urls_dict['pl'] = processed_pl_v if processed_pl_v else ""
-                
+
                 # Arts 및 Specific Candidates 결정 (순서 유지, 중복 없음)
                 remaining_arts_v = []
                 if temp_arts_list_for_processing:
@@ -625,15 +691,15 @@ class SiteDmm:
                             if not thumb_url_pkg.lower().endswith("dummy_ps.gif"):
                                 if not thumb_url_pkg.startswith("http"):
                                     thumb_url_pkg = py_urllib_parse.urljoin(cls.site_base_url, thumb_url_pkg)
-                                
+
                                 if thumb_url_pkg.endswith("ps.jpg"):
                                     temp_pl_dvd = thumb_url_pkg.replace("ps.jpg", "pl.jpg")
-                                
+
                                 if temp_pl_dvd and not (now_printing_path and SiteUtil.are_images_visually_same(temp_pl_dvd, now_printing_path, proxy_url=proxy_url)):
                                     img_urls_dict['pl'] = temp_pl_dvd
                                     seen_high_res_urls.add(temp_pl_dvd)
                                     logger.debug(f"DMM __img_urls ({content_type}): Package Image (PL) inferred: {temp_pl_dvd}")
-                
+
                 if not img_urls_dict['pl']: # 위에서 PL 못 찾았으면, 기존 fn-sampleImage-imagebox 방식 시도
                     package_img_xpath_alt = '//div[@id="fn-sampleImage-imagebox"]/img/@src'
                     package_img_tags_alt = tree.xpath(package_img_xpath_alt)
@@ -766,10 +832,6 @@ class SiteDmm:
 
     @classmethod
     def _get_dmm_vr_trailer_fallback(cls, cid_part, detail_url_for_referer, proxy_url=None):
-        """
-        DMM VR 타입 예고편 추출의 이전 방식 Fallback.
-        sampleUrl JavaScript 변수를 파싱.
-        """
         trailer_url = None
         try:
             vr_player_page_url = f"{cls.site_base_url}/digital/-/vr-sample-player/=/cid={cid_part}/"
@@ -802,7 +864,7 @@ class SiteDmm:
 
         # content_type_from_cache 초기화 및 값 할당 (기존 변수명 사용)
         content_type_from_cache = cached_data.get('main_content_type', 'unknown') # <<--- 기본값을 'unknown' 문자열로 명시
-        
+
         if (content_type_from_cache == 'unknown' or not cached_data.get(content_type_from_cache)) and cached_data: 
             found_type_from_prio = False
             for prio_type in cls.CONTENT_TYPE_PRIORITY:
@@ -814,7 +876,7 @@ class SiteDmm:
                 content_type_from_cache = 'unknown'
 
         ps_url_from_search_cache = cached_data.get(content_type_from_cache) if content_type_from_cache != 'unknown' else None
-        
+
         #logger.debug(f"DMM Info: Using content_type_from_cache: '{content_type_from_cache}' for page load. PS from cache for this type: {'Yes' if ps_url_from_search_cache else 'No'}")
         #logger.debug(f"DMM Info: Using content_type_from_cache: PS from cache: {ps_url_from_search_cache}")
 
@@ -832,7 +894,7 @@ class SiteDmm:
 
         cid_part = code[len(cls.module_char)+len(cls.site_char):] # 기존 방식대로 접두사 길이 사용
         detail_url = None
-        
+
         if current_content_type == 'videoa' or current_content_type == 'vr':
             detail_url = cls.site_base_url + f"/digital/videoa/-/detail/=/cid={cid_part}/"
         elif current_content_type == 'dvd' or current_content_type == 'bluray':
@@ -870,12 +932,12 @@ class SiteDmm:
         # === 2. 전체 메타데이터 파싱 (ui_code_for_image 및 entity.title 등 확정) ===
         identifier_parsed = False; is_vr_actual = False # 상세페이지에서 VR 여부 최종 확인
         try:
-            logger.debug(f"DMM Info (Parsing as {entity.content_type}): Metadata for {code}...")
+            #logger.debug(f"DMM Info (Parsing as {entity.content_type}): Metadata for {code}...")
 
             # --- DMM 타입별 메타데이터 파싱 로직 ---
             if entity.content_type == 'videoa' or entity.content_type == 'vr':
                 # videoa/vr 파싱
-                raw_title_text_v = "" # 변수명에 _v 접미사 추가
+                raw_title_text_v = ""
                 try:
                     title_node_v = tree.xpath('//h1[@id="title"]')
                     if title_node_v:
@@ -898,45 +960,17 @@ class SiteDmm:
                     if value_text_all_v == "----" or not value_text_all_v: continue
 
                     if "品番" in key_v:
-                        value_pid_v = value_text_all_v; match_id_v = cls.PTN_ID.search(value_pid_v); id_before_v = None
-                        if match_id_v: id_before_v = match_id_v.group(0); value_pid_v = value_pid_v.lower().replace(id_before_v.lower(), "zzid") # 소문자 변환 후 치환
 
-                        match_real_v = cls.PTN_SEARCH_REAL_NO.search(value_pid_v) 
-                        
-                        formatted_code_v = value_text_all_v.upper() # 기본값: 원본 품번 문자열
-                        if match_real_v:
-                            label_v = match_real_v.group("real").upper()
-                            if id_before_v is not None: label_v = label_v.replace("ZZID", id_before_v.upper())
-                            num_str_v = str(int(match_real_v.group("no"))).zfill(3)
-                            formatted_code_v = f"{label_v}-{num_str_v}"
-                            if entity.tag is None: entity.tag = []
-                            if label_v not in entity.tag: entity.tag.append(label_v)
-                        else:
-                            # PTN_SEARCH_REAL_NO.search 실패 시 폴백 로직
-                            logger.warning(f"DMM Info ({entity.content_type}): PTN_SEARCH_REAL_NO failed for '{value_pid_v}'. Applying fallback for UI code.")
+                        if value_text_all_v:
+                            logger.debug(f"DMM Info: Parsed '品番' value from page: '{key_v}' for {code}.")
 
-                            # 첫번째 문자열 그룹과 그 뒤 숫자 그룹 추출
-                            m_fallback_v = re.match(r"([a-zA-Z]+)(\d+)", value_pid_v, re.I) # 원본 value_pid_v 사용
-                            if m_fallback_v:
-                                label_fallback_v = m_fallback_v.group(1).upper()
-                                number_fallback_v_str = m_fallback_v.group(2)
-                                try:
-                                    # 숫자 부분만 사용하고 3자리로 패딩
-                                    formatted_code_v = f"{label_fallback_v}-{str(int(number_fallback_v_str)).zfill(3)}"
-                                except ValueError:
-                                    # 숫자 변환 실패 시, 문자열 부분 + 원래 숫자 문자열 사용
-                                    formatted_code_v = f"{label_fallback_v}-{number_fallback_v_str}"
-                                logger.debug(f"DMM Info ({entity.content_type}): Fallback UI code set to '{formatted_code_v}' from '{value_pid_v}'.")
-                            else:
-                                # 이것도 실패하면 그냥 원본 대문자 사용
-                                formatted_code_v = value_text_all_v.upper()
-                                logger.warning(f"DMM Info ({entity.content_type}): Fallback UI code extraction failed for '{value_pid_v}'. Using original uppercase from HTML: '{formatted_code_v}'.")
+                            parsed_ui_code_page, _, _ = cls._parse_ui_code_from_cid(value_text_all_v, entity.content_type)
+                            entity.ui_code = parsed_ui_code_page
 
-                        ui_code_for_image = formatted_code_v # 확정된 품번
-                        entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image # 품번을 타이틀로
-                        entity.ui_code = ui_code_for_image
-                        identifier_parsed = True
-                        # logger.debug(f"DMM ({entity.content_type}): 品番 파싱 완료, ui_code_for_image='{ui_code_for_image}'")
+                            ui_code_for_image = parsed_ui_code_page.lower()
+                            entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
+                            identifier_parsed = True
+                            # logger.debug(f"DMM ({entity.content_type}): 品番 파싱 완료, ui_code_for_image='{ui_code_for_image}'")
 
                     elif "配信開始日" in key_v:
                         premiered_haishin_v = value_text_all_v.replace("/", "-")
@@ -1032,41 +1066,18 @@ class SiteDmm:
 
                     # --- 테이블 내부 항목 파싱 (videoa/vr 로직을 여기에 적용) ---
                     if "品番" in key_dvd:
-                        value_pid_dvd = value_text_all_dvd; match_id_dvd = cls.PTN_ID.search(value_pid_dvd); id_before_dvd = None
-                        if match_id_dvd: id_before_dvd = match_id_dvd.group(0); value_pid_dvd = value_pid_dvd.lower().replace(id_before_dvd.lower(), "zzid")
 
-                        match_real_dvd = cls.PTN_SEARCH_REAL_NO.search(value_pid_dvd)
-                        
-                        formatted_code_dvd = value_text_all_dvd.upper() # 기본값: 원본 품번 문자열
-                        if match_real_dvd:
-                            label_dvd = match_real_dvd.group("real").upper()
-                            if id_before_dvd is not None: label_dvd = label_dvd.replace("ZZID", id_before_dvd.upper())
-                            num_str_dvd = str(int(match_real_dvd.group("no"))).zfill(3)
-                            formatted_code_dvd = f"{label_dvd}-{num_str_dvd}"
-                            if entity.tag is None: entity.tag = []
-                            if label_dvd not in entity.tag: entity.tag.append(label_dvd)
-                        else:
-                            # PTN_SEARCH_REAL_NO.search 실패 시 폴백 로직
-                            logger.warning(f"DMM Info ({entity.content_type}): PTN_SEARCH_REAL_NO failed for '{value_pid_dvd}'. Applying fallback for UI code.")
-                            
-                            # 마찬가지로 h_ 제거 로직 불필요
-                            m_fallback_dvd = re.match(r"([a-zA-Z]+)(\d+)", value_pid_dvd, re.I) # 원본 value_pid_dvd 사용
-                            if m_fallback_dvd:
-                                label_fallback_dvd = m_fallback_dvd.group(1).upper()
-                                number_fallback_dvd_str = m_fallback_dvd.group(2)
-                                try:
-                                    formatted_code_dvd = f"{label_fallback_dvd}-{str(int(number_fallback_dvd_str)).zfill(3)}"
-                                except ValueError:
-                                    formatted_code_dvd = f"{label_fallback_dvd}-{number_fallback_dvd_str}"
-                                logger.debug(f"DMM Info ({entity.content_type}): Fallback UI code set to '{formatted_code_dvd}' from '{value_pid_dvd}'.")
-                            else:
-                                formatted_code_dvd = value_text_all_dvd.upper() # HTML에서 가져온 원본 품번 문자열 사용
-                                logger.warning(f"DMM Info ({entity.content_type}): Fallback UI code extraction failed for '{value_pid_dvd}'. Using original uppercase from HTML: '{formatted_code_dvd}'.")
+                        if value_text_all_dvd:
+                            logger.debug(f"DMM Info: Parsed '品番' value from page: '{key_dvd}' for {code}.")
 
-                        ui_code_for_image = formatted_code_dvd
-                        entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image
-                        entity.ui_code = ui_code_for_image
-                        identifier_parsed = True
+                            parsed_ui_code_page, _, _ = cls._parse_ui_code_from_cid(value_text_all_dvd, entity.content_type)
+                            entity.ui_code = parsed_ui_code_page
+
+                            ui_code_for_image = parsed_ui_code_page.lower()
+                            entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
+                            identifier_parsed = True
+                            # logger.debug(f"DMM ({entity.content_type}): 品番 파싱 완료, ui_code_for_image='{ui_code_for_image}'")
+
                     elif "収録時間" in key_dvd: 
                         m_rt_dvd = re.search(r"(\d+)",value_text_all_dvd)
                         if m_rt_dvd: entity.runtime = int(m_rt_dvd.group(1))
@@ -1256,7 +1267,7 @@ class SiteDmm:
                         # --- 우선순위 3 (PS 있을 때): 일반적인 포스터 결정 로직 ---
                         # (위 PS 강제 설정이 적용되지 않았을 때만 실행)
                         else: # apply_ps_to_poster_for_this_item is False
-                            logger.debug(f"[{cls.site_name} Info] No PS force. Applying general poster determination with PS.")
+                            logger.debug(f"[{cls.site_name} Info] Applying general poster determination with PS.")
 
                             # 3-A: is_hq_poster
                             if pl_url and SiteUtil.is_portrait_high_quality_image(pl_url, proxy_url=proxy_url):
@@ -1332,7 +1343,7 @@ class SiteDmm:
                 urls_used_as_thumb.add(final_landscape_source)
             if final_poster_source and not skip_default_poster_logic and isinstance(final_poster_source, str):
                 urls_used_as_thumb.add(final_poster_source)
-            
+
             # logger.debug(f"DMM Info: URLs used as poster/landscape (to be excluded from fanart): {urls_used_as_thumb}")
 
             seen_for_fanart_processing = set()
@@ -1340,7 +1351,7 @@ class SiteDmm:
                 if len(arts_urls_for_processing) >= max_arts:
                     #logger.debug(f"DMM Info: Reached max_arts ({max_arts}). Stopping fanart collection.")
                     break 
-                
+
                 if art_url and art_url not in urls_used_as_thumb and art_url not in seen_for_fanart_processing:
                     # 플레이스홀더 검사는 __img_urls에서 이미 수행되었다고 가정.
                     # 만약 이 단계에서도 플레이스홀더를 엄격히 걸러내고 싶다면,
@@ -1349,7 +1360,7 @@ class SiteDmm:
                     #     continue
                     arts_urls_for_processing.append(art_url)
                     seen_for_fanart_processing.add(art_url)
-            
+
             logger.debug(f"DMM Info: Final arts_urls_for_processing (count: {len(arts_urls_for_processing)}): {arts_urls_for_processing[:3]}...")
         elif max_arts == 0:
             logger.debug(f"DMM Info: max_arts is 0. No fanart will be processed.")

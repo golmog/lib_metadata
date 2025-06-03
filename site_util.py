@@ -376,7 +376,7 @@ class SiteUtil:
             else: # 일반적인 가로 이미지
                 logger.debug(f"JavDB Poster Util: PL is normal landscape. Recommended crop: 'r'.")
                 # processed_pil_object는 이미 pl_image_original, recommended_crop_mode는 'r'
-            
+
             # 원본 포맷이 없었다면, 여기서라도 기본값 설정 시도 (선택적)
             if processed_pil_object and not processed_pil_object.format:
                 logger.debug("JavDB Poster Util: Processed PIL object still has no format. Defaulting to JPEG for safety.")
@@ -437,7 +437,7 @@ class SiteUtil:
             logger.debug(f"imcrop: Calculated new_w ({new_w}) is invalid for image size {width}x{height}. Returning original.")
             return im # 원본 반환 또는 None
 
-        box = (left, 0, right, height) # 수정된 right 사용
+        box = (left, 0, right, height)
         
         if box_only:
             return box
@@ -580,7 +580,7 @@ class SiteUtil:
             except Exception as e_save5:
                 logger.exception(f"process_image_mode: Mode 5 failed to save/proxy image from '{log_name}': {e_save5}")
                 return image_source
-            
+
         #logger.debug(f"process_image_mode: No specific action for mode '{image_mode}'. Returning original source: {image_source}")
         return image_source
 
@@ -606,9 +606,9 @@ class SiteUtil:
         im_opened_original = None # 원본으로 열리거나 전달된 이미지
         log_source_info = ""
 
-        source_is_pil_object = isinstance(image_source, Image.Image)
-        # source_is_local_file = not source_is_pil_object and isinstance(image_source, str) and os.path.exists(image_source) # 아래 로직에서 path.exists 사용
-        # source_is_url = not source_is_pil_object and not source_is_local_file and isinstance(image_source, str) # 아래 로직에서 타입 체크
+        # source_is_pil_object = isinstance(image_source, Image.Image)
+        # source_is_local_file = not source_is_pil_object and isinstance(image_source, str) and os.path.exists(image_source)
+        # source_is_url = not source_is_pil_object and not source_is_local_file and isinstance(image_source, str)
 
         # 2. 입력 소스 타입 판별 및 이미지 로드
         if isinstance(image_source, Image.Image): # 이미 PIL Image 객체로 전달된 경우
@@ -662,7 +662,6 @@ class SiteUtil:
                     logger.error(f"save_image_to_server_path: Error during letterbox removal for '{log_source_info}': {e_letterbox}")
 
             # 5. 최종 크롭 적용 (image_type='p' 또는 'ps' 이고 crop_mode가 있을 때)
-            # 원본 코드에서는 image_type == 'p' 조건만 있었으나, 'ps'도 포스터이므로 포함 고려. 여기서는 원본 유지.
             if image_type == 'p' and crop_mode:
                 logger.debug(f"save_image_to_server_path: Applying final crop_mode '{crop_mode}' to image for {log_source_info}")
                 cropped_im_final = cls.imcrop(im_to_process, position=crop_mode) # SiteUtil.imcrop 사용 가정
@@ -682,13 +681,13 @@ class SiteUtil:
                 if isinstance(image_source, str) and (image_source.startswith('http://') or image_source.startswith('https://')): # source_is_url 대신 직접 체크
                     ext_match = re.search(r'\.(jpg|jpeg|png|webp|gif)(\?|$)', image_source.lower()) 
                     if ext_match: current_format_for_ext = ext_match.group(1).upper()
-                elif isinstance(image_source, str) and os.path.exists(image_source): # source_is_local_file 대신 직접 체크
+                elif isinstance(image_source, str) and os.path.exists(image_source):
                     _, file_ext_val = os.path.splitext(image_source) 
                     if file_ext_val: current_format_for_ext = file_ext_val[1:].upper()
                 if not current_format_for_ext: current_format_for_ext = "JPEG" # 기본 JPEG
 
             ext = current_format_for_ext.lower().replace("jpeg", "jpg")
-            allowed_exts = ['jpg', 'png', 'webp'] # gif는 처리 방식이 다를 수 있어 일단 제외 (필요시 추가)
+            allowed_exts = ['jpg', 'png', 'webp']
 
             if ext not in allowed_exts: # 지원하지 않는 확장자는 jpg로 강제 변환 시도 또는 에러
                 logger.warning(f"save_image_to_server_path: Original image format '{ext}' from '{log_source_info}' is not in allowed_exts. Attempting to save as JPG.")
@@ -706,13 +705,13 @@ class SiteUtil:
                 filename_with_suffix = f"{filename_base}_art_{art_index}"
             else: # 'p', 'ps', 'pl'
                 filename_with_suffix = f"{filename_base}_{image_type}"
-            
+
             filename = f"{filename_with_suffix}.{ext}" # 최종 파일명 (확장자 포함)
 
             # 폴더 구조 생성
             # save_dir: 이미지가 실제 저장될 전체 로컬 경로 (base_path 포함)
             # relative_dir_parts: 웹 접근 시 base_path를 제외한 상대 경로 부분 리스트
-            
+
             relative_dir_parts = [path_segment] # 예: ['jav/fc2'] 또는 ['jav/cen']
 
             if path_segment == 'jav/fc2': # FC2 전용 경로 규칙
@@ -736,20 +735,70 @@ class SiteUtil:
                     sub_folder_name = "_error_fc2_id_format" # 에러 상황 명시
                     logger.warning(f"FC2 UI 코드에서 숫자 ID를 찾을 수 없습니다: {ui_code}. 폴더명: {sub_folder_name}")
                 relative_dir_parts.append(sub_folder_name)
-            else: # FC2가 아닌 다른 path_segment의 경우 (기존 로직)
+            else: # FC2가 아닌 다른 path_segment의 경우
                 ui_code_parts = ui_code.split('-')
-                label_part = ui_code_parts[0].upper() if ui_code_parts else "UNKNOWN_LABEL"
-                first_char_of_label = label_part[0] if label_part and label_part[0].isalpha() else '09' # 숫자로 시작하면 '0-9' 폴더 (기존 first_char 변수명 유지 위해 변경)
+                label_part_original_case = ui_code_parts[0] if ui_code_parts else ui_code
+                label_part_input = label_part_original_case.upper() # 원본 label_part (대문자), 예: "12ID", "SSNI", "007MIRD", "741MOM"
 
-                relative_dir_parts.append(first_char_of_label)
-                relative_dir_parts.append(label_part)
+                first_char_of_label_folder = ""
+                label_part_for_folder = "" # 최종적으로 사용될 레이블 폴더명
+
+                if label_part_input.startswith("741"):
+                    # "741"로 시작하는 경우: 첫 글자 폴더는 '09', 레이블 폴더는 원본 레이블 그대로
+                    first_char_of_label_folder = '09'
+                    label_part_for_folder = label_part_input
+                    logger.debug(f"save_image_to_server_path: Label '{label_part_input}' starts with '741'. Using '09/{label_part_input}'.")
+                else:
+                    # "741"로 시작하지 않는 경우: 앞의 숫자 제거 후 알파벳 첫 글자 기준
+                    # 예: "007MIRD" -> "MIRD", "12ID" -> "ID", "SSNI" -> "SSNI"
+                    match_leading_digits = re.match(r'^(\d*)([a-zA-Z].*)$', label_part_input)
+                    if match_leading_digits:
+                        # 그룹1: 앞의 숫자 (007, 12, 또는 없음)
+                        # 그룹2: 알파벳으로 시작하는 나머지 부분 (MIRD, ID, SSNI)
+                        label_after_stripping_digits = match_leading_digits.group(2)
+                        label_part_for_folder = label_after_stripping_digits # 예: "MIRD", "ID", "SSNI"
+
+                        if label_part_for_folder and label_part_for_folder[0].isalpha():
+                            first_char_of_label_folder = label_part_for_folder[0].upper()
+                        else: # 숫자 제거 후에도 알파벳으로 시작하지 않거나 비어있는 극히 예외적인 경우
+                            first_char_of_label_folder = 'ETC'
+                            logger.warning(f"save_image_to_server_path: Label '{label_part_input}' after stripping digits resulted in '{label_part_for_folder}'. Using 'ETC'.")
+                        logger.debug(f"save_image_to_server_path: Label '{label_part_input}' (not starting with '741'). Stripped to '{label_part_for_folder}'. Using '{first_char_of_label_folder}/{label_part_for_folder}'.")
+
+                    else:
+                        # 알파벳으로 시작하는 부분을 찾지 못한 경우 (예: 레이블 전체가 숫자이거나, 특수문자로 시작 등)
+                        # 또는 label_part_input이 비어있는 경우
+                        if label_part_input and label_part_input[0].isdigit():
+                            first_char_of_label_folder = '09' # 숫자로 시작하면 '09'
+                        elif label_part_input and label_part_input[0].isalpha(): # 이미 알파벳으로 시작하는 경우 (위 match_leading_digits에서 걸렸어야 하지만, 폴백)
+                            first_char_of_label_folder = label_part_input[0].upper()
+                        else: # 비어있거나 기타 특수문자
+                            first_char_of_label_folder = 'ETC'
+                        label_part_for_folder = label_part_input # 원본 레이블 사용
+                        logger.warning(f"save_image_to_server_path: Label '{label_part_input}' (not starting with '741') did not match leading digits pattern. Using '{first_char_of_label_folder}/{label_part_for_folder}'.")
+
+
+                # 폴더 경로 리스트에 추가
+                if first_char_of_label_folder: # 비어있지 않은 경우에만 추가
+                    relative_dir_parts.append(first_char_of_label_folder)
+                if label_part_for_folder: # 비어있지 않은 경우에만 추가
+                    relative_dir_parts.append(label_part_for_folder)
+                
+                # 만약 위에서 first_char_of_label_folder나 label_part_for_folder가 설정되지 않는 극단적인 경우,
+                # relative_dir_parts에 아무것도 추가되지 않을 수 있음. 이에 대한 대비 필요 (예: 기본 폴더 'UNKNOWN')
+                if not first_char_of_label_folder and not label_part_for_folder and label_part_input:
+                    # 둘 다 비었는데 원본 레이블 입력이 있었다면, 원본 레이블 기준으로 폴더 생성 시도
+                    logger.warning(f"save_image_to_server_path: Could not determine first_char or label_folder for '{label_part_input}'. Using 'UNKNOWN/{label_part_input}' as fallback.")
+                    relative_dir_parts.append("UNKNOWN")
+                    relative_dir_parts.append(label_part_input if label_part_input else "UNKNOWN_LABEL")
+
 
             # 최종 저장될 로컬 디렉토리 경로
             save_dir = os.path.join(base_path, *relative_dir_parts)
             # 최종 저장될 로컬 파일 전체 경로
             save_filepath = os.path.join(save_dir, filename)
 
-            os.makedirs(save_dir, exist_ok=True) # 폴더 생성
+            os.makedirs(save_dir, exist_ok=True)
 
             # 7. 이미지 저장 (im_to_process 사용)
             # logger.debug(f"Saving final image (format: {ext}) to {save_filepath} (will overwrite if exists).")
@@ -982,9 +1031,6 @@ class SiteUtil:
 
     @classmethod
     def get_user_custom_image_paths(cls, base_local_dir: str, path_segment: str, ui_code: str, type_suffix_with_extension: str, image_server_url: str):
-        """
-        주어진 ui_code와 타입 접미사 및 확장자를 기반으로 사용자 지정 이미지의 로컬 경로와 웹 URL을 생성하고 존재를 확인.
-        """
         if not all([base_local_dir, path_segment, ui_code, type_suffix_with_extension, image_server_url]):
             # logger.debug("get_user_custom_image_paths: Required arguments missing.")
             return None, None
