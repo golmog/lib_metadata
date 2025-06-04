@@ -128,88 +128,83 @@ class SiteDmm:
         expected_num_len_for_cid_parse = 5 if content_type == 'videoa' or content_type == 'vr' else 3
 
         # --- 2. 숫자 부분 추출 (cid 파싱용 기대 길이 사용) ---
-        extracted_num_str_intermediate = "" # 초기 숫자 추출 결과 (아직 앞 0 제거 전)
+        extracted_num_str_intermediate = ""
 
         num_match_specific_len = re.match(rf'^(.*?)(\d{{{expected_num_len_for_cid_parse}}})$', processed_cid)
         if num_match_specific_len:
             remaining_for_label_parse = num_match_specific_len.group(1)
             extracted_num_str_intermediate = num_match_specific_len.group(2)
-        else: # 기대 길이의 숫자를 못 찾은 경우, 일반 숫자 추출
-            num_match_general = re.match(r'^(.*?_?)(\d+)$', processed_cid)
+        else: 
+            num_match_general = re.match(r'^(.*?)(\d+)$', processed_cid) 
             if num_match_general:
                 remaining_for_label_parse = num_match_general.group(1)
                 extracted_num_str_intermediate = num_match_general.group(2)
             else:
                 logger.debug(f"DMM Parse: No numeric part found in '{processed_cid}' for cid parsing.")
-                # extracted_num_str_intermediate 는 "" 유지
-                
-        # extracted_num_str_intermediate 에 대한 후처리
+
         if extracted_num_str_intermediate:
-            label_num_raw_for_score = extracted_num_str_intermediate # 점수용은 초기 추출된 원본 사용
-
-            # UI용 숫자 처리:
-            # 1. 앞부분의 '0' 제거 (단, 숫자 전체가 '0' 이거나 '00' 등인 경우는 하나는 남김)
+            label_num_raw_for_score = extracted_num_str_intermediate
             num_stripped = extracted_num_str_intermediate.lstrip('0')
-            if not num_stripped and extracted_num_str_intermediate: # 모두 0이었던 경우 (예: "0", "00")
-                num_stripped = "0" # 최소한 하나의 0은 유지
-
-            # 2. 최소 3자리로 패딩
+            if not num_stripped and extracted_num_str_intermediate:
+                num_stripped = "0"
             label_num_ui_final = num_stripped.zfill(3)
         else:
-            # 숫자 부분이 아예 없었던 경우
             label_num_raw_for_score = ""
             label_num_ui_final = ""
 
         # --- 3. 레이블 부분 추출 (remaining_for_label_parse 사용) ---
-        label_ui_part = "" # 최종 UI 코드용 레이블 (예: 16ID, SSIS)
-        score_label_part = "" # 최종 점수 계산용 레이블 (예: 16id, ssis)
+        label_ui_part = "" 
+        score_label_part = "" 
 
-        if 'id' in remaining_for_label_parse.lower():
+        if 'id' in remaining_for_label_parse.lower(): 
             idnn_match = re.match(r'^(.*?)(id)(\d{2})$', remaining_for_label_parse, re.I)
             if idnn_match:
                 label_series = idnn_match.group(3)
                 label_chars = idnn_match.group(2).lower()
-                label_ui_part = (label_series + label_chars).upper() # 예: 16ID
-                score_label_part = label_series + label_chars      # 예: 16id
+                label_ui_part = (label_series + label_chars).upper() 
+                score_label_part = label_series + label_chars      
             else:
                 nnid_match = re.match(r'^(.*?)(\d{2})(id)$', remaining_for_label_parse, re.I)
                 if nnid_match:
                     label_series = nnid_match.group(2)
                     label_chars = nnid_match.group(3).lower()
-                    label_ui_part = (label_series + label_chars).upper() # 예: 16ID
-                    score_label_part = label_series + label_chars      # 예: 16id
-                # IDNN/NNID 외 'id' 포함 케이스는 아래 일반 로직에서 처리
-                
-        if not label_ui_part: # 'id'가 없거나, 위 특정 ID 패턴에 해당하지 않으면
-            # 일반 레이블 추출: 앞의 숫자/언더스코어 제외, 알파벳으로 시작하는 부분
-            general_label_match = re.match(r'^(?:\d*_)?([a-z][a-z0-9]*)$', remaining_for_label_parse, re.I)
+                    label_ui_part = (label_series + label_chars).upper() 
+                    score_label_part = label_series + label_chars      
+                    
+        if not label_ui_part: 
+            general_label_match = re.match(r'^(?:\d+)?([a-z][a-z0-9]*)$', remaining_for_label_parse, re.I)
             if general_label_match:
                 extracted_label = general_label_match.group(1)
-                label_ui_part = extracted_label.upper()
-                score_label_part = extracted_label.lower()
-            else:
-                if remaining_for_label_parse: # 숫자만 있었거나 빈 문자열이 아닌 경우
+                if extracted_label:
+                    label_ui_part = extracted_label.upper()
+                    score_label_part = extracted_label.lower()
+                elif remaining_for_label_parse:
                     label_ui_part = remaining_for_label_parse.upper()
                     score_label_part = remaining_for_label_parse.lower()
-                else: # 숫자만 있었고, remaining_for_label_parse가 비었다면 label_ui_part도 ""
-                    logger.warning(f"DMM Parse: Label part is empty after num extraction from '{cid_part_raw}'")
+
+            else: 
+                if remaining_for_label_parse: 
+                    label_ui_part = remaining_for_label_parse.upper()
+                    score_label_part = remaining_for_label_parse.lower()
+                else: 
+                    logger.warning(f"DMM Parse: Label part is empty after num extraction from '{cid_part_raw}' for {remaining_for_label_parse}")
 
         # --- 4. 최종 UI 코드 조합 ---
         ui_code_final = ""
         if label_ui_part and label_num_ui_final:
             ui_code_final = f"{label_ui_part}-{label_num_ui_final}"
         elif label_ui_part:
-            ui_code_final = label_ui_part.upper()
-        elif label_num_ui_final: # 거의 없음
-            ui_code_final = f"-{label_num_ui_final}" # 예: -045
-        else: # 둘 다 없으면 원본 사용
+            ui_code_final = label_ui_part 
+        elif label_num_ui_final: 
+            ui_code_final = f"-{label_num_ui_final}" 
+        else: 
             ui_code_final = cid_part_raw.upper()
-            if not score_label_part: score_label_part = ui_code_final.lower() # 점수용 레이블도 채움
+            if not score_label_part: score_label_part = ui_code_final.lower().replace("-","")
 
-        if not score_label_part and label_ui_part: # score_label_part가 비었는데 label_ui_part는 있을 경우
+        if not score_label_part and label_ui_part: 
             score_label_part = label_ui_part.lower()
-        elif not score_label_part: # 최후의 경우
-            score_label_part = cid_part_raw.lower().replace("-","") # 하이픈 제거한 원본 소문자
+        elif not score_label_part: 
+            score_label_part = cid_part_raw.lower().replace("-","")
 
         logger.debug(f"DMM Parse: '{cid_part_raw}' ({content_type}) -> UI Code='{ui_code_final}', ScoreLabel='{score_label_part}', ScoreNumRaw='{label_num_raw_for_score}'")
         return ui_code_final, score_label_part, label_num_raw_for_score
@@ -228,39 +223,38 @@ class SiteDmm:
         if not cls._ensure_age_verified(proxy_url=proxy_url): return []
 
         # --- 키워드 전처리 ---
-        original_keyword_for_log = keyword
-        keyword_processed = keyword.strip().lower()
-        if keyword_processed[-3:-1] == "cd": keyword_processed = keyword_processed[:-3]
+        original_keyword = keyword
+        temp_keyword = original_keyword.strip().lower()
+        if temp_keyword:
+            temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
+            temp_keyword = temp_keyword.replace("-", " ").strip(' _-').split(" ")
+            keyword_processed = temp_keyword
 
-        # DMM 검색용 키워드 생성
-        dmm_search_keyword_temp = keyword_processed.replace("-", " ")
-        keyword_tmps_for_dmm = dmm_search_keyword_temp.split(" ")
-
-        if len(keyword_tmps_for_dmm) == 2: 
-            dmm_keyword_for_url = keyword_tmps_for_dmm[0] + keyword_tmps_for_dmm[1].zfill(5)
+        if len(keyword_processed) == 2: 
+            keyword_for_url = keyword_processed[0] + keyword_processed[1].zfill(5)
         else: 
-            dmm_keyword_for_url = dmm_search_keyword_temp.replace(" ", "")
+            keyword_for_url = keyword_processed.replace(" ", "")
 
-        logger.debug(f"DMM Search: original_keyword='{original_keyword_for_log}', dmm_keyword_for_url='{dmm_keyword_for_url}', priority_label='{priority_label_setting_str}'")
+        logger.debug(f"DMM Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', priority_label='{priority_label_setting_str}'")
 
         # --- 검색 URL 생성 ---
-        search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': dmm_keyword_for_url }
+        search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': keyword_for_url }
         search_url = f"{cls.site_base_url}/search/?{py_urllib_parse.urlencode(search_params)}"
-        logger.debug(f"Search URL: {search_url}")
+        logger.debug(f"DMM Search URL: {search_url}")
 
         search_headers = cls._get_request_headers(referer=cls.fanza_av_url)
         tree = None
         try:
             tree = SiteUtil.get_tree(search_url, proxy_url=proxy_url, headers=search_headers, allow_redirects=True)
             if tree is None: 
-                logger.warning(f"DMM Search: Search tree is None for '{original_keyword_for_log}'. URL: {search_url}")
+                logger.warning(f"DMM Search: Search tree is None for '{original_keyword}'. URL: {search_url}")
                 return []
             title_tags_check = tree.xpath('//title/text()')
             if title_tags_check and "年齢認証 - FANZA" in title_tags_check[0]: 
-                logger.error(f"DMM Search: Age page received for '{original_keyword_for_log}'.")
+                logger.error(f"DMM Search: Age page received for '{original_keyword}'.")
                 return []
         except Exception as e: 
-            logger.exception(f"DMM Search: Failed to get tree for '{original_keyword_for_log}': {e}")
+            logger.exception(f"DMM Search: Failed to get tree for '{original_keyword}': {e}")
             return []
 
         # --- 검색 결과 목록 추출 XPath ---
@@ -277,14 +271,14 @@ class SiteDmm:
                     logger.debug(f"DMM Search: Found {len(lists)} item blocks using XPath: {xpath_expr}")
                     break
             except Exception as e_xpath: 
-                logger.warning(f"DMM Search: XPath error with '{xpath_expr}' for '{original_keyword_for_log}': {e_xpath}")
+                logger.warning(f"DMM Search: XPath error with '{xpath_expr}' for '{original_keyword}': {e_xpath}")
 
         if not lists: 
-            logger.debug(f"DMM Search: No item blocks found using any XPath for '{original_keyword_for_log}'.")
+            logger.debug(f"DMM Search: No item blocks found using any XPath for '{original_keyword}'.")
             # HTML 저장 로직
             #try:
             #    import os; from framework import path_data; import html as lxml_html
-            #    debug_html_path = os.path.join(path_data, 'tmp', f'dmm_search_fail_{original_keyword_for_log.replace("/", "_")}.html')
+            #    debug_html_path = os.path.join(path_data, 'tmp', f'dmm_search_fail_{original_keyword.replace("/", "_")}.html')
             #    os.makedirs(os.path.join(path_data, 'tmp'), exist_ok=True)
             #    with open(debug_html_path, 'w', encoding='utf-8') as f:
             #        f.write(etree.tostring(tree, pretty_print=True, encoding='unicode'))
@@ -384,7 +378,6 @@ class SiteDmm:
                 title_p_tags_node = node.xpath('.//p[contains(@class, "text-link") and contains(@class, "line-clamp-2")]')
                 raw_title_node = title_p_tags_node[0].text_content().strip() if title_p_tags_node else ""
                 item.title = raw_title_node if raw_title_node and raw_title_node != "Not Found" else item.ui_code
-                item.title = type_prefix + item.title
 
                 # 4. item.score 계산
                 # 점수 계산용 코드 생성
@@ -398,24 +391,24 @@ class SiteDmm:
                     item_code_for_strict_compare = cleaned_ui_code_for_score
                     item_ui_code_base_for_score = cleaned_ui_code_for_score
 
-                #logger.debug(f"DMM Score Compare: dmm_keyword_for_url='{dmm_keyword_for_url}', item_code_for_strict_compare='{item_code_for_strict_compare}', item_ui_code_base_for_score='{item_ui_code_base_for_score}'")
+                #logger.debug(f"DMM Score Compare: keyword_for_url='{keyword_for_url}', item_code_for_strict_compare='{item_code_for_strict_compare}', item_ui_code_base_for_score='{item_ui_code_base_for_score}'")
 
                 # 점수 부여
                 current_score_val = 0
 
-                if dmm_keyword_for_url and item_code_for_strict_compare and dmm_keyword_for_url == item_code_for_strict_compare: 
+                if keyword_for_url and item_code_for_strict_compare and keyword_for_url == item_code_for_strict_compare: 
                     current_score_val = 100
-                elif item_ui_code_base_for_score == dmm_keyword_for_url:
+                elif item_ui_code_base_for_score == keyword_for_url:
                     current_score_val = 100
-                elif item_ui_code_base_for_score.replace("0", "") == dmm_keyword_for_url.replace("0", ""): 
+                elif item_ui_code_base_for_score.replace("0", "") == keyword_for_url.replace("0", ""): 
                     current_score_val = 80
-                elif dmm_keyword_for_url in item_ui_code_base_for_score:
+                elif keyword_for_url in item_ui_code_base_for_score:
                     current_score_val = score
-                elif len(keyword_tmps_for_dmm) == 2 and keyword_tmps_for_dmm[0] in item.code.lower() and keyword_tmps_for_dmm[1] in item.code.lower():
+                elif len(keyword_processed) == 2 and keyword_processed[0] in item.code.lower() and keyword_processed[1] in item.code.lower():
                     current_score_val = score
-                elif len(keyword_tmps_for_dmm) > 0 and \
-                    (keyword_tmps_for_dmm[0] in item.code.lower() or \
-                    (len(keyword_tmps_for_dmm) > 1 and keyword_tmps_for_dmm[1] in item.code.lower())):
+                elif len(keyword_processed) > 0 and \
+                    (keyword_processed[0] in item.code.lower() or \
+                    (len(keyword_processed) > 1 and keyword_processed[1] in item.code.lower())):
                     current_score_val = 60
                 else: 
                     current_score_val = 20
@@ -470,7 +463,7 @@ class SiteDmm:
 
                 ret_temp_before_filtering.append(item_dict) # 최종적으로 수정된 딕셔너리를 리스트에 추가
             except Exception as e_inner_loop_dmm:
-                logger.exception(f"DMM Search: 아이템 처리 중 예외 (keyword: '{original_keyword_for_log}'): {e_inner_loop_dmm}")
+                logger.exception(f"DMM Search: 아이템 처리 중 예외 (keyword: '{original_keyword}'): {e_inner_loop_dmm}")
 
         # --- 2단계: Blu-ray 필터링 ---
         if not ret_temp_before_filtering: return []
@@ -551,19 +544,19 @@ class SiteDmm:
 
         # --- 3단계: 최종 결과 처리 ---
         final_result = final_filtered_list
-        logger.debug(f"DMM Search: Filtered result count: {len(final_result)} for '{original_keyword_for_log}'")
+        logger.debug(f"DMM Search: Filtered result count: {len(final_result)} for '{original_keyword}'")
         sorted_result = sorted(final_result, key=lambda k: k.get("score", 0), reverse=True)
         if sorted_result:
             log_count = min(len(sorted_result), 5)
-            logger.debug(f"DMM Search: Top {log_count} results for '{original_keyword_for_log}':")
+            logger.debug(f"DMM Search: Top {log_count} results for '{original_keyword}':")
             for idx, item_log_final in enumerate(sorted_result[:log_count]):
                 logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Type={item_log_final.get('content_type')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
 
-        # --- 재시도 로직 (keyword_tmps_for_dmm 사용) ---
-        if not sorted_result and len(keyword_tmps_for_dmm) == 2 and len(keyword_tmps_for_dmm[1]) == 5: # 5자리 숫자일 때
-            new_dmm_keyword_retry = keyword_tmps_for_dmm[0] + keyword_tmps_for_dmm[1].zfill(6) # 6자리로 재시도
-            logger.debug(f"DMM Search: No results for '{original_keyword_for_log}', retrying with 6-digit number: {new_dmm_keyword_retry}")
-            return cls.__search(keyword_tmps_for_dmm[0] + "-" + keyword_tmps_for_dmm[1].zfill(6), 
+        # --- 재시도 로직 (keyword_processed 사용) ---
+        if not sorted_result and len(keyword_processed) == 2 and len(keyword_processed[1]) == 5: # 5자리 숫자일 때
+            new_dmm_keyword_retry = keyword_processed[0] + keyword_processed[1].zfill(6) # 6자리로 재시도
+            logger.debug(f"DMM Search: No results for '{original_keyword}', retrying with 6-digit number: {new_dmm_keyword_retry}")
+            return cls.__search(keyword_processed[0] + "-" + keyword_processed[1].zfill(6), 
                                 do_trans=do_trans, proxy_url=proxy_url, image_mode=image_mode, manual=manual,
                                 priority_label_setting_str=priority_label_setting_str)
 

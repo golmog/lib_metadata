@@ -30,22 +30,28 @@ class SiteJav321:
         manual=False,
         priority_label_setting_str=""
         ):
-        keyword_processed = keyword.strip().lower()
-        if keyword_processed.endswith("cd"):
-            keyword_processed = keyword_processed[:-2]
+
+        original_keyword = keyword
+        temp_keyword = original_keyword.strip().lower()
+        if temp_keyword:
+            temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
+            temp_keyword = temp_keyword.strip(' _-')
+            keyword_for_url = temp_keyword
 
         url = f"{cls.site_base_url}/search"
+        logger.debug(f"Jav321 Search URL: {url}")
+
         headers = SiteUtil.default_headers.copy()
         headers['Referer'] = cls.site_base_url + "/"
         
-        res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, post_data={"sn": keyword_processed})
+        res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, post_data={"sn": keyword_for_url})
 
         if res is None:
-            logger.error(f"Jav321 Search: Failed to get response for API keyword '{keyword_processed}'.")
+            logger.error(f"Jav321 Search: Failed to get response for API keyword '{keyword_for_url}'.")
             return []
 
         if not res.history or not res.url.startswith(cls.site_base_url + "/video/"):
-            logger.debug(f"Jav321 Search: No direct match for API keyword '{keyword_processed}'. Final URL: {res.url}")
+            logger.debug(f"Jav321 Search: No direct match for API keyword '{keyword_for_url}'. Final URL: {res.url}")
             return []
 
         ret = []
@@ -55,7 +61,7 @@ class SiteJav321:
             code_from_url_path = res.url.split("/")[-1] 
             item.code = cls.module_char + cls.site_char + code_from_url_path 
             
-            item.ui_code = keyword.upper()
+            item.ui_code = keyword_for_url.upper()
             
             base_xpath = "/html/body/div[2]/div[1]/div[1]"
             tree = html.fromstring(res.text)
@@ -106,14 +112,14 @@ class SiteJav321:
             else:
                 logger.warning(f"Jav321 Search: Item excluded. Code: {item.code}, Title: {item.title}")
 
-            normalized_input_keyword = keyword.lower().replace("-","").replace(" ","")
+            normalized_input_keyword = keyword_for_url.lower().replace("-","").replace(" ","")
             normalized_item_uicode = item.ui_code.lower().replace("-","").replace(" ","")
 
             if normalized_input_keyword == normalized_item_uicode:
                 item.score = 100
             else:
                 item.score = 60 
-                logger.warning(f"Jav321 Search Score: Mismatch after normalization. InputKeyword='{keyword}' (norm='{normalized_input_keyword}'), ItemUICode='{item.ui_code}' (norm='{normalized_item_uicode}'). Score set to 60.")
+                logger.warning(f"Jav321 Search Score: Mismatch after normalization. InputKeyword='{keyword_for_url}' (norm='{normalized_input_keyword}'), ItemUICode='{item.ui_code}' (norm='{normalized_item_uicode}'). Score set to 60.")
 
             item_dict = item.as_dict()
 
@@ -136,7 +142,7 @@ class SiteJav321:
                         logger.debug(f"Jav321 Search: Item '{item_dict['ui_code']}' matched priority label '{label_to_check}'. Setting is_priority_label_site=True.")
 
         except Exception as e_item_search:
-            logger.exception(f"Jav321 Search: Error processing item for API keyword '{keyword_processed}': {e_item_search}")
+            logger.exception(f"Jav321 Search: Error processing item for API keyword '{keyword_for_url}': {e_item_search}")
         return ret
 
 

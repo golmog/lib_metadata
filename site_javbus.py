@@ -74,10 +74,16 @@ class SiteJavbus:
         cf_clearance_cookie=None,
         priority_label_setting_str=""
         ):
-        keyword_processed = keyword.strip().lower()
-        if keyword_processed[-3:-1] == "cd": keyword_processed = keyword_processed[:-3]
-        keyword_processed = keyword_processed.replace(" ", "-")
-        url = f"{cls.site_base_url}/search/{keyword_processed}"
+
+        original_keyword = keyword
+        temp_keyword = original_keyword.strip().lower()
+        if temp_keyword:
+            temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
+            temp_keyword = temp_keyword.strip(' _-')
+            keyword_for_url = temp_keyword
+
+        url = f"{cls.site_base_url}/search/{keyword_for_url}"
+        logger.debug(f"JavBus Search URL: {url}")
 
         tree = cls._get_javbus_page_tree(url, proxy_url=proxy_url, cf_clearance_cookie=cf_clearance_cookie)
         if tree is None:
@@ -105,7 +111,7 @@ class SiteJavbus:
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 else:
                     item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
-                item.score = 100 if keyword_processed.lower() == item.ui_code.lower() else 60 - (len(ret) * 10)
+                item.score = 100 if keyword_for_url.lower() == item.ui_code.lower() else 60 - (len(ret) * 10)
                 if item.score < 0: item.score = 0
 
                 item_dict = item.as_dict()

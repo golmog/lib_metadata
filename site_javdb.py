@@ -32,56 +32,60 @@ class SiteJavdb:
         cf_clearance_cookie_value='',
         priority_label_setting_str=""
         ):
-        original_keyword_for_log = keyword
-        keyword_processed = keyword.strip().lower()
-        if keyword_processed[-3:-1] == "cd": keyword_processed = keyword_processed[:-3]
 
-        logger.debug(f"JavDB Search: original_keyword='{original_keyword_for_log}', keyword_processed='{keyword_processed}', manual={manual}, do_trans={do_trans}, proxy_urlSet={'Yes' if proxy_url else 'No'}")
+        original_keyword = keyword
+        temp_keyword = original_keyword.strip().lower()
+        if temp_keyword:
+            temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
+            temp_keyword = temp_keyword.strip(' _-')
+            keyword_for_url = temp_keyword
 
-        search_keyword_for_url = py_urllib_parse.quote_plus(keyword_processed)
+        # logger.debug(f"JavDB Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', manual={manual}, do_trans={do_trans}, proxy_urlSet={'Yes' if proxy_url else 'No'}")
+
+        search_keyword_for_url = py_urllib_parse.quote_plus(keyword_for_url)
         search_url = f"{cls.site_base_url}/search?q={search_keyword_for_url}&f=all"
         logger.debug(f"JavDB Search URL: {search_url}")
 
         custom_cookies = { 'over18': '1', 'locale': 'en' }
         if cf_clearance_cookie_value:
             custom_cookies['cf_clearance'] = cf_clearance_cookie_value
-        else:
-            logger.debug(f"JavDB Search: cf_clearance cookie not provided for keyword '{original_keyword_for_log}'. This might lead to Cloudflare challenges.")
+        # else:
+        #    logger.debug(f"JavDB Search: cf_clearance cookie not provided for keyword '{original_keyword}'. This might lead to Cloudflare challenges.")
 
         res_for_search = SiteUtil.get_response_cs(search_url, proxy_url=proxy_url, cookies=custom_cookies)
 
         if res_for_search is None:
-            logger.error(f"JavDB Search: Failed to get response from SiteUtil.get_response_cs for '{original_keyword_for_log}'. Proxy used: {'Yes' if proxy_url else 'No'}. Check SiteUtil logs for specific error (e.g., 403).")
-            return {'ret': 'error', 'data': f"Failed to get response object for '{original_keyword_for_log}'. Check proxy, network, or SiteUtil logs."}
+            logger.error(f"JavDB Search: Failed to get response from SiteUtil.get_response_cs for '{keyword_for_url}'. Proxy used: {'Yes' if proxy_url else 'No'}. Check SiteUtil logs for specific error (e.g., 403).")
+            return {'ret': 'error', 'data': f"Failed to get response object for '{keyword_for_url}'. Check proxy, network, or SiteUtil logs."}
 
         html_content_text = res_for_search.text
 
         if res_for_search.status_code != 200:
-            logger.warning(f"JavDB Search: Status code {res_for_search.status_code} for URL: {res_for_search.url} (keyword: '{original_keyword_for_log}')")
+            logger.warning(f"JavDB Search: Status code {res_for_search.status_code} for URL: {res_for_search.url} (keyword: '{keyword_for_url}')")
             if "cf-error-details" in html_content_text or "Cloudflare to restrict access" in html_content_text:
-                logger.error(f"JavDB Search: Cloudflare restriction page detected for '{original_keyword_for_log}' (potentially IP block or stricter rules).")
+                logger.error(f"JavDB Search: Cloudflare restriction page detected for '{keyword_for_url}' (potentially IP block or stricter rules).")
                 return {'ret': 'error', 'data': 'Cloudflare restriction page (possibly IP block).'}
             if "Due to copyright restrictions" in html_content_text or "由於版權限制" in html_content_text:
-                logger.error(f"JavDB Search: Access prohibited for '{original_keyword_for_log}' (country block).")
+                logger.error(f"JavDB Search: Access prohibited for '{keyword_for_url}' (country block).")
                 return {'ret': 'error', 'data': 'Country block detected by JavDB.'}
             if "cf-challenge-running" in html_content_text or "Checking if the site connection is secure" in html_content_text or "Verifying you are human" in html_content_text:
-                logger.error(f"JavDB Search: Cloudflare challenge page detected for '{original_keyword_for_log}'. cf_clearance cookie might be invalid or missing.")
+                logger.error(f"JavDB Search: Cloudflare challenge page detected for '{keyword_for_url}'. cf_clearance cookie might be invalid or missing.")
                 return {'ret': 'error', 'data': 'Cloudflare JS challenge page detected.'}
-            return {'ret': 'error', 'data': f'HTTP Status: {res_for_search.status_code} for {original_keyword_for_log}.'}
+            return {'ret': 'error', 'data': f'HTTP Status: {res_for_search.status_code} for {keyword_for_url}.'}
 
         try:
             tree = html.fromstring(html_content_text)
         except Exception as e_parse:
-            logger.error(f"JavDB Search: Failed to parse HTML for '{original_keyword_for_log}': {e_parse}")
+            logger.error(f"JavDB Search: Failed to parse HTML for '{keyword_for_url}': {e_parse}")
             logger.error(traceback.format_exc())
-            return {'ret': 'error', 'data': f"Failed to parse HTML content for '{original_keyword_for_log}'."}
+            return {'ret': 'error', 'data': f"Failed to parse HTML content for '{keyword_for_url}'."}
 
         if tree is None:
-            logger.warning(f"JavDB Search: Tree is None after parsing for '{original_keyword_for_log}'.")
-            return {'ret': 'error', 'data': f"Parsed tree is None for '{original_keyword_for_log}'."}
+            logger.warning(f"JavDB Search: Tree is None after parsing for '{keyword_for_url}'.")
+            return {'ret': 'error', 'data': f"Parsed tree is None for '{keyword_for_url}'."}
 
         final_search_results_list = []
-        keyword_lower_norm = keyword_processed.replace('-', '').replace(' ', '')
+        keyword_lower_norm = keyword_for_url.replace('-', '').replace(' ', '')
         processed_codes_in_search = set()
 
         item_list_xpath_expression = '//div[(contains(@class, "item-list") or contains(@class, "movie-list"))]//div[contains(@class, "item")]/a[contains(@class, "box")]'
@@ -90,12 +94,12 @@ class SiteJavdb:
         if not item_nodes: 
             no_results_message_xpath = tree.xpath('//div[contains(@class, "empty-message") and (contains(text(), "No videos found") or contains(text(), "沒有找到影片"))]')
             if no_results_message_xpath:
-                logger.info(f"JavDB Search: 'No videos found' message on page for keyword '{original_keyword_for_log}'.")
+                logger.info(f"JavDB Search: 'No videos found' message on page for keyword '{keyword_for_url}'.")
                 return []
 
             # --- XPath 실패 시 HTML 저장 로직 ---
             try:
-                safe_keyword_for_filename = original_keyword_for_log.replace('/', '_').replace('\\', '_').replace(':', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace('<', '_').replace('>', '_').replace('|', '_')
+                safe_keyword_for_filename = keyword_for_url.replace('/', '_').replace('\\', '_').replace(':', '_').replace('*', '_').replace('?', '_').replace('"', '_').replace('<', '_').replace('>', '_').replace('|', '_')
 
                 unique_suffix = os.urandom(4).hex() 
 
@@ -105,14 +109,14 @@ class SiteJavdb:
                 os.makedirs(os.path.join(path_data, 'debug'), exist_ok=True) 
                 with open(debug_html_path, 'w', encoding='utf-8') as f:
                     f.write(html_content_text)
-                logger.info(f"JavDB Search: XPath failed. HTML content for '{original_keyword_for_log}' saved to: {debug_html_path}")
+                logger.info(f"JavDB Search: XPath failed. HTML content for '{keyword_for_url}' saved to: {debug_html_path}")
             except Exception as e_save_html:
-                logger.error(f"JavDB Search: Failed to save HTML content on XPath failure for '{original_keyword_for_log}': {e_save_html}")
+                logger.error(f"JavDB Search: Failed to save HTML content on XPath failure for '{keyword_for_url}': {e_save_html}")
             # --- HTML 저장 로직 끝 ---
 
             title_match = re.search(r'<title>(.*?)</title>', html_content_text, re.IGNORECASE | re.DOTALL)
             page_title_from_text = title_match.group(1).strip() if title_match else "N/A"
-            logger.warning(f"JavDB Search: No item nodes found with XPath ('{item_list_xpath_expression}') for keyword '{original_keyword_for_log}'. Page title: '{page_title_from_text}'. HTML saved (if successful).")
+            logger.warning(f"JavDB Search: No item nodes found with XPath ('{item_list_xpath_expression}') for keyword '{keyword_for_url}'. Page title: '{page_title_from_text}'. HTML saved (if successful).")
             return []
 
         # --- 검색 결과 아이템 처리 루프 ---
@@ -203,9 +207,9 @@ class SiteJavdb:
                 # item.ui_code를 정규화하여 비교
                 item_ui_code_norm = item.ui_code.lower().replace('-', '').replace(' ', '')
                 if keyword_lower_norm == item_ui_code_norm: current_score = 100
-                elif keyword_processed == item.ui_code.lower(): current_score = 95 # 하이픈 포함 원본 검색어와 일치
+                elif keyword_for_url == item.ui_code.lower(): current_score = 95 # 하이픈 포함 원본 검색어와 일치
                 elif keyword_lower_norm in item_ui_code_norm : current_score = 85 # 정규화된 ui_code에 포함
-                elif item.title and keyword_processed in item.title.lower(): current_score = 60 # 제목에 포함
+                elif item.title and keyword_for_url in item.title.lower(): current_score = 60 # 제목에 포함
                 else: current_score = 20
                 item.score = current_score
 
@@ -233,7 +237,7 @@ class SiteJavdb:
                 # logger.debug(f"  JavDB Parsed: code={item.code}, score={item.score}, title='{item.title_ko}', year={item.year}, ui_code='{item.ui_code}'")
 
             except Exception as e_item_parse:
-                logger.error(f"JavDB Search Item (keyword: '{original_keyword_for_log}'): Error parsing item: {e_item_parse}")
+                logger.error(f"JavDB Search Item (keyword: '{keyword_for_url}'): Error parsing item: {e_item_parse}")
                 logger.error(traceback.format_exc())
                 # 개별 아이템 파싱 실패 시 해당 아이템은 건너뛰고 계속 진행
         

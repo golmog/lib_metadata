@@ -52,18 +52,22 @@ class SiteMgstage:
         manual=False,
         priority_label_setting_str=""
         ):
-        keyword = keyword.strip().lower()
-        if keyword[-3:-1] == "cd":
-            keyword = keyword[:-3]
-        keyword = keyword.replace(" ", "-")
+
+        original_keyword = keyword
+        temp_keyword = original_keyword.strip().lower()
+        if temp_keyword:
+            temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
+            temp_keyword = temp_keyword.strip(' _-')
+            keyword_for_url = temp_keyword
 
         module_query = "&type=top"
 
-        url = f"{cls.site_base_url}/search/cSearch.php?search_word={keyword}&x=0&y=0{module_query}"
-        logger.debug(f"Using search URL: {url}")
+        url = f"{cls.site_base_url}/search/cSearch.php?search_word={keyword_for_url}&x=0&y=0{module_query}"
+        logger.debug(f"MGStage Search URL: {url}")
+
         tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.headers)
         lists = tree.xpath('//div[@class="search_list"]/div/ul/li')
-        logger.debug("mgs search kwd=%s len=%d", keyword, len(lists))
+        # logger.debug("mgs search kwd=%s len=%d", keyword_for_url, len(lists))
 
         ret = []
         for node in lists[:10]:
@@ -109,9 +113,9 @@ class SiteMgstage:
                 else:
                     item.ui_code = item.code[2:]
 
-                if item.ui_code == keyword.upper():
+                if item.ui_code == keyword_for_url.upper():
                     item.score = 100
-                elif keyword.upper().replace(item.ui_code, "").isnumeric():
+                elif keyword_for_url.upper().replace(item.ui_code, "").isnumeric():
                     item.score = 100
                 else:
                     item.score = 60 - (len(ret) * 10)
@@ -142,8 +146,14 @@ class SiteMgstage:
     def search(cls, keyword, **kwargs):
         ret = {}
         try:
+            original_keyword = keyword
+            temp_keyword = original_keyword.strip().lower()
+            if temp_keyword:
+                temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
+                temp_keyword = temp_keyword.strip(' _-')
+
             data = []
-            tmps = keyword.upper().replace("-", " ").split()
+            tmps = temp_keyword.upper().replace("-", " ").split()
 
             # --- __search 호출 시 필요한 kwargs 추출 ---
             do_trans_arg = kwargs.get('do_trans', True)
