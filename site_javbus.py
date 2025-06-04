@@ -20,6 +20,8 @@ class SiteJavbus:
     module_char = "C"
     site_char = "B"
 
+    _ps_url_cache = {}
+
     @classmethod
     def __fix_url(cls, url):
         if not url.startswith("http"):
@@ -28,7 +30,7 @@ class SiteJavbus:
 
     @classmethod
     def _get_javbus_page_tree(cls, page_url: str, proxy_url: str = None, cf_clearance_cookie: str = None) -> Union[html.HtmlElement, None]:
-        javbus_cookies = {'age': 'verified', 'dv': '1', 'existmag': 'mag'}
+        javbus_cookies = {'age': 'verified', 'age_check_done': '1', 'ckcy': '1', 'dv': '1', 'existmag': 'mag'}
         if cf_clearance_cookie:
             javbus_cookies['cf_clearance'] = cf_clearance_cookie
             # logger.debug(f"SiteJavbus._get_javbus_page_tree: Using cf_clearance cookie for URL: {page_url}")
@@ -129,6 +131,11 @@ class SiteJavbus:
                         else: label_to_check = item_dict['ui_code'].upper()
                         logger.debug(f"Javbus Search: Item '{item_dict['ui_code']}' matched priority label '{label_to_check}'. Setting is_priority_label_site=True.")
 
+                original_ps_url = cls.__fix_url(node.xpath(".//img/@src")[0])
+                if item_dict.get('code') and original_ps_url:
+                    cls._ps_url_cache[item_dict['code']] = {'ps': original_ps_url}
+                    # logger.debug(f"JavBus Search PS Cache: Cached ORIGINAL PS for '{item_dict['code']}' -> '{original_ps_url}'")
+
                 ret.append(item_dict)
 
             except Exception: logger.exception("개별 검색 결과 처리 중 예외:")
@@ -172,7 +179,7 @@ class SiteJavbus:
 
         ps = ""
         if pl:
-            try: 
+            try:
                 filename = pl.split("/")[-1].replace("_b.", ".")
                 ps = cls.__fix_url(f"/pics/thumb/{filename}")
             except Exception as e_ps_infer: logger.warning(f"JavBus __img_urls: ps URL 유추 실패: {e_ps_infer}")
@@ -205,6 +212,10 @@ class SiteJavbus:
         ps_to_poster_labels_str = kwargs.get('ps_to_poster_labels_str', '')
         crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '')
         cf_clearance_cookie_value_from_kwargs = kwargs.get('cf_clearance_cookie', None)
+
+        cached_data_for_javbus = cls._ps_url_cache.get(code, {})
+        ps_url_from_search_cache = cached_data_for_javbus.get('ps')
+        logger.debug(f"JavBus Info: PS URL from cache for '{code}': {ps_url_from_search_cache}")
 
         original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
         url = f"{cls.site_base_url}/{original_code_for_url}"
@@ -417,7 +428,8 @@ class SiteJavbus:
             logger.debug(f"JavBus: Running default image logic for {code} (P_skip:{skip_default_poster_logic}, L_skip:{skip_default_landscape_logic}, FanartNeed:{entity.fanart is not None and (len(entity.fanart) < max_arts and max_arts > 0)}).")
 
             img_urls_from_page = cls.__img_urls(tree)
-            ps_url = img_urls_from_page.get('ps')
+            ps_url = ps_url_from_search_cache
+            # ps_url = img_urls_from_page.get('ps')
             pl_url = img_urls_from_page.get('pl')
             all_arts_from_page = img_urls_from_page.get('arts', [])
 
@@ -467,7 +479,7 @@ class SiteJavbus:
 
                     if ps_url:
                         # 2. PS 강제 포스터 사용 설정
-                        if apply_ps_to_poster_for_this_item and ps_url:
+                        if apply_ps_to_poster_for_this_item:
                             logger.debug(f"[{cls.site_name} Info] Poster determined by FORCED 'ps_to_poster' setting. Using PS: {ps_url}")
                             final_poster_source = ps_url
                             final_poster_crop_mode = None
@@ -537,7 +549,7 @@ class SiteJavbus:
 
                         # 6. PS 사용
                         if final_poster_source is None:
-                            logger.debug(f"Jav321 Poster (with PS - Fallback): Using PS.")
+                            logger.debug(f"JavBus Poster (with PS - Fallback): Using PS.")
                             final_poster_source = ps_url
                             final_poster_crop_mode = None
 
