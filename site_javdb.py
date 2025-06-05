@@ -65,9 +65,16 @@ class SiteJavdb:
                 else: 
                     keyword_for_url = temp_keyword
 
+        search_keyword_for_url = py_urllib_parse.quote_plus(keyword_for_url)
+        search_url = f"{cls.site_base_url}/search?q={search_keyword_for_url}&f=all"
+
         logger.debug(f"JavDB Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}'")
 
-        res_for_search = SiteUtil.get_response_cs(search_url, proxy_url=proxy_url, cookies=custom_cookies)
+        custom_cookies_for_search = {'over18': '1'}
+        if cf_clearance_cookie_value:
+            custom_cookies_for_search['cf_clearance'] = cf_clearance_cookie_value
+
+        res_for_search = SiteUtil.get_response_cs(search_url, proxy_url=proxy_url, cookies=custom_cookies_for_search)
 
         if res_for_search is None:
             logger.error(f"JavDB Search: Failed to get response from SiteUtil.get_response_cs for '{keyword_for_url}'. Proxy used: {'Yes' if proxy_url else 'No'}. Check SiteUtil logs for specific error (e.g., 403).")
