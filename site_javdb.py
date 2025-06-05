@@ -554,7 +554,26 @@ class SiteJavdb:
                         temp_crop_mode = effective_crop_mode_to_try
                         logger.debug(f"JavDB Poster (Prio 1): Effective crop_mode '{temp_crop_mode}' with PL '{valid_pl_url}'.")
 
-                    # 1. 세로 포스터 우선
+                    # 1. PL이 세로형 고품질 이미지일 경우
+                    if temp_poster_source is None:
+                        is_pl_suitable_as_poster = False
+                        try:
+                            pl_image_obj = SiteUtil.imopen(valid_pl_url, proxy_url=proxy_url)
+                            if pl_image_obj:
+                                pl_width, pl_height = pl_image_obj.size
+                                if pl_width > 0 and pl_height > 0:
+                                    if pl_height >= pl_width and pl_width >= 300:
+                                        is_pl_suitable_as_poster = True
+                                        logger.info(f"JavDB Poster (Prio 0 - New): PL is suitable as portrait poster (W:{pl_width}, H:{pl_height}). Using PL: {valid_pl_url}")
+                            if pl_image_obj: pl_image_obj.close()
+                        except Exception as e_pl_check:
+                            logger.warning(f"JavDB Poster (Prio 0 - New): Error checking PL suitability: {e_pl_check}")
+
+                        if is_pl_suitable_as_poster:
+                            temp_poster_source = valid_pl_url
+                            temp_crop_mode = None
+
+                    # 2. 세로 포스터 우선(VR / ART)
                     if temp_poster_source is None and is_vr_content and arts_urls:
                         first_art_url = arts_urls[0]
                         if SiteUtil.is_portrait_high_quality_image(first_art_url, proxy_url=proxy_url, min_height=600, aspect_ratio_threshold=1.2):
@@ -562,7 +581,7 @@ class SiteJavdb:
                             temp_crop_mode = None 
                             logger.info(f"JavDB Poster (Prio 2): VR content, using first art '{first_art_url}'.")
 
-                    # 2. 특수 고정 크기 크롭 (해상도 기반: blue-ray 포스터)
+                    # 3. 특수 고정 크기 크롭 (해상도 기반: blue-ray 포스터)
                     if temp_poster_source is None:
                         try:
                             pl_image_obj_for_fixed_crop = SiteUtil.imopen(valid_pl_url, proxy_url=proxy_url)
@@ -577,7 +596,7 @@ class SiteJavdb:
                                         logger.info(f"JavDB Poster (Prio 3): Fixed-size crop. Poster is PIL object.")
                         except Exception: pass
 
-                    # 3. 가로로 더 긴 이미지 처리(2:1 비율)
+                    # 4. 가로로 더 긴 이미지 처리(2:1 비율)
                     if temp_poster_source is None:
                         log_id = entity.ui_code or original_code_for_url
                         try:
@@ -588,7 +607,7 @@ class SiteJavdb:
                                 logger.info(f"JavDB Poster (Prio 4): JavDB-style. Type: {type(temp_poster_source)}, Crop: {temp_crop_mode}")
                         except Exception: pass
 
-                    # 4. 일반 처리(crop: r)
+                    # 5. 일반 처리(crop: r)
                     if temp_poster_source is None: 
                         temp_poster_source = valid_pl_url
                         temp_crop_mode = 'r'
