@@ -3111,7 +3111,7 @@ MGS_CODE_LEN = {
     "274DBL": 4,
     "274DHT": 4,
     "290VSED": 2,
-    "300MIUM": 4,
+    "300MIUM": 3,
     "311AEDVD": 4,
     "311AXDVD": 4,
     "312LES": 4,
