@@ -543,10 +543,10 @@ class SiteJavdb:
 
             # 4. 포스터 및 랜드스케이프 결정
             if valid_pl_url: # 유효한 PL이 있을 때만 기본 포스터/랜드스케이프 로직 진행
-                # 4-A. 포스터 결정
+                # --- 포스터 결정 ---
                 if not skip_default_poster_logic:
-                    temp_poster_source = None 
-                    temp_crop_mode = None     
+                    temp_poster_source = None
+                    temp_crop_mode = None
 
                     effective_crop_mode_to_try = forced_crop_mode_for_this_item if forced_crop_mode_for_this_item else user_defined_crop_mode
                     if effective_crop_mode_to_try:
@@ -554,6 +554,7 @@ class SiteJavdb:
                         temp_crop_mode = effective_crop_mode_to_try
                         logger.debug(f"JavDB Poster (Prio 1): Effective crop_mode '{temp_crop_mode}' with PL '{valid_pl_url}'.")
 
+                    # 1. 세로 포스터 우선
                     if temp_poster_source is None and is_vr_content and arts_urls:
                         first_art_url = arts_urls[0]
                         if SiteUtil.is_portrait_high_quality_image(first_art_url, proxy_url=proxy_url, min_height=600, aspect_ratio_threshold=1.2):
@@ -561,6 +562,7 @@ class SiteJavdb:
                             temp_crop_mode = None 
                             logger.info(f"JavDB Poster (Prio 2): VR content, using first art '{first_art_url}'.")
 
+                    # 2. 특수 고정 크기 크롭 (해상도 기반: blue-ray 포스터)
                     if temp_poster_source is None:
                         try:
                             pl_image_obj_for_fixed_crop = SiteUtil.imopen(valid_pl_url, proxy_url=proxy_url)
@@ -575,6 +577,7 @@ class SiteJavdb:
                                         logger.info(f"JavDB Poster (Prio 3): Fixed-size crop. Poster is PIL object.")
                         except Exception: pass
 
+                    # 3. 가로로 더 긴 이미지 처리(2:1 비율)
                     if temp_poster_source is None:
                         log_id = entity.ui_code or original_code_for_url
                         try:
@@ -585,6 +588,7 @@ class SiteJavdb:
                                 logger.info(f"JavDB Poster (Prio 4): JavDB-style. Type: {type(temp_poster_source)}, Crop: {temp_crop_mode}")
                         except Exception: pass
 
+                    # 4. 일반 처리(crop: r)
                     if temp_poster_source is None: 
                         temp_poster_source = valid_pl_url
                         temp_crop_mode = 'r'

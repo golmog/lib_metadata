@@ -1240,7 +1240,7 @@ class SiteDmm:
 
             # 포스터 결정 로직 (if not skip_default_poster_logic: 내부)
             if not skip_default_poster_logic:
-                # --- 우선순위 1: "포스터 예외처리 2" (사용자 지정 크롭 모드) ---
+                # 1. "포스터 예외처리 2" (사용자 지정 크롭 모드)
                 if forced_crop_mode_for_this_item and pl_url:
                     logger.info(f"[{cls.site_name} Info] Poster determined by FORCED 'crop_mode={forced_crop_mode_for_this_item}'. Using PL: {pl_url}")
                     final_poster_source = pl_url
@@ -1251,18 +1251,17 @@ class SiteDmm:
                     if ps_url_from_search_cache: # PS Cache가 있는 경우
                         logger.debug(f"[{cls.site_name} Info] PS cache exists ('{ps_url_from_search_cache}'). Evaluating PS-based poster options.")
 
-                        # --- 우선순위 2 (PS 있을 때): "포스터 예외처리 1" (PS 강제 사용) ---
+                        # 2. "포스터 예외처리 1" (PS 강제 사용)
                         if apply_ps_to_poster_for_this_item:
                             logger.info(f"[{cls.site_name} Info] Poster determined by FORCED 'ps_to_poster' setting. Using PS: {ps_url_from_search_cache}")
                             final_poster_source = ps_url_from_search_cache
                             final_poster_crop_mode = None
 
-                        # --- 우선순위 3 (PS 있을 때): 일반적인 포스터 결정 로직 ---
-                        # (위 PS 강제 설정이 적용되지 않았을 때만 실행)
+                        # 일반적인 포스터 결정 로직
                         else: # apply_ps_to_poster_for_this_item is False
                             logger.debug(f"[{cls.site_name} Info] Applying general poster determination with PS.")
 
-                            # 3-A: is_hq_poster
+                            # 3. is_hq_poster
                             if pl_url and SiteUtil.is_portrait_high_quality_image(pl_url, proxy_url=proxy_url):
                                 if SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url):
                                     final_poster_source = pl_url
@@ -1272,21 +1271,7 @@ class SiteDmm:
                                         if SiteUtil.is_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url):
                                             final_poster_source = art_candidate; break
 
-                            # 3-B: has_hq_poster
-                            if final_poster_source is None:
-                                if pl_url:
-                                    crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
-                                    if crop_pos:
-                                        final_poster_source = pl_url
-                                        final_poster_crop_mode = crop_pos
-                                if final_poster_source is None and specific_candidates_on_page:
-                                    for art_candidate in specific_candidates_on_page:
-                                        crop_pos_art = SiteUtil.has_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url)
-                                        if crop_pos_art:
-                                            final_poster_source = art_candidate
-                                            final_poster_crop_mode = crop_pos_art; break
-
-                            # --- 3-C. 특수 고정 크롭 처리 (해상도 기반) ---
+                            # 4. 특수 고정 크롭 처리 (해상도 기반) ---
                             if (final_poster_source is None or final_poster_source == ps_url_from_search_cache) and pl_url:
                                 logger.debug(f"DMM Poster (Priority 3-C attempt with PS): Applying fixed-size crop logic for PL: {pl_url}")
                                 try:
@@ -1303,7 +1288,21 @@ class SiteDmm:
                                 except Exception as e_fixed_crop_dmm_ps:
                                     logger.error(f"DMM: Error during fixed-size crop (with PS): {e_fixed_crop_dmm_ps}")
 
-                            # --- 우선순위 4 (PS 있는 경우의 폴백): PS 사용 ---
+                            # 5. has_hq_poster
+                            if final_poster_source is None:
+                                if pl_url:
+                                    crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
+                                    if crop_pos:
+                                        final_poster_source = pl_url
+                                        final_poster_crop_mode = crop_pos
+                                if final_poster_source is None and specific_candidates_on_page:
+                                    for art_candidate in specific_candidates_on_page:
+                                        crop_pos_art = SiteUtil.has_hq_poster(ps_url_from_search_cache, art_candidate, proxy_url=proxy_url)
+                                        if crop_pos_art:
+                                            final_poster_source = art_candidate
+                                            final_poster_crop_mode = crop_pos_art; break
+
+                            # 6. PS 사용 ---
                             if final_poster_source is None: # 위 모든 PS 기반 비교 실패 시
                                 logger.debug(f"DMM Poster (Priority 4 with PS - Fallback): Using PS as poster.")
                                 final_poster_source = ps_url_from_search_cache

@@ -462,23 +462,23 @@ class SiteMgstageDvd(SiteMgstage):
             if not skip_default_poster_logic:
                 logger.debug(f"[{cls.site_name} Info] Default poster logic started. apply_ps_flag={apply_ps_to_poster_for_this_item}, forced_crop_mode='{forced_crop_mode_for_this_item}'")
 
-                # --- 우선순위 1: "포스터 예외처리 2" (사용자 지정 크롭 모드) ---
+                # 1. "포스터 예외처리 2" (사용자 지정 크롭 모드)
                 if forced_crop_mode_for_this_item and pl_url:
                     logger.info(f"[{cls.site_name} Info] Poster determined by 예외처리 2 (크롭 지정: '{forced_crop_mode_for_this_item}'). Using PL: {pl_url}")
                     final_poster_source = pl_url
                     final_poster_crop_mode = forced_crop_mode_for_this_item
 
-                # --- 위에서 포스터가 결정되지 않았고, PS Cache가 있는 경우의 로직 ---
+                # --- 위에서 포스터가 결정되지 않았고, PS Cache가 있는 경우 ---
                 if ps_url_from_search_cache: 
                     logger.debug(f"[{cls.site_name} Info] PS cache exists. Evaluating PS-based poster options.")
 
-                    # --- 우선순위 2: "포스터 예외처리 1" (PS 강제 사용) ---
+                    # 2. "포스터 예외처리 1" (PS 강제 사용)
                     if apply_ps_to_poster_for_this_item:
                         logger.info(f"[{cls.site_name} Info] Poster determined by 예외처리 1 (PS 강제). Using PS: {ps_url_from_search_cache}")
                         final_poster_source = ps_url_from_search_cache
                         final_poster_crop_mode = None
 
-                    # --- 우선순위 3: 일반적인 포스터 결정 로직 ---
+                    # --- 일반적인 포스터 결정 로직 ---
                     else:
                         logger.debug(f"[{cls.site_name} Info] No forced settings applied (with PS). Applying general poster determination.")
 
@@ -488,7 +488,7 @@ class SiteMgstageDvd(SiteMgstage):
                             if len(all_arts) > 1 and all_arts[-1] != all_arts[0]:
                                 specific_arts_candidates.append(all_arts[-1])
 
-                        # 3-A. is_hq_poster 검사
+                        # 3. is_hq_poster 검사
                         if pl_url and SiteUtil.is_portrait_high_quality_image(pl_url, proxy_url=proxy_url):
                             if SiteUtil.is_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url):
                                 final_poster_source = pl_url
@@ -506,7 +506,17 @@ class SiteMgstageDvd(SiteMgstage):
                                         logger.debug(f"[{cls.site_name} Info] Poster set to Art by is_hq_poster: {art_candidate}")
                                         break
 
-                        # 3-B. has_hq_poster 검사
+                        # 4. MGS Special 처리
+                        if (final_poster_source is None or final_poster_source == ps_url_from_search_cache) and pl_url:
+                            logger.debug(f"[{cls.site_name} Info] Attempting MGS style processing for PL ('{pl_url}') & PS ('{ps_url_from_search_cache}').")
+                            temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
+                            if temp_filepath and os.path.exists(temp_filepath):
+                                mgs_special_poster_filepath = temp_filepath
+                                final_poster_source = mgs_special_poster_filepath
+                                final_poster_crop_mode = None
+                                logger.debug(f"[{cls.site_name} Info] MGS style processing successful. Using temp file: {mgs_special_poster_filepath}")
+
+                        # 5. has_hq_poster 검사
                         if final_poster_source is None:
                             if pl_url:
                                 crop_pos = SiteUtil.has_hq_poster(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
@@ -522,17 +532,7 @@ class SiteMgstageDvd(SiteMgstage):
                                         final_poster_source = art_candidate
                                         final_poster_crop_mode = crop_pos_art; break
 
-                        # 3-C. MGS Special 처리
-                        if (final_poster_source is None or final_poster_source == ps_url_from_search_cache) and pl_url:
-                            logger.debug(f"[{cls.site_name} Info] Attempting MGS style processing for PL ('{pl_url}') & PS ('{ps_url_from_search_cache}').")
-                            temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(ps_url_from_search_cache, pl_url, proxy_url=proxy_url)
-                            if temp_filepath and os.path.exists(temp_filepath):
-                                mgs_special_poster_filepath = temp_filepath
-                                final_poster_source = mgs_special_poster_filepath
-                                final_poster_crop_mode = None
-                                logger.debug(f"[{cls.site_name} Info] MGS style processing successful. Using temp file: {mgs_special_poster_filepath}")
-
-                        # 3-D. 최종 폴백: PS 사용
+                        # 6. 최종 폴백: PS 사용
                         if final_poster_source is None:
                             logger.debug(f"[{cls.site_name} Info] General/MGS special failed (with PS). Falling back to PS.")
                             final_poster_source = ps_url_from_search_cache

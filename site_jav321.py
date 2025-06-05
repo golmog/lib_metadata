@@ -603,7 +603,7 @@ class SiteJav321:
 
                     logger.debug(f"Jav321 Poster: Valid PS ('{valid_ps_candidate}') found. Proceeding with PS-comparison logic.")
                     if final_poster_source is None:
-                        # 3. 일반 비교 (is_hq, has_hq)
+                        # --- 일반 비교 ---
                         specific_arts_candidates_ps = []
                         if all_arts_from_page:
                             # 플레이스홀더 아닌 Art만 후보로
@@ -613,7 +613,7 @@ class SiteJav321:
                                 if len(temp_specific_arts) > 1 and temp_specific_arts[-1] != temp_specific_arts[0] and temp_specific_arts[-1] not in specific_arts_candidates_ps:
                                     specific_arts_candidates_ps.append(temp_specific_arts[-1])
 
-                        # 3-A: is_hq_poster
+                        # 3. is_hq_poster
                         if valid_pl_candidate and SiteUtil.is_portrait_high_quality_image(valid_pl_candidate, proxy_url=proxy_url):
                             if SiteUtil.is_hq_poster(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url):
                                 final_poster_source = valid_pl_candidate
@@ -623,29 +623,7 @@ class SiteJav321:
                                     if SiteUtil.is_hq_poster(valid_ps_candidate, art_candidate, proxy_url=proxy_url):
                                         final_poster_source = art_candidate; break
 
-                        # 3-B: has_hq_poster
-                        if final_poster_source is None:
-                            if valid_pl_candidate:
-                                crop_pos = SiteUtil.has_hq_poster(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url)
-                                if crop_pos:
-                                    final_poster_source = valid_pl_candidate; final_poster_crop_mode = crop_pos
-                            if final_poster_source is None and specific_arts_candidates_ps:
-                                for art_candidate in specific_arts_candidates_ps:
-                                    crop_pos_art = SiteUtil.has_hq_poster(valid_ps_candidate, art_candidate, proxy_url=proxy_url)
-                                    if crop_pos_art:
-                                        final_poster_source = art_candidate; final_poster_crop_mode = crop_pos_art; break
-
-                        # 4. MGS 스타일 처리
-                        if (final_poster_source is None or final_poster_source == valid_ps_candidate) and valid_pl_candidate:
-                            logger.debug(f"Jav321 Poster (with PS): Attempting MGS style for PL ('{valid_pl_candidate}') & PS ('{valid_ps_candidate}').")
-                            _temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url)
-                            if _temp_filepath and os.path.exists(_temp_filepath):
-                                mgs_special_poster_filepath = _temp_filepath
-                                final_poster_source = mgs_special_poster_filepath
-                                final_poster_crop_mode = None
-                                logger.info(f"Jav321: MGS style (with PS) successful. Using temp file: {mgs_special_poster_filepath}")
-
-                        # 5. 고정 크기 크롭
+                        # 4. 고정 크기 크롭
                         if not mgs_special_poster_filepath and \
                             (final_poster_source is None or final_poster_source == valid_ps_candidate) and \
                             valid_pl_candidate:
@@ -663,7 +641,29 @@ class SiteJav321:
                                             logger.info(f"Jav321: Fixed-size crop (with PS) applied. Poster is PIL object.")
                             except Exception as e_fcs_ps: logger.error(f"Jav321: Error in fixed crop (with PS): {e_fcs_ps}")
 
-                        # 6. PS 사용
+                        # 5. MGS 스타일 처리
+                        if (final_poster_source is None or final_poster_source == valid_ps_candidate) and valid_pl_candidate:
+                            logger.debug(f"Jav321 Poster (with PS): Attempting MGS style for PL ('{valid_pl_candidate}') & PS ('{valid_ps_candidate}').")
+                            _temp_filepath, _, _ = SiteUtil.get_mgs_half_pl_poster_info_local(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url)
+                            if _temp_filepath and os.path.exists(_temp_filepath):
+                                mgs_special_poster_filepath = _temp_filepath
+                                final_poster_source = mgs_special_poster_filepath
+                                final_poster_crop_mode = None
+                                logger.info(f"Jav321: MGS style (with PS) successful. Using temp file: {mgs_special_poster_filepath}")
+
+                        # 6. has_hq_poster
+                        if final_poster_source is None:
+                            if valid_pl_candidate:
+                                crop_pos = SiteUtil.has_hq_poster(valid_ps_candidate, valid_pl_candidate, proxy_url=proxy_url)
+                                if crop_pos:
+                                    final_poster_source = valid_pl_candidate; final_poster_crop_mode = crop_pos
+                            if final_poster_source is None and specific_arts_candidates_ps:
+                                for art_candidate in specific_arts_candidates_ps:
+                                    crop_pos_art = SiteUtil.has_hq_poster(valid_ps_candidate, art_candidate, proxy_url=proxy_url)
+                                    if crop_pos_art:
+                                        final_poster_source = art_candidate; final_poster_crop_mode = crop_pos_art; break
+
+                        # 7. PS 사용
                         if final_poster_source is None:
                             logger.debug(f"Jav321 Poster (with PS - Fallback): Using PS.")
                             final_poster_source = valid_ps_candidate
