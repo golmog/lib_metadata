@@ -535,7 +535,7 @@ class SiteJavbus:
                                 pl_image_obj_for_fixed_crop = SiteUtil.imopen(pl_url, proxy_url=proxy_url)
                                 if pl_image_obj_for_fixed_crop:
                                     img_width, img_height = pl_image_obj_for_fixed_crop.size
-                                    if img_width == 800 and 436 <= img_height <= 444:
+                                    if img_width == 800 and 436 <= img_height <= 445:
                                         crop_box_fixed = (img_width - 380, 0, img_width, img_height) 
                                         cropped_pil_object = pl_image_obj_for_fixed_crop.crop(crop_box_fixed)
                                         if cropped_pil_object:
