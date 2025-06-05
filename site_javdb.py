@@ -35,22 +35,37 @@ class SiteJavdb:
 
         original_keyword = keyword
         temp_keyword = original_keyword.strip().lower()
-        if temp_keyword:
-            temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
-            temp_keyword = temp_keyword.strip(' _-')
-            keyword_for_url = temp_keyword
+        temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
+        temp_keyword = temp_keyword.strip(' _-')
+            
+        keyword_for_url = "" # 최종 JavDB URL 파라미터용 키워드
 
-        # logger.debug(f"JavDB Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', manual={manual}, do_trans={do_trans}, proxy_urlSet={'Yes' if proxy_url else 'No'}")
+        # ID 계열 패턴 우선 처리
+        match_id_prefix = re.match(r'^id[-_]?(\d{2})(\d+)$', temp_keyword, re.I)
+        if match_id_prefix:
+            label_series = match_id_prefix.group(1)
+            num_part = match_id_prefix.group(2)
+            num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
+            keyword_for_url = f"{label_series}id-{num_part_padded_3}" 
+        else:
+            match_series_id_prefix = re.match(r'^(\d{2})id[-_]?(\d+)$', temp_keyword, re.I)
+            if match_series_id_prefix:
+                label_series = match_series_id_prefix.group(1)
+                num_part = match_series_id_prefix.group(2)
+                num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
+                keyword_for_url = f"{label_series}id-{num_part_padded_3}"
+            else:
+                # 일반 품번 처리
+                parts = re.match(r'^([a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?)[-_]?(\d+)$', temp_keyword)
+                if parts:
+                    label = parts.group(1)
+                    num = parts.group(2)
+                    num_padded_3 = num.lstrip('0').zfill(3)
+                    keyword_for_url = f"{label}-{num_padded_3}"
+                else: 
+                    keyword_for_url = temp_keyword
 
-        search_keyword_for_url = py_urllib_parse.quote_plus(keyword_for_url)
-        search_url = f"{cls.site_base_url}/search?q={search_keyword_for_url}&f=all"
-        logger.debug(f"JavDB Search URL: {search_url}")
-
-        custom_cookies = { 'over18': '1', 'locale': 'en' }
-        if cf_clearance_cookie_value:
-            custom_cookies['cf_clearance'] = cf_clearance_cookie_value
-        # else:
-        #    logger.debug(f"JavDB Search: cf_clearance cookie not provided for keyword '{original_keyword}'. This might lead to Cloudflare challenges.")
+        logger.debug(f"JavDB Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}'")
 
         res_for_search = SiteUtil.get_response_cs(search_url, proxy_url=proxy_url, cookies=custom_cookies)
 

@@ -222,18 +222,54 @@ class SiteDmm:
         ):
         if not cls._ensure_age_verified(proxy_url=proxy_url): return []
 
-        # --- 키워드 전처리 ---
         original_keyword = keyword
-        temp_keyword = original_keyword.strip().lower()
-        if temp_keyword:
-            temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
-            temp_keyword = temp_keyword.replace("-", " ").strip(' _-').split(" ")
-            keyword_processed = temp_keyword
+        keyword_for_url = ""
 
-        if len(keyword_processed) == 2: 
-            keyword_for_url = keyword_processed[0] + keyword_processed[1].zfill(5)
-        else: 
-            keyword_for_url = keyword_processed.replace(" ", "")
+        # --- 1. 초기 정제 (입력된 keyword 기준) ---
+        temp_keyword = original_keyword.strip().lower()
+        temp_keyword = re.sub(r'[-_]?cd\d*$', '', temp_keyword, flags=re.I)
+        temp_keyword = temp_keyword.strip('-_ ')
+
+        # --- 2. "ID 계열" 품번 특별 처리 (DMM 검색 형식으로 변환) ---
+        #    예: "id-16045" (입력) -> "16id00045" (DMM 검색용)
+        #    예: "16id-045" (입력) -> "16id00045" (DMM 검색용)
+
+        # 패턴 1: "id"로 시작하고, 뒤에 "두자리숫자"와 "나머지숫자"가 오는 경우 (예: id-16045, id_16045, id16045)
+        match_id_prefix = re.match(r'^id[-_]?(\d{2})(\d+)$', temp_keyword, re.I)
+        if match_id_prefix:
+            label_series = match_id_prefix.group(1) # "16"
+            num_part = match_id_prefix.group(2)     # "045"
+            # DMM 검색 형식: "두자리숫자" + "id" + "나머지숫자 (5자리 패딩)"
+            keyword_for_url = label_series + "id" + num_part.zfill(5) # "16id00045"
+        else:
+            # 패턴 2: "두자리숫자"와 "id"로 시작하고, 뒤에 "나머지숫자"가 오는 경우 (예: 16id-045, 16id_045, 16id045)
+            match_series_id_prefix = re.match(r'^(\d{2})id[-_]?(\d+)$', temp_keyword, re.I)
+            if match_series_id_prefix:
+                label_series = match_series_id_prefix.group(1) # "16"
+                num_part = match_series_id_prefix.group(2)      # "045"
+                # DMM 검색 형식: "두자리숫자" + "id" + "나머지숫자 (5자리 패딩)"
+                keyword_for_url = label_series + "id" + num_part.zfill(5) # "16id00045"
+            else:
+                # --- 3. ID 계열이 아닌 일반 품번 처리 ---
+                keyword_processed_parts = temp_keyword.replace("-", " ").replace("_"," ").strip().split(" ")
+                keyword_processed_parts = [part for part in keyword_processed_parts if part]
+
+                if len(keyword_processed_parts) == 2: 
+                    # 예: "abc 123" -> "abc00123"
+                    keyword_for_url = keyword_processed_parts[0] + keyword_processed_parts[1].zfill(5)
+                elif len(keyword_processed_parts) == 1:
+                    single_part = keyword_processed_parts[0]
+                    # 예: "abc123" -> "abc00123"
+                    # 예: "abc" (숫자 없음) -> "abc"
+                    match_label_num = re.match(r'^([a-z0-9]+?)(\d+)$', single_part, re.I)
+                    if match_label_num:
+                        label_part = match_label_num.group(1)
+                        num_part = match_label_num.group(2)
+                        keyword_for_url = label_part + num_part.zfill(5)
+                    else: 
+                        keyword_for_url = single_part
+                else:
+                    keyword_for_url = "".join(keyword_processed_parts)
 
         logger.debug(f"DMM Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', priority_label='{priority_label_setting_str}'")
 

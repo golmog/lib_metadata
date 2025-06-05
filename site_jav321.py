@@ -141,48 +141,71 @@ class SiteJav321:
         priority_label_setting_str=""
         ):
 
-        original_keyword_for_log = keyword
-        # --- 1. 사용자 입력 키워드 정제 (DMM 스타일로 검색 준비) ---
-        temp_keyword_processed = keyword.strip().lower()
-        temp_keyword_processed = re.sub(r'[-_]?cd\d*$', '', temp_keyword_processed, flags=re.I)
-        temp_keyword_processed = temp_keyword_processed.strip('-_ ')
+        original_keyword = keyword
+        temp_keyword = keyword.strip().lower()
+        temp_keyword = re.sub(r'[-_]?cd\d*$', '', temp_keyword, flags=re.I) # cdN 제거
+        temp_keyword = temp_keyword.strip('-_ ') # 양끝 구분자 제거
 
-        search_label_part_input = ""
-        search_num_part_input = ""
+        keyword_for_url = ""
+        keyword_for_compare = ""
 
-        # 입력 키워드에서 레이블과 숫자 분리 (DMM __search와 유사하게)
-        num_extract_match_input = re.match(r'^([a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?)-?(\d+)$', temp_keyword_processed)
-        if not num_extract_match_input:
-            num_extract_match_input = re.match(r'^([a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?)(\d+)$', temp_keyword_processed)
-
-        if num_extract_match_input:
-            search_label_part_input = num_extract_match_input.group(1).replace("-", "").replace("_", "")
-            search_num_part_input = num_extract_match_input.group(2)
-            # 숫자 접두사 제거 (1nhdtb -> nhdtb)
-            if search_label_part_input:
-                label_refine_match_input = re.match(r'^(?:\d*_)?([a-z][a-z0-9]*)$', search_label_part_input, re.I)
-                if label_refine_match_input:
-                    search_label_part_input = label_refine_match_input.group(1)
-
-            keyword_for_api_search = temp_keyword_processed.replace(" ", "-")
-            keyword_for_compare = search_label_part_input + search_num_part_input.zfill(5)
+        # ID 계열 패턴 우선 처리 (DMM 스타일 변환 후 Jav321 형식으로 재조정)
+        # 예: "id-16045" -> "16id-045", "16id-045" -> "16id-045"
+        match_id_prefix = re.match(r'^id[-_]?(\d{2})(\d+)$', temp_keyword, re.I)
+        if match_id_prefix:
+            label_series = match_id_prefix.group(1) # "16"
+            num_part = match_id_prefix.group(2)     # "045" 또는 "45" 등
+            num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
+            keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
+            keyword_for_compare = label_series + "id" + num_part.zfill(5) # 점수용은 DMM 스타일
         else:
-            keyword_for_api_search = temp_keyword_processed.replace(" ", "-")
-            keyword_for_compare = keyword_for_api_search.replace("-", "")
+            match_series_id_prefix = re.match(r'^(\d{2})id[-_]?(\d+)$', temp_keyword, re.I)
+            if match_series_id_prefix:
+                label_series = match_series_id_prefix.group(1) # "16"
+                num_part = match_series_id_prefix.group(2)      # "045" 또는 "45" 등
+                num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
+                keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
+                keyword_for_compare = label_series + "id" + num_part.zfill(5) # 점수용
+            else:
+                # 일반 품번 처리
+                parts = re.match(r'^([a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?)[-_]?(\d+)$', temp_keyword)
+                if parts:
+                    label = parts.group(1).replace("_", "-")
+                    num = parts.group(2)
+                    num_padded_3 = num.lstrip('0').zfill(3)
+                    
+                    # API 검색용: 레이블-숫자3자리 (숫자 접두사 제거는 선택)
+                    # 예: 1nhdtb-128 -> 1NHDTB-128 또는 NHDTB-128
+                    # 여기서는 숫자 접두사 유지 (Jav321 검색 방식에 따라 조정)
+                    label_for_api = label 
+                    # label_refine_match = re.match(r'^(?:\d*_)?([a-z][a-z0-9]*)$', label, re.I)
+                    # if label_refine_match: label_for_api = label_refine_match.group(1)
 
-        logger.debug(f"Jav321 Search: original_keyword='{original_keyword_for_log}', keyword_for_api_search='{keyword_for_api_search}', keyword_for_compare='{keyword_for_compare}'")
+                    keyword_for_url = f"{label_for_api}-{num_padded_3}" # 예: "nhdtb-001", "abc-123"
+                    
+                    # 점수 비교용 (DMM 스타일)
+                    label_for_compare = label 
+                    label_refine_match_compare = re.match(r'^(?:\d*_)?([a-z][a-z0-9]*)$', label, re.I)
+                    if label_refine_match_compare: label_for_compare = label_refine_match_compare.group(1)
+                    keyword_for_compare = label_for_compare + num.zfill(5)
+
+                else: # 숫자 없는 경우 등
+                    keyword_for_url = temp_keyword.replace(" ", "-")
+                    keyword_for_compare = temp_keyword.replace("-", "").replace(" ", "")
+
+        logger.debug(f"Jav321 Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', keyword_for_compare='{keyword_for_compare}'")
 
         url = f"{cls.site_base_url}/search"
         headers = SiteUtil.default_headers.copy(); headers['Referer'] = cls.site_base_url + "/"
-        res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, post_data={"sn": keyword_for_api_search})
+        res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, post_data={"sn": keyword_for_url})
         
         if res is None:
-            logger.error(f"Jav321 Search: Failed to get response for API keyword '{keyword_for_api_search}'.")
+            logger.error(f"Jav321 Search: Failed to get response for API keyword '{keyword_for_url}'.")
             return []
 
         # 검색 결과가 단일 페이지로 리다이렉션 되었는지 확인
         if not res.history or not res.url.startswith(cls.site_base_url + "/video/"):
-            logger.debug(f"Jav321 Search: No direct match or multiple results for API keyword '{keyword_for_api_search}'. Final URL: {res.url}")
+            logger.debug(f"Jav321 Search: No direct match or multiple results for API keyword '{keyword_for_url}'. Final URL: {res.url}")
             return []
 
         # --- 단일 검색 결과 처리 ---
@@ -253,7 +276,7 @@ class SiteJav321:
             elif search_label_part_input + search_num_part_input == score_label_item + score_num_raw_item:
                 current_score_val = 100
             # 4. MGStage 스타일 비교 (입력: ABC-001, 아이템: ABC001)
-            elif len(tmps := keyword_for_api_search.upper().split('-')) == 2 and \
+            elif len(tmps := keyword_for_url.upper().split('-')) == 2 and \
                 tmps[0] == score_label_item.upper() and \
                 str(int(tmps[1])) == score_num_raw_item.lstrip('0'):
                 current_score_val = 100
@@ -284,7 +307,7 @@ class SiteJav321:
                 logger.warning(f"Jav321 Search: Item excluded. Code: {item.code}, Title: {item.title}")
 
         except Exception as e_item_search:
-            logger.exception(f"Jav321 Search: Error processing single direct match for API keyword '{keyword_for_api_search}': {e_item_search}")
+            logger.exception(f"Jav321 Search: Error processing single direct match for API keyword '{keyword_for_url}': {e_item_search}")
 
         return ret
 

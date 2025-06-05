@@ -79,10 +79,38 @@ class SiteJavbus:
 
         original_keyword = keyword
         temp_keyword = original_keyword.strip().lower()
-        if temp_keyword:
-            temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
-            temp_keyword = temp_keyword.strip(' _-')
-            keyword_for_url = temp_keyword
+        temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
+        temp_keyword = temp_keyword.strip(' _-')
+        
+        keyword_for_url = "" # 최종 JavBus URL 검색용 키워드
+
+        # ID 계열 패턴 우선 처리
+        match_id_prefix = re.match(r'^id[-_]?(\d{2})(\d+)$', temp_keyword, re.I)
+        if match_id_prefix:
+            label_series = match_id_prefix.group(1)
+            num_part = match_id_prefix.group(2)
+            num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
+            keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
+        else:
+            match_series_id_prefix = re.match(r'^(\d{2})id[-_]?(\d+)$', temp_keyword, re.I)
+            if match_series_id_prefix:
+                label_series = match_series_id_prefix.group(1)
+                num_part = match_series_id_prefix.group(2)
+                num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
+                keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
+            else:
+                # 일반 품번 처리: JavBus는 보통 하이픈 있는 형태 사용
+                # 숫자 부분만 3자리 패딩 고려
+                parts = re.match(r'^([a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?)[-_]?(\d+)$', temp_keyword)
+                if parts:
+                    label = parts.group(1) # 내부 하이픈/언더스코어는 유지 가능
+                    num = parts.group(2)
+                    num_padded_3 = num.lstrip('0').zfill(3)
+                    keyword_for_url = f"{label}-{num_padded_3}"
+                else: # 숫자 없는 경우 등
+                    keyword_for_url = temp_keyword # 원본 사용 (공백 등은 제거된 상태)
+
+        logger.debug(f"JavBus Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}'")
 
         url = f"{cls.site_base_url}/search/{keyword_for_url}"
         logger.debug(f"JavBus Search URL: {url}")
