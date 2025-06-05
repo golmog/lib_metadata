@@ -21,6 +21,116 @@ class SiteJav321:
     _ps_url_cache = {} 
 
     @classmethod
+    def _parse_jav321_ui_code(cls, code_str: str) -> tuple:
+        if not code_str or not isinstance(code_str, str): # 입력값 유효성 검사
+            return "", "", ""
+
+        processed_cid = code_str.lower().strip() # 초기 공백 제거 및 소문자화
+
+        # 1. DMM 스타일 접두사 제거 (h_, n_ 및 h_N, n_N)
+        prefix_match = re.match(r'^([hn]_\d?)(.*)', processed_cid)
+        if prefix_match:
+            processed_cid = prefix_match.group(2).strip(' _-')
+
+        #suffix_strip_match = re.match(r'^(.*\d)([a-z]+)$', processed_cid) # 숫자 뒤에 오는 알파벳 접미사
+        #if suffix_strip_match:
+        #    if suffix_strip_match.group(1)[-1].isdigit():
+        #         processed_cid = suffix_strip_match.group(1)
+
+        # 3. 추가적인 앞뒤 구분자(하이픈, 언더스코어, 공백) 최종 제거
+        processed_cid = processed_cid.strip('-_ ')
+
+        label_num_ui_final = ""
+        label_num_raw_for_score = ""
+        remaining_for_label_parse = processed_cid
+
+        # 숫자 부분 추출 (가장 오른쪽)
+        num_match_general = re.match(r'^(.*?)(\d+)$', processed_cid)
+        if num_match_general:
+            remaining_for_label_parse = num_match_general.group(1).strip(' _-')
+            extracted_num_str = num_match_general.group(2)
+            
+            label_num_raw_for_score = extracted_num_str # 점수용 원본
+            num_stripped = extracted_num_str.lstrip('0')
+            if not num_stripped and extracted_num_str: num_stripped = "0"
+            label_num_ui_final = num_stripped.zfill(3)
+        else:
+            remaining_for_label_parse = processed_cid
+
+        label_ui_part = ""
+        score_label_part = ""
+
+        # ID 계열 처리 (DMM과 유사하게)
+        if 'id' in remaining_for_label_parse.lower():
+            idnn_match = re.match(r'^(.*?)(id)(\d{2})$', remaining_for_label_parse, re.I)
+            if idnn_match:
+                label_series = idnn_match.group(3)
+                label_chars = idnn_match.group(2).lower()
+                label_ui_part = (label_series + label_chars).upper()
+                score_label_part = label_series + label_chars
+            else:
+                nnid_match = re.match(r'^(.*?)(\d{2})(id)$', remaining_for_label_parse, re.I)
+                if nnid_match:
+                    label_series = nnid_match.group(2)
+                    label_chars = nnid_match.group(3).lower()
+                    label_ui_part = (label_series + label_chars).upper()
+                    score_label_part = label_series + label_chars
+
+        if not label_ui_part: # 일반 레이블
+            general_label_match = re.match(r'^(?:\d+)?([a-z][a-z0-9]*)$', remaining_for_label_parse, re.I)
+            if general_label_match:
+                extracted_label = general_label_match.group(1)
+                if extracted_label:
+                    label_ui_part = extracted_label.upper()
+                    score_label_part = extracted_label.lower()
+                elif remaining_for_label_parse: # 정규식은 맞았는데 그룹1이 빈 경우
+                    label_ui_part = remaining_for_label_parse.upper()
+                    score_label_part = remaining_for_label_parse.lower()
+            elif remaining_for_label_parse: # 정규식 실패 시 남은 것 전체
+                label_ui_part = remaining_for_label_parse.upper()
+                score_label_part = remaining_for_label_parse.lower()
+
+        ui_code_final = ""
+        if label_ui_part and label_num_ui_final:
+            ui_code_final = f"{label_ui_part}-{label_num_ui_final}"
+        elif label_ui_part:
+            ui_code_final = label_ui_part
+        elif label_num_ui_final:
+            ui_code_final = f"-{label_num_ui_final}"
+        else:
+            ui_code_final = code_str.upper()
+            if not score_label_part: score_label_part = ui_code_final.lower()
+
+        if not score_label_part and label_ui_part: score_label_part = label_ui_part.lower()
+        elif not score_label_part : score_label_part = code_str.lower().replace("-","")
+
+        return ui_code_final, score_label_part, label_num_raw_for_score
+
+
+    @classmethod
+    def get_label_from_ui_code(cls, ui_code_str: str) -> str:
+        if not ui_code_str or not isinstance(ui_code_str, str): 
+            return ""
+        ui_code_upper = ui_code_str.upper()
+
+        # ID 계열 레이블 먼저 확인 (예: "16ID-045" -> "16ID")
+        id_match = re.match(r'^(\d*[A-Z]+ID)', ui_code_upper) 
+        if id_match:
+            return id_match.group(1)
+        
+        # 일반적인 경우 (하이픈 앞부분)
+        if '-' in ui_code_upper:
+            return ui_code_upper.split('-', 1)[0]
+        
+        # 하이픈 없는 경우 (예: HAGE001 -> HAGE)
+        match_alpha_prefix = re.match(r'^([A-Z]+)', ui_code_upper)
+        if match_alpha_prefix:
+            return match_alpha_prefix.group(1)
+            
+        return ui_code_upper
+
+
+    @classmethod
     def __search(
         cls,
         keyword,
@@ -31,37 +141,60 @@ class SiteJav321:
         priority_label_setting_str=""
         ):
 
-        original_keyword = keyword
-        temp_keyword = original_keyword.strip().lower()
-        if temp_keyword:
-            temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
-            temp_keyword = temp_keyword.strip(' _-')
-            keyword_for_url = temp_keyword
+        original_keyword_for_log = keyword
+        # --- 1. 사용자 입력 키워드 정제 (DMM 스타일로 검색 준비) ---
+        temp_keyword_processed = keyword.strip().lower()
+        temp_keyword_processed = re.sub(r'[-_]?cd\d*$', '', temp_keyword_processed, flags=re.I)
+        temp_keyword_processed = temp_keyword_processed.strip('-_ ')
+
+        search_label_part_input = ""
+        search_num_part_input = ""
+
+        # 입력 키워드에서 레이블과 숫자 분리 (DMM __search와 유사하게)
+        num_extract_match_input = re.match(r'^([a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?)-?(\d+)$', temp_keyword_processed)
+        if not num_extract_match_input:
+            num_extract_match_input = re.match(r'^([a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?)(\d+)$', temp_keyword_processed)
+
+        if num_extract_match_input:
+            search_label_part_input = num_extract_match_input.group(1).replace("-", "").replace("_", "")
+            search_num_part_input = num_extract_match_input.group(2)
+            # 숫자 접두사 제거 (1nhdtb -> nhdtb)
+            if search_label_part_input:
+                label_refine_match_input = re.match(r'^(?:\d*_)?([a-z][a-z0-9]*)$', search_label_part_input, re.I)
+                if label_refine_match_input:
+                    search_label_part_input = label_refine_match_input.group(1)
+
+            keyword_for_api_search = temp_keyword_processed.replace(" ", "-")
+            keyword_for_compare = search_label_part_input + search_num_part_input.zfill(5)
+        else:
+            keyword_for_api_search = temp_keyword_processed.replace(" ", "-")
+            keyword_for_compare = keyword_for_api_search.replace("-", "")
+
+        logger.debug(f"Jav321 Search: original_keyword='{original_keyword_for_log}', keyword_for_api_search='{keyword_for_api_search}', keyword_for_compare='{keyword_for_compare}'")
 
         url = f"{cls.site_base_url}/search"
-        logger.debug(f"Jav321 Search URL: {url}")
-
-        headers = SiteUtil.default_headers.copy()
-        headers['Referer'] = cls.site_base_url + "/"
+        headers = SiteUtil.default_headers.copy(); headers['Referer'] = cls.site_base_url + "/"
+        res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, post_data={"sn": keyword_for_api_search})
         
-        res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, post_data={"sn": keyword_for_url})
-
         if res is None:
-            logger.error(f"Jav321 Search: Failed to get response for API keyword '{keyword_for_url}'.")
+            logger.error(f"Jav321 Search: Failed to get response for API keyword '{keyword_for_api_search}'.")
             return []
 
+        # 검색 결과가 단일 페이지로 리다이렉션 되었는지 확인
         if not res.history or not res.url.startswith(cls.site_base_url + "/video/"):
-            logger.debug(f"Jav321 Search: No direct match for API keyword '{keyword_for_url}'. Final URL: {res.url}")
+            logger.debug(f"Jav321 Search: No direct match or multiple results for API keyword '{keyword_for_api_search}'. Final URL: {res.url}")
             return []
 
+        # --- 단일 검색 결과 처리 ---
         ret = []
         try:
             item = EntityAVSearch(cls.site_name)
-            
-            code_from_url_path = res.url.split("/")[-1] 
-            item.code = cls.module_char + cls.site_char + code_from_url_path 
-            
-            item.ui_code = keyword_for_url.upper()
+
+            code_from_url_path = res.url.split("/")[-1].upper()
+            item.code = cls.module_char + cls.site_char + code_from_url_path
+
+            parsed_ui_code_item, score_label_item, score_num_raw_item = cls._parse_jav321_ui_code(code_from_url_path)
+            item.ui_code = parsed_ui_code_item
             
             base_xpath = "/html/body/div[2]/div[1]/div[1]"
             tree = html.fromstring(res.text)
@@ -92,57 +225,67 @@ class SiteJav321:
             except ValueError: item.year = 1900
 
             title_tags = tree.xpath(f"{base_xpath}/div[1]/h3/text()")
-            item.title = item.title_ko = title_tags[0].strip() if title_tags else "제목 없음"
+            item.title = title_tags[0].strip() if title_tags else "제목 없음"
             if item.title == "제목 없음": logger.warning(f"Jav321 Search: Title not found for code: {item.code}")
+
+            # --- 점수 계산 (DMM/MGStage 스타일 혼합) ---
+            current_score_val = 0
+
+            item_code_for_compare = ""
+            if score_label_item and score_num_raw_item:
+                item_code_for_compare = score_label_item + score_num_raw_item.zfill(5)
+            elif item.ui_code:
+                item_ui_code_cleaned = item.ui_code.replace("-","").lower()
+
+                temp_match = re.match(r'([a-z]+)(\d+)', item_ui_code_cleaned)
+                if temp_match:
+                    item_code_for_compare = temp_match.group(1) + temp_match.group(2).zfill(5)
+                else:
+                    item_code_for_compare = item_ui_code_cleaned
+
+            # 1. 입력 키워드와 아이템 코드가 "레이블+5자리숫자" 형태로 정확히 일치하는 경우 (DMM 스타일)
+            if keyword_for_compare and item_code_for_compare and keyword_for_compare == item_code_for_compare:
+                current_score_val = 100
+            # 2. 입력 키워드(원본형태)와 아이템 ui_code(원본형태)가 대소문자, 하이픈 무시하고 일치
+            elif temp_keyword_processed.replace("-","") == item.ui_code.lower().replace("-",""):
+                current_score_val = 100
+            # 3. "레이블+숫자(패딩X)" 형태 비교 (DMM 스타일)
+            elif search_label_part_input + search_num_part_input == score_label_item + score_num_raw_item:
+                current_score_val = 100
+            # 4. MGStage 스타일 비교 (입력: ABC-001, 아이템: ABC001)
+            elif len(tmps := keyword_for_api_search.upper().split('-')) == 2 and \
+                tmps[0] == score_label_item.upper() and \
+                str(int(tmps[1])) == score_num_raw_item.lstrip('0'):
+                current_score_val = 100
+            else:
+                current_score_val = 60
+            item.score = current_score_val
 
             if manual:
                 _image_mode = "1" if image_mode != "0" else image_mode
                 if processed_image_url: item.image_url = SiteUtil.process_image_mode(_image_mode, processed_image_url, proxy_url=proxy_url)
                 else: item.image_url = ""
-                if do_trans: item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
+                item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
             else:
-                item.image_url = processed_image_url
+                item.image_url = processed_image_url # 원본 URL (또는 처리된 URL)
                 item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
 
             if item.code and item.title != "제목 없음":
-                if item.code and processed_image_url:
-                    cls._ps_url_cache[item.code] = processed_image_url
-                    logger.debug(f"Jav321 Search: Stored ps_url for {item.code} in cache: {processed_image_url}")
+                if item.code and raw_ps_url:
+                    cls._ps_url_cache[item.code] = cls._process_jav321_url_from_attribute(raw_ps_url)
+                    logger.debug(f"Jav321 Search: Stored ps_url for {item.code} in cache: {cls._ps_url_cache[item.code]}")
+
+                item_dict = item.as_dict()
+
+                ret.append(item_dict)
                 logger.debug(f"Jav321 Search Item Added: code={item.code}, ui_code={item.ui_code}, score={item.score}, title='{item.title_ko}'")
+
             else:
                 logger.warning(f"Jav321 Search: Item excluded. Code: {item.code}, Title: {item.title}")
 
-            normalized_input_keyword = keyword_for_url.lower().replace("-","").replace(" ","")
-            normalized_item_uicode = item.ui_code.lower().replace("-","").replace(" ","")
-
-            if normalized_input_keyword == normalized_item_uicode:
-                item.score = 100
-            else:
-                item.score = 60 
-                logger.warning(f"Jav321 Search Score: Mismatch after normalization. InputKeyword='{keyword_for_url}' (norm='{normalized_input_keyword}'), ItemUICode='{item.ui_code}' (norm='{normalized_item_uicode}'). Score set to 60.")
-
-            item_dict = item.as_dict()
-
-            item_dict['is_priority_label_site'] = False 
-            item_dict['site_key'] = cls.site_name
-
-            if item_dict.get('ui_code') and priority_label_setting_str:
-                label_to_check = ""
-                if '-' in item_dict['ui_code']:
-                    label_to_check = item_dict['ui_code'].split('-', 1)[0].upper()
-                else:
-                    match_label_no_hyphen = re.match(r'^([A-Z]+)', item_dict['ui_code'].upper())
-                    if match_label_no_hyphen: label_to_check = match_label_no_hyphen.group(1)
-                    else: label_to_check = item_dict['ui_code'].upper()
-
-                if label_to_check:
-                    priority_labels_set = {lbl.strip().upper() for lbl in priority_label_setting_str.split(',') if lbl.strip()}
-                    if label_to_check in priority_labels_set:
-                        item_dict['is_priority_label_site'] = True
-                        logger.debug(f"Jav321 Search: Item '{item_dict['ui_code']}' matched priority label '{label_to_check}'. Setting is_priority_label_site=True.")
-
         except Exception as e_item_search:
-            logger.exception(f"Jav321 Search: Error processing item for API keyword '{keyword_for_url}': {e_item_search}")
+            logger.exception(f"Jav321 Search: Error processing single direct match for API keyword '{keyword_for_api_search}': {e_item_search}")
+
         return ret
 
 
