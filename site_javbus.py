@@ -91,6 +91,7 @@ class SiteJavbus:
             num_part = match_id_prefix.group(2)
             num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
             keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
+            label_for_compare = keyword_for_url
         else:
             match_series_id_prefix = re.match(r'^(\d{2})id[-_]?(\d+)$', temp_keyword, re.I)
             if match_series_id_prefix:
@@ -98,7 +99,15 @@ class SiteJavbus:
                 num_part = match_series_id_prefix.group(2)
                 num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
                 keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
+                label_for_compare = keyword_for_url
             else:
+                label_part = temp_keyword.split('-')[0].upper() if '-' in temp_keyword else temp_keyword.upper()
+                num_part = temp_keyword.split('-')[1] if '-' in temp_keyword else temp_keyword
+                if num_part.isdigit():
+                    num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
+                    label_for_compare = f"{label_part}-{num_part_padded_3}"
+                else:
+                    label_for_compare = temp_keyword
                 keyword_for_url = temp_keyword
 
         logger.debug(f"JavBus Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}'")
@@ -132,7 +141,10 @@ class SiteJavbus:
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 else:
                     item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
-                item.score = 100 if keyword_for_url.lower() == item.ui_code.lower() else 60 - (len(ret) * 10)
+                if label_for_compare.lower() == item.ui_code.lower():
+                    item.score = 100
+                else:
+                    item.score = 60 - (len(ret) * 10)
                 if item.score < 0: item.score = 0
 
                 item_dict = item.as_dict()
@@ -353,7 +365,7 @@ class SiteJavbus:
                     if genre_values_p_node_list:
                         genre_values_p_actual_node = genre_values_p_node_list[0]
                         # logger.debug(f"JavBus: Genre values P tag content: {html.tostring(genre_values_p_actual_node, encoding='unicode')[:300]}")
-                        
+
                         genre_span_tags = genre_values_p_actual_node.xpath("./span[@class='genre']")
 
                         if entity.genre is None: entity.genre = []
@@ -410,23 +422,23 @@ class SiteJavbus:
             logger.exception(f"JavBus: Major error during metadata parsing for {code}: {e_meta_main}")
             if not (hasattr(entity, 'ui_code') and entity.ui_code) : return None
 
-        current_ui_code_for_image = entity.ui_code
+        ui_code_for_image = entity.ui_code
         user_custom_poster_url = None; user_custom_landscape_url = None
         skip_default_poster_logic = False; skip_default_landscape_logic = False
 
-        if use_image_server and image_server_local_path and image_server_url and current_ui_code_for_image:
-            logger.debug(f"JavBus: Checking for user custom images for {current_ui_code_for_image}")
+        if use_image_server and image_server_local_path and image_server_url and ui_code_for_image:
+            logger.debug(f"JavBus: Checking for user custom images for {ui_code_for_image}")
             poster_suffixes = ["_p_user.jpg", "_p_user.png", "_p_user.webp"]
             landscape_suffixes = ["_pl_user.jpg", "_pl_user.png", "_pl_user.webp"]
             for suffix in poster_suffixes:
-                _, web_url = SiteUtil.get_user_custom_image_paths(image_server_local_path, image_path_segment, current_ui_code_for_image, suffix, image_server_url)
+                _, web_url = SiteUtil.get_user_custom_image_paths(image_server_local_path, image_path_segment, ui_code_for_image, suffix, image_server_url)
                 if web_url:
                     user_custom_poster_url = web_url
                     if not any(t.aspect == 'poster' and t.value == user_custom_poster_url for t in entity.thumb):
                         entity.thumb.append(EntityThumb(aspect="poster", value=user_custom_poster_url))
                     skip_default_poster_logic = True; logger.debug(f"JavBus: Using user custom poster: {web_url}"); break
             for suffix in landscape_suffixes:
-                _, web_url = SiteUtil.get_user_custom_image_paths(image_server_local_path, image_path_segment, current_ui_code_for_image, suffix, image_server_url)
+                _, web_url = SiteUtil.get_user_custom_image_paths(image_server_local_path, image_path_segment, ui_code_for_image, suffix, image_server_url)
                 if web_url:
                     user_custom_landscape_url = web_url
                     if not any(t.aspect == 'landscape' and t.value == user_custom_landscape_url for t in entity.thumb):
@@ -474,7 +486,7 @@ class SiteJavbus:
                         if label_from_ui_code in ps_force_labels_list:
                             apply_ps_to_poster_for_this_item = True
                             logger.debug(f"[{cls.site_name} Info] PS to Poster WILL BE APPLIED for label '{label_from_ui_code}' based on settings.")
-                    
+
                     # 3. 크롭 모드 결정 (PS 강제 사용이 아닐 때만 의미 있을 수 있음)
                     if crop_mode_settings_str:
                         for line in crop_mode_settings_str.splitlines():
@@ -604,19 +616,19 @@ class SiteJavbus:
 
         logger.debug(f"JavBus: Final Images Decision - Poster='{str(final_poster_source)[:100]}...' (Type: {type(final_poster_source)}, Crop='{final_poster_crop_mode}'), Landscape='{final_landscape_url_source}', Fanarts_to_process({len(arts_urls_for_processing)})")
 
-        if use_image_server and image_mode == '4' and current_ui_code_for_image:
-            logger.debug(f"JavBus: Saving images to Image Server for {current_ui_code_for_image}...")
+        if use_image_server and image_mode == '4' and ui_code_for_image:
+            logger.debug(f"JavBus: Saving images to Image Server for {ui_code_for_image}...")
             if not skip_default_poster_logic and final_poster_source:
                 p_path = SiteUtil.save_image_to_server_path(
                     final_poster_source, 'p', image_server_local_path, image_path_segment,
-                    current_ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode
+                    ui_code_for_image, proxy_url=proxy_url, crop_mode=final_poster_crop_mode
                 )
                 if p_path and not any(t.aspect == 'poster' and t.value.endswith(p_path) for t in entity.thumb):
                     entity.thumb.append(EntityThumb(aspect="poster", value=f"{image_server_url}/{p_path}"))
             if not skip_default_landscape_logic and final_landscape_url_source:
                 pl_path = SiteUtil.save_image_to_server_path(
                     final_landscape_url_source, 'pl', image_server_local_path, image_path_segment,
-                    current_ui_code_for_image, proxy_url=proxy_url
+                    ui_code_for_image, proxy_url=proxy_url
                 )
                 if pl_path and not any(t.aspect == 'landscape' and t.value.endswith(pl_path) for t in entity.thumb):
                     entity.thumb.append(EntityThumb(aspect="landscape", value=f"{image_server_url}/{pl_path}"))
@@ -626,7 +638,7 @@ class SiteJavbus:
                     if current_fanart_server_count >= max_arts: break
                     art_relative_path = SiteUtil.save_image_to_server_path(
                         art_url, 'art', image_server_local_path, image_path_segment,
-                        current_ui_code_for_image, art_index=len(entity.fanart) + 1, proxy_url=proxy_url
+                        ui_code_for_image, art_index=len(entity.fanart) + 1, proxy_url=proxy_url
                     )
                     if art_relative_path:
                         full_art_url = f"{image_server_url}/{art_relative_path}"
