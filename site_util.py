@@ -1039,25 +1039,53 @@ class SiteUtil:
             ui_code_lower = ui_code.lower()
             filename_with_suffix = f"{ui_code_lower}{type_suffix_with_extension}"
 
-            ui_code_parts = ui_code.split('-')
-            label_part = ui_code_parts[0].upper() if ui_code_parts else "UNKNOWN"
-            # 첫 글자 추출 (알파벳 아니면 '09')
-            first_char = ""
-            if label_part:
-                if label_part[0].isalpha():
-                    first_char = label_part[0].upper()
-                else:
-                    first_char = '09'
-            else:
-                first_char = 'UNKNOWN_FC'
+            # --- 폴더 결정 로직 시작 (save_image_to_server_path와 유사하게) ---
+            relative_dir_parts = [path_segment] # 기본 path_segment (예: 'jav/cen')
 
-            user_image_dir_local = os.path.join(base_local_dir, path_segment, first_char, label_part)
+            ui_code_parts = ui_code.split('-')
+            label_part_original_case = ui_code_parts[0] if ui_code_parts else ui_code
+            label_part_input = label_part_original_case.upper()
+
+            first_char_of_label_folder = ""
+            label_part_for_folder = ""
+
+            if label_part_input.startswith("741"):
+                first_char_of_label_folder = '09'
+                label_part_for_folder = label_part_input
+            else:
+                match_leading_digits = re.match(r'^(\d*)([a-zA-Z].*)$', label_part_input)
+                if match_leading_digits:
+                    label_after_stripping_digits = match_leading_digits.group(2)
+                    label_part_for_folder = label_after_stripping_digits
+
+                    if label_part_for_folder and label_part_for_folder[0].isalpha():
+                        first_char_of_label_folder = label_part_for_folder[0].upper()
+                    else:
+                        first_char_of_label_folder = 'ETC'
+                else:
+                    if label_part_input and label_part_input[0].isdigit():
+                        first_char_of_label_folder = '09'
+                    elif label_part_input and label_part_input[0].isalpha():
+                        first_char_of_label_folder = label_part_input[0].upper()
+                    else:
+                        first_char_of_label_folder = 'ETC'
+                    label_part_for_folder = label_part_input
+
+            if not first_char_of_label_folder: first_char_of_label_folder = "UNKNOWN"
+            if not label_part_for_folder: label_part_for_folder = "UNKNOWN"
+
+            relative_dir_parts.append(first_char_of_label_folder)
+            relative_dir_parts.append(label_part_for_folder)
+
+            user_image_dir_local = os.path.join(base_local_dir, *relative_dir_parts)
             user_image_file_local_path = os.path.join(user_image_dir_local, filename_with_suffix)
 
+            # logger.debug(f"get_user_custom_image_paths: Checking custom image at '{user_image_file_local_path}'")
+
             if os.path.exists(user_image_file_local_path):
-                relative_web_path = os.path.join(path_segment, first_char, label_part, filename_with_suffix).replace("\\", "/")
+                relative_web_path = os.path.join(*relative_dir_parts, filename_with_suffix).replace("\\", "/")
                 full_web_url = f"{image_server_url.rstrip('/')}/{relative_web_path.lstrip('/')}"
-                # logger.debug(f"User custom image found: Local='{user_image_file_local_path}', Web='{full_web_url}'")
+                # logger.debug(f"get_user_custom_image_paths: User custom image found: Web='{full_web_url}'")
                 return user_image_file_local_path, full_web_url
             else:
                 return None, None
