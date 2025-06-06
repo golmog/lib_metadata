@@ -299,27 +299,27 @@ class SiteJavdb:
 
     @classmethod
     def __info(cls, code, **kwargs):
+        do_trans = kwargs.get('do_trans', True)
+        proxy_url = kwargs.get('proxy_url', None)
+        image_mode = kwargs.get('image_mode', '0')
+        max_arts = kwargs.get('max_arts', 10) 
+        use_image_server = kwargs.get('use_image_server', False)
+        image_server_url = kwargs.get('image_server_url', '').rstrip('/') if use_image_server else ''
+        image_server_local_path = kwargs.get('image_server_local_path', '') if use_image_server else ''
+        image_path_segment = kwargs.get('url_prefix_segment', 'jav/db') 
+        user_defined_crop_mode = kwargs.get('crop_mode', None)
+        use_extras_setting = kwargs.get('use_extras', True)
+        cf_clearance_cookie_value = kwargs.get('cf_clearance_cookie', None)
+        crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '') # 레이블 기반 크롭 설정
+
+        custom_cookies = { 'over18': '1', 'locale': 'en' }
+        if cf_clearance_cookie_value:
+            custom_cookies['cf_clearance'] = cf_clearance_cookie_value
+
+        original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
+        detail_url = f"{cls.site_base_url}/v/{original_code_for_url}"
+
         try:
-            do_trans = kwargs.get('do_trans', True)
-            proxy_url = kwargs.get('proxy_url', None)
-            image_mode = kwargs.get('image_mode', '0')
-            max_arts = kwargs.get('max_arts', 10) 
-            use_image_server = kwargs.get('use_image_server', False)
-            image_server_url = kwargs.get('image_server_url', '').rstrip('/') if use_image_server else ''
-            image_server_local_path = kwargs.get('image_server_local_path', '') if use_image_server else ''
-            image_path_segment = kwargs.get('url_prefix_segment', 'jav/db') 
-            user_defined_crop_mode = kwargs.get('crop_mode', None)
-            use_extras_setting = kwargs.get('use_extras', True)
-            cf_clearance_cookie_value = kwargs.get('cf_clearance_cookie', None)
-            crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '') # 레이블 기반 크롭 설정
-
-            custom_cookies = { 'over18': '1', 'locale': 'en' }
-            if cf_clearance_cookie_value:
-                custom_cookies['cf_clearance'] = cf_clearance_cookie_value
-
-            original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
-            detail_url = f"{cls.site_base_url}/v/{original_code_for_url}"
-
             logger.debug(f"JavDB Info: Accessing URL: {detail_url} for code {code}")
             res_info = SiteUtil.get_response_cs(detail_url, proxy_url=proxy_url, cookies=custom_cookies)
 
