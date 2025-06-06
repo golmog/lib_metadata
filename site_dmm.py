@@ -228,39 +228,34 @@ class SiteDmm:
         # --- 1. 초기 정제 (입력된 keyword 기준) ---
         temp_keyword = original_keyword.strip().lower()
         temp_keyword = re.sub(r'[-_]?cd\d*$', '', temp_keyword, flags=re.I)
-        temp_keyword = temp_keyword.strip('-_ ')
+        temp_keyword = temp_keyword.strip('-_ ') # 예: "dsvr-039" 또는 "id-16045"
+
+        # 점수 계산 시 사용하기 위해 keyword_processed_parts를 여기서 생성
+        keyword_processed_parts_for_score = temp_keyword.replace("-", " ").replace("_"," ").strip().split(" ")
+        keyword_processed_parts_for_score = [part for part in keyword_processed_parts_for_score if part]
+
 
         # --- 2. "ID 계열" 품번 특별 처리 (DMM 검색 형식으로 변환) ---
-        #    예: "id-16045" (입력) -> "16id00045" (DMM 검색용)
-        #    예: "16id-045" (입력) -> "16id00045" (DMM 검색용)
-
-        # 패턴 1: "id"로 시작하고, 뒤에 "두자리숫자"와 "나머지숫자"가 오는 경우 (예: id-16045, id_16045, id16045)
         match_id_prefix = re.match(r'^id[-_]?(\d{2})(\d+)$', temp_keyword, re.I)
         if match_id_prefix:
-            label_series = match_id_prefix.group(1) # "16"
-            num_part = match_id_prefix.group(2)     # "045"
-            # DMM 검색 형식: "두자리숫자" + "id" + "나머지숫자 (5자리 패딩)"
-            keyword_for_url = label_series + "id" + num_part.zfill(5) # "16id00045"
+            label_series = match_id_prefix.group(1) 
+            num_part = match_id_prefix.group(2)     
+            keyword_for_url = label_series + "id" + num_part.zfill(5) 
         else:
-            # 패턴 2: "두자리숫자"와 "id"로 시작하고, 뒤에 "나머지숫자"가 오는 경우 (예: 16id-045, 16id_045, 16id045)
             match_series_id_prefix = re.match(r'^(\d{2})id[-_]?(\d+)$', temp_keyword, re.I)
             if match_series_id_prefix:
-                label_series = match_series_id_prefix.group(1) # "16"
-                num_part = match_series_id_prefix.group(2)      # "045"
-                # DMM 검색 형식: "두자리숫자" + "id" + "나머지숫자 (5자리 패딩)"
-                keyword_for_url = label_series + "id" + num_part.zfill(5) # "16id00045"
+                label_series = match_series_id_prefix.group(1) 
+                num_part = match_series_id_prefix.group(2)      
+                keyword_for_url = label_series + "id" + num_part.zfill(5)
             else:
-                # --- 3. ID 계열이 아닌 일반 품번 처리 ---
-                keyword_processed_parts = temp_keyword.replace("-", " ").replace("_"," ").strip().split(" ")
-                keyword_processed_parts = [part for part in keyword_processed_parts if part]
+                # --- 3. ID 계열이 아닌 일반 품번 처리 (DMM 검색 형식으로 변환) ---
+                temp_parts_for_url_gen = temp_keyword.replace("-", " ").replace("_"," ").strip().split(" ")
+                temp_parts_for_url_gen = [part for part in temp_parts_for_url_gen if part]
 
-                if len(keyword_processed_parts) == 2: 
-                    # 예: "abc 123" -> "abc00123"
-                    keyword_for_url = keyword_processed_parts[0] + keyword_processed_parts[1].zfill(5)
-                elif len(keyword_processed_parts) == 1:
-                    single_part = keyword_processed_parts[0]
-                    # 예: "abc123" -> "abc00123"
-                    # 예: "abc" (숫자 없음) -> "abc"
+                if len(temp_parts_for_url_gen) == 2: 
+                    keyword_for_url = temp_parts_for_url_gen[0] + temp_parts_for_url_gen[1].zfill(5)
+                elif len(temp_parts_for_url_gen) == 1:
+                    single_part = temp_parts_for_url_gen[0]
                     match_label_num = re.match(r'^([a-z0-9]+?)(\d+)$', single_part, re.I)
                     if match_label_num:
                         label_part = match_label_num.group(1)
@@ -268,8 +263,8 @@ class SiteDmm:
                         keyword_for_url = label_part + num_part.zfill(5)
                     else: 
                         keyword_for_url = single_part
-                else:
-                    keyword_for_url = "".join(keyword_processed_parts)
+                else: # 0개 또는 3개 이상 파트 (일반적이지 않음)
+                    keyword_for_url = "".join(temp_parts_for_url_gen) # 일단 모두 합침
 
         logger.debug(f"DMM Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', priority_label='{priority_label_setting_str}'")
 
@@ -399,9 +394,9 @@ class SiteDmm:
                     logger.debug(f"DMM Search Item: Duplicate code and type, skipping: {item.code} ({item.content_type})")
                     continue
 
-                # 2. item.ui_code 파싱 및 설정 (DMM의 cid로부터 최종 ui_code 생성)
+                # 2. item.ui_code 파싱 및 설정
                 cid_part_for_parse = item.code[len(cls.module_char)+len(cls.site_char):]
-                parsed_ui_code, label_for_score, num_raw_for_score = cls._parse_ui_code_from_cid(cid_part_for_parse, item.content_type)
+                parsed_ui_code, label_for_score_item, num_raw_for_score_item = cls._parse_ui_code_from_cid(cid_part_for_parse, item.content_type)
                 item.ui_code = parsed_ui_code.upper()
 
                 # 제목 접두사 추가
@@ -416,41 +411,53 @@ class SiteDmm:
                 item.title = raw_title_node if raw_title_node and raw_title_node != "Not Found" else item.ui_code
 
                 # 4. item.score 계산
-                # 점수 계산용 코드 생성
-                item_code_for_strict_compare = ""
-                item_ui_code_base_for_score = ""
-                if label_for_score and num_raw_for_score:
-                    item_code_for_strict_compare = label_for_score + num_raw_for_score.zfill(5)
-                    item_ui_code_base_for_score = label_for_score + num_raw_for_score
-                elif item.ui_code:
+                item_code_for_strict_compare = "" # 아이템의 "레이블+5자리숫자" (DMM 검색형식과 유사)
+                item_ui_code_base_for_score = ""  # 아이템의 "레이블+원본숫자" (패딩X)
+                
+                if label_for_score_item and num_raw_for_score_item:
+                    item_code_for_strict_compare = label_for_score_item + num_raw_for_score_item.zfill(5)
+                    item_ui_code_base_for_score = label_for_score_item + num_raw_for_score_item
+                elif item.ui_code: # _parse_ui_code_from_cid가 결과를 못냈을 경우의 폴백
                     cleaned_ui_code_for_score = item.ui_code.replace("-","").lower()
-                    item_code_for_strict_compare = cleaned_ui_code_for_score
-                    item_ui_code_base_for_score = cleaned_ui_code_for_score
-
-                #logger.debug(f"DMM Score Compare: keyword_for_url='{keyword_for_url}', item_code_for_strict_compare='{item_code_for_strict_compare}', item_ui_code_base_for_score='{item_ui_code_base_for_score}'")
-
-                # 점수 부여
+                    # cleaned_ui_code_for_score에서 레이블과 숫자 분리 시도 (간단화)
+                    temp_match_score = re.match(r'([a-z]+)(\d+)', cleaned_ui_code_for_score)
+                    if temp_match_score:
+                        item_code_for_strict_compare = temp_match_score.group(1) + temp_match_score.group(2).zfill(5)
+                        item_ui_code_base_for_score = temp_match_score.group(1) + temp_match_score.group(2)
+                    else:
+                        item_code_for_strict_compare = cleaned_ui_code_for_score
+                        item_ui_code_base_for_score = cleaned_ui_code_for_score
+                
                 current_score_val = 0
-
+                # --- 점수 계산 로직 ---
+                # 1. DMM 검색용 키워드와 아이템의 "레이블+5자리숫자" 형태가 정확히 일치
                 if keyword_for_url and item_code_for_strict_compare and keyword_for_url == item_code_for_strict_compare: 
                     current_score_val = 100
-                elif item_ui_code_base_for_score == keyword_for_url:
-                    current_score_val = 100
+                # 2. 아이템의 "레이블+원본숫자"가 DMM 검색용 키워드와 일치 (패딩 차이 무시)
+                elif item_ui_code_base_for_score == keyword_for_url: # keyword_for_url이 패딩된 형태일 수 있으므로, 이 조건은 위와 중복될 수 있음
+                    current_score_val = 100 # 또는 98 (패딩만 다른 경우)
+                # 3. 앞의 '0'을 제거한 숫자 부분 비교 (더 유연한 비교)
                 elif item_ui_code_base_for_score.replace("0", "") == keyword_for_url.replace("0", ""): 
-                    current_score_val = 80
-                elif keyword_for_url in item_ui_code_base_for_score:
+                    current_score_val = 80 
+                # 4. DMM 검색용 키워드가 아이템의 "레이블+원본숫자"에 포함되는 경우
+                elif keyword_for_url and item_ui_code_base_for_score and keyword_for_url in item_ui_code_base_for_score:
+                    current_score_val = score # score 변수 (초기 60, 점차 감소)
+                # 5. 초기 입력 키워드(temp_keyword)가 하이픈/공백으로 두 부분으로 나뉘고, 각 부분이 아이템 코드에 포함될 때 (이전 keyword_processed 사용 부분 대체)
+                elif len(keyword_processed_parts_for_score) == 2 and \
+                    keyword_processed_parts_for_score[0] in item.code.lower() and \
+                    keyword_processed_parts_for_score[1] in item.code.lower():
                     current_score_val = score
-                elif len(keyword_processed) == 2 and keyword_processed[0] in item.code.lower() and keyword_processed[1] in item.code.lower():
-                    current_score_val = score
-                elif len(keyword_processed) > 0 and \
-                    (keyword_processed[0] in item.code.lower() or \
-                    (len(keyword_processed) > 1 and keyword_processed[1] in item.code.lower())):
+                # 6. 초기 입력 키워드(temp_keyword)의 첫 번째 또는 두 번째 부분이 아이템 코드에 포함될 때
+                elif len(keyword_processed_parts_for_score) > 0 and \
+                    (keyword_processed_parts_for_score[0] in item.code.lower() or \
+                    (len(keyword_processed_parts_for_score) > 1 and keyword_processed_parts_for_score[1] in item.code.lower())):
                     current_score_val = 60
                 else: 
                     current_score_val = 20
+                # --- 점수 계산 로직 수정 끝 ---
 
                 item.score = current_score_val
-                if current_score_val < 100 and score > 20: score -= 5
+                if current_score_val < 100 and score > 20: score -= 5 # 다음 아이템의 기본 점수 감소
 
                 # 5. manual 플래그에 따른 item.image_url 및 item.title_ko 최종 처리
                 if manual:
