@@ -117,16 +117,16 @@ class SiteJav321:
         id_match = re.match(r'^(\d*[A-Z]+ID)', ui_code_upper) 
         if id_match:
             return id_match.group(1)
-        
+
         # 일반적인 경우 (하이픈 앞부분)
         if '-' in ui_code_upper:
             return ui_code_upper.split('-', 1)[0]
-        
+
         # 하이픈 없는 경우 (예: HAGE001 -> HAGE)
         match_alpha_prefix = re.match(r'^([A-Z]+)', ui_code_upper)
         if match_alpha_prefix:
             return match_alpha_prefix.group(1)
-            
+
         return ui_code_upper
 
 
@@ -173,7 +173,7 @@ class SiteJav321:
                     label = parts.group(1).replace("_", "-")
                     num = parts.group(2)
                     num_padded_3 = num.lstrip('0').zfill(3)
-                    
+
                     # API 검색용: 레이블-숫자3자리 (숫자 접두사 제거는 선택)
                     # 예: 1nhdtb-128 -> 1NHDTB-128 또는 NHDTB-128
                     # 여기서는 숫자 접두사 유지 (Jav321 검색 방식에 따라 조정)
@@ -182,7 +182,7 @@ class SiteJav321:
                     # if label_refine_match: label_for_api = label_refine_match.group(1)
 
                     keyword_for_url = f"{label_for_api}-{num_padded_3}" # 예: "nhdtb-001", "abc-123"
-                    
+
                     # 점수 비교용 (DMM 스타일)
                     label_for_compare = label 
                     label_refine_match_compare = re.match(r'^(?:\d*_)?([a-z][a-z0-9]*)$', label, re.I)
@@ -198,7 +198,7 @@ class SiteJav321:
         url = f"{cls.site_base_url}/search"
         headers = SiteUtil.default_headers.copy(); headers['Referer'] = cls.site_base_url + "/"
         res = SiteUtil.get_response(url, proxy_url=proxy_url, headers=headers, post_data={"sn": keyword_for_url})
-        
+
         if res is None:
             logger.error(f"Jav321 Search: Failed to get response for API keyword '{keyword_for_url}'.")
             return []
@@ -218,7 +218,7 @@ class SiteJav321:
 
             parsed_ui_code_item, score_label_item, score_num_raw_item = cls._parse_jav321_ui_code(code_from_url_path)
             item.ui_code = parsed_ui_code_item
-            
+
             base_xpath = "/html/body/div[2]/div[1]/div[1]"
             tree = html.fromstring(res.text)
 

@@ -37,8 +37,8 @@ class SiteJavdb:
         temp_keyword = original_keyword.strip().lower()
         temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
         temp_keyword = temp_keyword.strip(' _-')
-            
-        keyword_for_url = "" # 최종 JavDB URL 파라미터용 키워드
+
+        keyword_for_url = ""
 
         # ID 계열 패턴 우선 처리
         match_id_prefix = re.match(r'^id[-_]?(\d{2})(\d+)$', temp_keyword, re.I)
@@ -55,15 +55,7 @@ class SiteJavdb:
                 num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
                 keyword_for_url = f"{label_series}id-{num_part_padded_3}"
             else:
-                # 일반 품번 처리
-                parts = re.match(r'^([a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?)[-_]?(\d+)$', temp_keyword)
-                if parts:
-                    label = parts.group(1)
-                    num = parts.group(2)
-                    num_padded_3 = num.lstrip('0').zfill(3)
-                    keyword_for_url = f"{label}-{num_padded_3}"
-                else: 
-                    keyword_for_url = temp_keyword
+                keyword_for_url = temp_keyword
 
         search_keyword_for_url = py_urllib_parse.quote_plus(keyword_for_url)
         search_url = f"{cls.site_base_url}/search?q={search_keyword_for_url}&f=all"
