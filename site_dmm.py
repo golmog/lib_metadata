@@ -156,6 +156,7 @@ class SiteDmm:
         label_ui_part = "" 
         score_label_part = "" 
 
+        # ID 계열 처리
         if 'id' in remaining_for_label_parse.lower(): 
             idnn_match = re.match(r'^(.*?)(id)(\d{2})$', remaining_for_label_parse, re.I)
             if idnn_match:
@@ -170,7 +171,21 @@ class SiteDmm:
                     label_chars = nnid_match.group(3).lower()
                     label_ui_part = (label_series + label_chars).upper() 
                     score_label_part = label_series + label_chars      
-                    
+
+        # DSVR 계열 처리
+        if not label_ui_part and 'dsvr' in remaining_for_label_parse.lower():
+            # "13dsvr" 패턴 확인
+            dsvr_match_13 = re.match(r'^1(3dsvr)$', remaining_for_label_parse, re.I)
+            if dsvr_match_13:
+                label_ui_part = dsvr_match_13.group(1).upper()
+                score_label_part = dsvr_match_13.group(1).lower()
+            else:
+                dsvr_general_match = re.match(r'^(dsvr)$', remaining_for_label_parse, re.I)
+                if dsvr_general_match:
+                    label_ui_part = dsvr_general_match.group(1).upper()
+                    score_label_part = dsvr_general_match.group(1).lower()
+
+        # --- 일반 레이블 처리 ---
         if not label_ui_part: 
             general_label_match = re.match(r'^(?:\d+)?([a-z][a-z0-9]*)$', remaining_for_label_parse, re.I)
             if general_label_match:
@@ -413,7 +428,7 @@ class SiteDmm:
                 # 4. item.score 계산
                 item_code_for_strict_compare = "" # 아이템의 "레이블+5자리숫자" (DMM 검색형식과 유사)
                 item_ui_code_base_for_score = ""  # 아이템의 "레이블+원본숫자" (패딩X)
-                
+
                 if label_for_score_item and num_raw_for_score_item:
                     item_code_for_strict_compare = label_for_score_item + num_raw_for_score_item.zfill(5)
                     item_ui_code_base_for_score = label_for_score_item + num_raw_for_score_item
@@ -427,7 +442,7 @@ class SiteDmm:
                     else:
                         item_code_for_strict_compare = cleaned_ui_code_for_score
                         item_ui_code_base_for_score = cleaned_ui_code_for_score
-                
+
                 current_score_val = 0
                 # --- 점수 계산 로직 ---
                 # 1. DMM 검색용 키워드와 아이템의 "레이블+5자리숫자" 형태가 정확히 일치
