@@ -147,7 +147,7 @@ class SiteJav321:
         temp_keyword = temp_keyword.strip('-_ ') # 양끝 구분자 제거
 
         keyword_for_url = ""
-        keyword_for_compare = ""
+        label_for_compare = ""
 
         # ID 계열 패턴 우선 처리 (DMM 스타일 변환 후 Jav321 형식으로 재조정)
         # 예: "id-16045" -> "16id-045", "16id-045" -> "16id-045"
@@ -157,7 +157,7 @@ class SiteJav321:
             num_part = match_id_prefix.group(2)     # "045" 또는 "45" 등
             num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
             keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
-            keyword_for_compare = label_series + "id" + num_part.zfill(5) # 점수용은 DMM 스타일
+            label_for_compare = label_series + "id" + num_part.zfill(5) # 점수용은 DMM 스타일
         else:
             match_series_id_prefix = re.match(r'^(\d{2})id[-_]?(\d+)$', temp_keyword, re.I)
             if match_series_id_prefix:
@@ -165,35 +165,21 @@ class SiteJav321:
                 num_part = match_series_id_prefix.group(2)      # "045" 또는 "45" 등
                 num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
                 keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
-                keyword_for_compare = label_series + "id" + num_part.zfill(5) # 점수용
+                label_for_compare = label_series + "id" + num_part.zfill(5) # 점수용
             else:
                 # 일반 품번 처리
-                parts = re.match(r'^([a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?)[-_]?(\d+)$', temp_keyword)
-                if parts:
-                    label = parts.group(1).replace("_", "-")
-                    num = parts.group(2)
-                    num_padded_3 = num.lstrip('0').zfill(3)
+                label_part = temp_keyword.split('-')[0].upper() if '-' in temp_keyword else temp_keyword.upper()
+                num_part = temp_keyword.split('-')[1] if '-' in temp_keyword else temp_keyword
+                if num_part.isdigit():
+                    num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
+                    num_part_padded_5 = num_part.lstrip('0').zfill(5) if num_part else "00000"
+                    label_for_compare = f"{label_part}{num_part_padded_5}"
+                    keyword_for_url = f"{label_part}-{num_part_padded_3}"
+                else:
+                    keyword_for_url = temp_keyword
+                    label_for_compare = temp_keyword
 
-                    # API 검색용: 레이블-숫자3자리 (숫자 접두사 제거는 선택)
-                    # 예: 1nhdtb-128 -> 1NHDTB-128 또는 NHDTB-128
-                    # 여기서는 숫자 접두사 유지 (Jav321 검색 방식에 따라 조정)
-                    label_for_api = label 
-                    # label_refine_match = re.match(r'^(?:\d*_)?([a-z][a-z0-9]*)$', label, re.I)
-                    # if label_refine_match: label_for_api = label_refine_match.group(1)
-
-                    keyword_for_url = f"{label_for_api}-{num_padded_3}" # 예: "nhdtb-001", "abc-123"
-
-                    # 점수 비교용 (DMM 스타일)
-                    label_for_compare = label 
-                    label_refine_match_compare = re.match(r'^(?:\d*_)?([a-z][a-z0-9]*)$', label, re.I)
-                    if label_refine_match_compare: label_for_compare = label_refine_match_compare.group(1)
-                    keyword_for_compare = label_for_compare + num.zfill(5)
-
-                else: # 숫자 없는 경우 등
-                    keyword_for_url = temp_keyword.replace(" ", "-")
-                    keyword_for_compare = temp_keyword.replace("-", "").replace(" ", "")
-
-        logger.debug(f"Jav321 Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', keyword_for_compare='{keyword_for_compare}'")
+        logger.debug(f"Jav321 Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', label_for_compare='{label_for_compare}'")
 
         url = f"{cls.site_base_url}/search"
         headers = SiteUtil.default_headers.copy(); headers['Referer'] = cls.site_base_url + "/"
@@ -267,7 +253,7 @@ class SiteJav321:
                     item_code_for_compare = item_ui_code_cleaned
 
             # 1. 입력 키워드와 아이템 코드가 "레이블+5자리숫자" 형태로 정확히 일치하는 경우 (DMM 스타일)
-            if keyword_for_compare and item_code_for_compare and keyword_for_compare == item_code_for_compare:
+            if label_for_compare and item_code_for_compare and label_for_compare == item_code_for_compare:
                 current_score_val = 100
             # 2. 입력 키워드(원본형태)와 아이템 ui_code(원본형태)가 대소문자, 하이픈 무시하고 일치
             elif temp_keyword_processed.replace("-","") == item.ui_code.lower().replace("-",""):

@@ -106,9 +106,10 @@ class SiteJavbus:
                 if num_part.isdigit():
                     num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
                     label_for_compare = f"{label_part}-{num_part_padded_3}"
+                    keyword_for_url = label_for_compare
                 else:
+                    keyword_for_url = temp_keyword
                     label_for_compare = temp_keyword
-                keyword_for_url = temp_keyword
 
         logger.debug(f"JavBus Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}'")
 
