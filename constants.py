@@ -334,6 +334,7 @@ AV_STUDIO = {
 }
 
 MGS_LABEL_MAP = {
+    "3DSVR": ["1073DSVR"],
     "AAD": ["224AAD"],
     "AAK": ["052AAK"],
     "AAO": ["052AAO"],
@@ -764,7 +765,6 @@ MGS_LABEL_MAP = {
     "DSMI": ["064DSMI"],
     "DSMJ": ["064DSMJ"],
     "DSTG": ["384DSTG"],
-    "DSVR": ["1073DSVR"],
     "DTBM": ["022DTBM"],
     "DTCVR": ["003DTCVR", "004DTCVR"],
     "DTD": ["224DTD"],
