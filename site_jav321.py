@@ -256,7 +256,7 @@ class SiteJav321:
             if label_for_compare and item_code_for_compare and label_for_compare == item_code_for_compare:
                 current_score_val = 100
             # 2. 입력 키워드(원본형태)와 아이템 ui_code(원본형태)가 대소문자, 하이픈 무시하고 일치
-            elif temp_keyword_processed.replace("-","") == item.ui_code.lower().replace("-",""):
+            elif temp_keyword.replace("-","") == item.ui_code.lower().replace("-",""):
                 current_score_val = 100
             # 3. "레이블+숫자(패딩X)" 형태 비교 (DMM 스타일)
             elif search_label_part_input + search_num_part_input == score_label_item + score_num_raw_item:
