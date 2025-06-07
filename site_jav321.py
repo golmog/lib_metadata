@@ -146,6 +146,9 @@ class SiteJav321:
         temp_keyword = re.sub(r'[-_]?cd\d*$', '', temp_keyword, flags=re.I) # cdN 제거
         temp_keyword = temp_keyword.strip('-_ ') # 양끝 구분자 제거
 
+        label_series = ""
+        label_part = ""
+        num_part = ""
         keyword_for_url = ""
         label_for_compare = ""
 
@@ -178,6 +181,12 @@ class SiteJav321:
                 else:
                     keyword_for_url = temp_keyword
                     label_for_compare = temp_keyword
+
+        if label_series:
+            search_label_part = label_series
+        else:
+            search_label_part = label_part
+        search_num_part = num_part.lstrip('0') if num_part else ""
 
         logger.debug(f"Jav321 Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', label_for_compare='{label_for_compare}'")
 
@@ -259,7 +268,7 @@ class SiteJav321:
             elif temp_keyword.replace("-","") == item.ui_code.lower().replace("-",""):
                 current_score_val = 100
             # 3. "레이블+숫자(패딩X)" 형태 비교 (DMM 스타일)
-            elif search_label_part_input + search_num_part_input == score_label_item + score_num_raw_item:
+            elif search_label_part + search_num_part == score_label_item + score_num_raw_item:
                 current_score_val = 100
             # 4. MGStage 스타일 비교 (입력: ABC-001, 아이템: ABC001)
             elif len(tmps := keyword_for_url.upper().split('-')) == 2 and \
