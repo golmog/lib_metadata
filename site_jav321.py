@@ -152,8 +152,7 @@ class SiteJav321:
         keyword_for_url = ""
         label_for_compare = ""
 
-        # ID 계열 패턴 우선 처리 (DMM 스타일 변환 후 Jav321 형식으로 재조정)
-        # 예: "id-16045" -> "16id-045", "16id-045" -> "16id-045"
+        # ID 계열 패턴 우선 처리
         match_id_prefix = re.match(r'^id[-_]?(\d{2})(\d+)$', temp_keyword, re.I)
         if match_id_prefix:
             label_series = match_id_prefix.group(1) # "16"
@@ -182,12 +181,6 @@ class SiteJav321:
                     keyword_for_url = temp_keyword
                     label_for_compare = temp_keyword
 
-        if label_series:
-            search_label_part = label_series
-        else:
-            search_label_part = label_part
-        search_num_part = num_part.lstrip('0') if num_part else ""
-
         logger.debug(f"Jav321 Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', label_for_compare='{label_for_compare}'")
 
         url = f"{cls.site_base_url}/search"
@@ -208,7 +201,7 @@ class SiteJav321:
         try:
             item = EntityAVSearch(cls.site_name)
 
-            code_from_url_path = res.url.split("/")[-1].upper()
+            code_from_url_path = res.url.split("/")[-1]
             item.code = cls.module_char + cls.site_char + code_from_url_path
 
             parsed_ui_code_item, score_label_item, score_num_raw_item = cls._parse_jav321_ui_code(code_from_url_path)
@@ -250,9 +243,7 @@ class SiteJav321:
             current_score_val = 0
 
             item_code_for_compare = ""
-            if score_label_item and score_num_raw_item:
-                item_code_for_compare = score_label_item + score_num_raw_item.zfill(5)
-            elif item.ui_code:
+            if item.ui_code:
                 item_ui_code_cleaned = item.ui_code.replace("-","").lower()
 
                 temp_match = re.match(r'([a-z]+)(\d+)', item_ui_code_cleaned)
@@ -261,19 +252,11 @@ class SiteJav321:
                 else:
                     item_code_for_compare = item_ui_code_cleaned
 
-            # 1. 입력 키워드와 아이템 코드가 "레이블+5자리숫자" 형태로 정확히 일치하는 경우 (DMM 스타일)
             if label_for_compare and item_code_for_compare and label_for_compare == item_code_for_compare:
                 current_score_val = 100
-            # 2. 입력 키워드(원본형태)와 아이템 ui_code(원본형태)가 대소문자, 하이픈 무시하고 일치
-            elif temp_keyword.replace("-","") == item.ui_code.lower().replace("-",""):
+            elif keyword_for_url.replace("-","") == item.ui_code.lower().replace("-",""):
                 current_score_val = 100
-            # 3. "레이블+숫자(패딩X)" 형태 비교 (DMM 스타일)
-            elif search_label_part + search_num_part == score_label_item + score_num_raw_item:
-                current_score_val = 100
-            # 4. MGStage 스타일 비교 (입력: ABC-001, 아이템: ABC001)
-            elif len(tmps := keyword_for_url.upper().split('-')) == 2 and \
-                tmps[0] == score_label_item.upper() and \
-                str(int(tmps[1])) == score_num_raw_item.lstrip('0'):
+            elif item.ui_code.lower().replace("-", "") == keyword_for_url.lower().replace("-", ""):
                 current_score_val = 100
             else:
                 current_score_val = 60

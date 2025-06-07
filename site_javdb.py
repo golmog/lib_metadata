@@ -43,24 +43,35 @@ class SiteJavdb:
         # ID 계열 패턴 우선 처리
         match_id_prefix = re.match(r'^id[-_]?(\d{2})(\d+)$', temp_keyword, re.I)
         if match_id_prefix:
-            label_series = match_id_prefix.group(1)
-            num_part = match_id_prefix.group(2)
+            label_series = match_id_prefix.group(1) # "16"
+            num_part = match_id_prefix.group(2)     # "045" 또는 "45" 등
             num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
-            keyword_for_url = f"{label_series}id-{num_part_padded_3}" 
+            keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
+            label_for_compare = label_series + "id" + num_part.zfill(5) # 점수용은 DMM 스타일
         else:
             match_series_id_prefix = re.match(r'^(\d{2})id[-_]?(\d+)$', temp_keyword, re.I)
             if match_series_id_prefix:
-                label_series = match_series_id_prefix.group(1)
-                num_part = match_series_id_prefix.group(2)
+                label_series = match_series_id_prefix.group(1) # "16"
+                num_part = match_series_id_prefix.group(2)      # "045" 또는 "45" 등
                 num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
-                keyword_for_url = f"{label_series}id-{num_part_padded_3}"
+                keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
+                label_for_compare = label_series + "id" + num_part.zfill(5) # 점수용
             else:
-                keyword_for_url = temp_keyword
-
+                # 일반 품번 처리
+                label_part = temp_keyword.split('-')[0].upper() if '-' in temp_keyword else temp_keyword.upper()
+                num_part = temp_keyword.split('-')[1] if '-' in temp_keyword else temp_keyword
+                if num_part.isdigit():
+                    num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
+                    num_part_padded_5 = num_part.lstrip('0').zfill(5) if num_part else "00000"
+                    label_for_compare = f"{label_part}{num_part_padded_5}"
+                    keyword_for_url = f"{label_part}-{num_part_padded_3}"
+                else:
+                    keyword_for_url = temp_keyword
+                    label_for_compare = temp_keyword
         search_keyword_for_url = py_urllib_parse.quote_plus(keyword_for_url)
         search_url = f"{cls.site_base_url}/search?q={search_keyword_for_url}&f=all"
 
-        logger.debug(f"JavDB Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}'")
+        logger.debug(f"JavDB Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', label_for_compare='{label_for_compare}'")
 
         custom_cookies_for_search = {'over18': '1'}
         if cf_clearance_cookie_value:
@@ -216,16 +227,28 @@ class SiteJavdb:
                 else: 
                     item.title_ko = item.title
 
-                # 점수 계산 (keyword_lower_norm은 전처리된 검색어)
-                current_score = 0
-                # item.ui_code를 정규화하여 비교
-                item_ui_code_norm = item.ui_code.lower().replace('-', '').replace(' ', '')
-                if keyword_lower_norm == item_ui_code_norm: current_score = 100
-                elif keyword_for_url == item.ui_code.lower(): current_score = 95 # 하이픈 포함 원본 검색어와 일치
-                elif keyword_lower_norm in item_ui_code_norm : current_score = 85 # 정규화된 ui_code에 포함
-                elif item.title and keyword_for_url in item.title.lower(): current_score = 60 # 제목에 포함
-                else: current_score = 20
-                item.score = current_score
+                # --- 점수 계산 ---
+                current_score_val = 0
+
+                item_code_for_compare = ""
+                if item.ui_code:
+                    item_ui_code_cleaned = item.ui_code.replace("-","").lower()
+
+                    temp_match = re.match(r'([a-z]+)(\d+)', item_ui_code_cleaned)
+                    if temp_match:
+                        item_code_for_compare = temp_match.group(1) + temp_match.group(2).zfill(5)
+                    else:
+                        item_code_for_compare = item_ui_code_cleaned
+
+                if label_for_compare and item_code_for_compare and label_for_compare == item_code_for_compare:
+                    current_score_val = 100
+                elif keyword_for_url.replace("-","") == item.ui_code.lower().replace("-",""):
+                    current_score_val = 100
+                elif item.ui_code.lower().replace("-", "") == keyword_for_url.lower().replace("-", ""):
+                    current_score_val = 100
+                else:
+                    current_score_val = 60
+                item.score = current_score_val
 
                 item_dict = item.as_dict()
 

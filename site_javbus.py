@@ -82,36 +82,42 @@ class SiteJavbus:
         temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
         temp_keyword = temp_keyword.strip(' _-')
 
-        keyword_for_url = "" # 최종 JavBus URL 검색용 키워드
+        label_series = ""
+        label_part = ""
+        num_part = ""
+        keyword_for_url = ""
+        label_for_compare = ""
 
         # ID 계열 패턴 우선 처리
         match_id_prefix = re.match(r'^id[-_]?(\d{2})(\d+)$', temp_keyword, re.I)
         if match_id_prefix:
-            label_series = match_id_prefix.group(1)
-            num_part = match_id_prefix.group(2)
+            label_series = match_id_prefix.group(1) # "16"
+            num_part = match_id_prefix.group(2)     # "045" 또는 "45" 등
             num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
             keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
-            label_for_compare = keyword_for_url
+            label_for_compare = label_series + "id" + num_part.zfill(5) # 점수용은 DMM 스타일
         else:
             match_series_id_prefix = re.match(r'^(\d{2})id[-_]?(\d+)$', temp_keyword, re.I)
             if match_series_id_prefix:
-                label_series = match_series_id_prefix.group(1)
-                num_part = match_series_id_prefix.group(2)
+                label_series = match_series_id_prefix.group(1) # "16"
+                num_part = match_series_id_prefix.group(2)      # "045" 또는 "45" 등
                 num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
                 keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
-                label_for_compare = keyword_for_url
+                label_for_compare = label_series + "id" + num_part.zfill(5) # 점수용
             else:
+                # 일반 품번 처리
                 label_part = temp_keyword.split('-')[0].upper() if '-' in temp_keyword else temp_keyword.upper()
                 num_part = temp_keyword.split('-')[1] if '-' in temp_keyword else temp_keyword
                 if num_part.isdigit():
                     num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
-                    label_for_compare = f"{label_part}-{num_part_padded_3}"
-                    keyword_for_url = label_for_compare
+                    num_part_padded_5 = num_part.lstrip('0').zfill(5) if num_part else "00000"
+                    label_for_compare = f"{label_part}{num_part_padded_5}"
+                    keyword_for_url = f"{label_part}-{num_part_padded_3}"
                 else:
                     keyword_for_url = temp_keyword
                     label_for_compare = temp_keyword
 
-        logger.debug(f"JavBus Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}'")
+        logger.debug(f"JavBus Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', label_for_compare='{label_for_compare}'")
 
         url = f"{cls.site_base_url}/search/{keyword_for_url}"
         logger.debug(f"JavBus Search URL: {url}")
@@ -136,17 +142,36 @@ class SiteJavbus:
                 item.desc = "발매일: " + tag[1].text_content().strip()
                 item.year = int(tag[1].text_content().strip()[:4])
                 item.title = node.xpath(".//span/text()")[0].strip()
+
+                # --- 점수 계산 ---
+                current_score_val = 0
+
+                item_code_for_compare = ""
+                if item.ui_code:
+                    item_ui_code_cleaned = item.ui_code.replace("-","").lower()
+
+                    temp_match = re.match(r'([a-z]+)(\d+)', item_ui_code_cleaned)
+                    if temp_match:
+                        item_code_for_compare = temp_match.group(1) + temp_match.group(2).zfill(5)
+                    else:
+                        item_code_for_compare = item_ui_code_cleaned
+
+                if label_for_compare and item_code_for_compare and label_for_compare == item_code_for_compare:
+                    current_score_val = 100
+                elif keyword_for_url.replace("-","") == item.ui_code.lower().replace("-",""):
+                    current_score_val = 100
+                elif item.ui_code.lower().replace("-", "") == keyword_for_url.lower().replace("-", ""):
+                    current_score_val = 100
+                else:
+                    current_score_val = 60
+                item.score = current_score_val
+
                 if manual:
                     _image_mode = "1" if image_mode != "0" else image_mode
                     item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
                     item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 else:
                     item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
-                if label_for_compare.lower() == item.ui_code.lower():
-                    item.score = 100
-                else:
-                    item.score = 60 - (len(ret) * 10)
-                if item.score < 0: item.score = 0
 
                 item_dict = item.as_dict()
 
