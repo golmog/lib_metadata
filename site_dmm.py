@@ -1023,6 +1023,11 @@ class SiteDmm:
                             identifier_parsed = True
                             # logger.debug(f"DMM ({entity.content_type}): 品番 파싱 완료, ui_code_for_image='{ui_code_for_image}'")
 
+                            parsed_label = parsed_ui_code_page.split('-')[0] if '-' in parsed_ui_code_page else parsed_ui_code_page
+                            if entity.tag is None: entity.tag = []
+                            if parsed_label and parsed_label not in entity.tag:
+                                entity.tag.append(parsed_label)
+
                     elif "配信開始日" in key_v:
                         premiered_haishin_v = value_text_all_v.replace("/", "-")
                     elif "収録時間" in key_v: 
