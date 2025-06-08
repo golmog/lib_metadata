@@ -977,8 +977,8 @@ class SiteDmm:
         except Exception as e_gt_info_dmm: logger.exception(f"DMM Info ({current_content_type}): Exc getting detail page: {e_gt_info_dmm}"); return None
 
         entity = EntityMovie(cls.site_name, code); entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
-        entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
-        ui_code_for_image = ""; entity.content_type = current_content_type # 최종 확정된 타입 entity에 저장
+        entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []; entity.tag = []
+        ui_code_for_image = ""; entity.content_type = current_content_type
 
         # === 2. 전체 메타데이터 파싱 (ui_code_for_image 및 entity.title 등 확정) ===
         identifier_parsed = False; is_vr_actual = False # 상세페이지에서 VR 여부 최종 확인
@@ -1128,6 +1128,11 @@ class SiteDmm:
                             entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
                             identifier_parsed = True
                             # logger.debug(f"DMM ({entity.content_type}): 品番 파싱 완료, ui_code_for_image='{ui_code_for_image}'")
+
+                            parsed_label = parsed_ui_code_page.split('-')[0] if '-' in parsed_ui_code_page else parsed_ui_code_page
+                            if entity.tag is None: entity.tag = []
+                            if parsed_label and parsed_label not in entity.tag:
+                                entity.tag.append(parsed_label)
 
                     elif "収録時間" in key_dvd: 
                         m_rt_dvd = re.search(r"(\d+)",value_text_all_dvd)

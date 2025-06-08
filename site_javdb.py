@@ -168,7 +168,7 @@ class SiteJavdb:
                     continue
                 processed_codes_in_search.add(item.code)
 
-                # --- 나머지 정보 파싱 (기존 로직 유지) ---
+                # --- 나머지 정보 파싱 ---
                 full_title_from_attr = node_a_tag.attrib.get('title', '').strip()
                 video_title_node = node_a_tag.xpath('.//div[@class="video-title"]')
 
@@ -333,7 +333,7 @@ class SiteJavdb:
         user_defined_crop_mode = kwargs.get('crop_mode', None)
         use_extras_setting = kwargs.get('use_extras', True)
         cf_clearance_cookie_value = kwargs.get('cf_clearance_cookie', None)
-        crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '') # 레이블 기반 크롭 설정
+        crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '')
 
         custom_cookies = { 'over18': '1', 'locale': 'en' }
         if cf_clearance_cookie_value:
@@ -354,6 +354,7 @@ class SiteJavdb:
                 return None
 
             html_info_text = res_info.text
+
             tree_info = html.fromstring(html_info_text)
             if tree_info is None:
                 logger.warning(f"JavDB Info: Failed to parse detail page HTML for {code}.")
@@ -365,20 +366,14 @@ class SiteJavdb:
             entity.thumb = []
             entity.fanart = []
             entity.extras = []
-            entity.ratings = [] 
+            entity.ratings = []
+            entity.tag = []
 
             # === 1. 메타데이터 파싱 시작 ===
             ui_code_from_panel = ""
             id_panel_block = tree_info.xpath('//div[@class="panel-block" and ./strong[contains(text(),"ID:")]]')
             if id_panel_block:
-                id_label_part_nodes = id_panel_block[0].xpath('./span[@class="value"]/a/text()')
-                id_num_part_nodes = id_panel_block[0].xpath('./span[@class="value"]/text()')
-                ui_code_parts = []
-                if id_label_part_nodes: ui_code_parts.append(id_label_part_nodes[0].strip().upper())
-                for node_text in id_num_part_nodes:
-                    cleaned_text = node_text.strip()
-                    if cleaned_text and cleaned_text != '-': ui_code_parts.append(cleaned_text)
-                ui_code_from_panel = "".join(ui_code_parts).replace(" ", "")
+                ui_code_from_panel = id_panel_block[0].text_content().strip().replace(" ", "")
 
             h2_visible_code = ""
             h2_title_node_check = tree_info.xpath('//h2[@class="title is-4"]/strong[1]/text()')
@@ -386,96 +381,136 @@ class SiteJavdb:
 
             entity.ui_code = ui_code_from_panel if ui_code_from_panel else (h2_visible_code if h2_visible_code else original_code_for_url.upper())
             entity.title = entity.ui_code
-            entity.originaltitle = entity.ui_code 
+            entity.originaltitle = entity.ui_code
             entity.sorttitle = entity.ui_code
-            current_ui_code_for_image = entity.ui_code 
+            current_ui_code_for_image = entity.ui_code
+
+            if '-' in current_ui_code_for_image and current_ui_code_for_image.split('-',1)[0].upper() not in entity.tag:
+                entity.tag.append(current_ui_code_for_image.split('-',1)[0].upper())
 
             actual_raw_title_text = ""
             h2_title_node = tree_info.xpath('//h2[@class="title is-4"]')
             if h2_title_node:
-                current_title_node = h2_title_node[0].xpath('./strong[@class="current-title"]/text()')
-                if current_title_node: actual_raw_title_text = current_title_node[0].strip()
-                elif not actual_raw_title_text: 
-                    all_strong_in_h2 = h2_title_node[0].xpath('./strong')
-                    if len(all_strong_in_h2) > 1 and all_strong_in_h2[1].text:
-                        actual_raw_title_text = all_strong_in_h2[1].text.strip()
+                full_h2_text = h2_title_node[0].text_content().strip()
+                if h2_visible_code and full_h2_text.startswith(h2_visible_code):
+                    actual_raw_title_text = full_h2_text[len(h2_visible_code):].strip()
+                else:
+                    current_title_node = h2_title_node[0].xpath('./strong[@class="current-title"]/text()')
+                    if current_title_node:
+                        actual_raw_title_text = current_title_node[0].strip()
 
             if actual_raw_title_text and actual_raw_title_text != entity.ui_code:
                 entity.tagline = SiteUtil.trans(actual_raw_title_text, do_trans=do_trans, source='ja', target='ko')
             else: 
-                entity.tagline = entity.ui_code 
+                entity.tagline = entity.ui_code
 
-            if entity.ratings is None: entity.ratings = [] 
+            if entity.ratings is None: entity.ratings = []
+
+            # 정보 패널 블록 전체 순회 로직
             panel_blocks_xpath = '//nav[contains(@class, "movie-panel-info")]/div[contains(@class,"panel-block")]'
             panel_blocks = tree_info.xpath(panel_blocks_xpath)
+
+            # 키 매핑: 실제 HTML에 나타날 수 있는 모든 언어의 키를 영어 키로 매핑
+            key_map = {
+                '番號': 'id', 'id': 'id',
+                '日期': 'released date', 'released date': 'released date',
+                '時長': 'duration', 'duration': 'duration',
+                '導演': 'director', 'director': 'director',
+                '片商': 'maker', 'maker': 'maker',
+                '發行': 'publisher', 'publisher': 'publisher',
+                '系列': 'series', 'series': 'series',
+                '評分': 'rating', 'rating': 'rating',
+                '類別': 'tags', 'tags': 'tags',
+                '演員': 'actor(s)', 'actor(s)': 'actor(s)'
+            }
+
             for block in panel_blocks:
                 strong_tag_list = block.xpath('./strong/text()')
                 if not strong_tag_list: continue
-                key = strong_tag_list[0].strip().lower().replace(':', '')
+                
+                # HTML의 키 텍스트를 가져와서 정규화된 영어 키로 변환
+                raw_key = strong_tag_list[0].strip().replace(':', '')
+                key = key_map.get(raw_key, raw_key.lower()) # 매핑에 없으면 소문자로 사용
 
-                value_nodes_a = block.xpath('./span[@class="value"]//a/text()')
-                value_nodes_text = block.xpath('./span[@class="value"]/text()')
-                value_text_combined = ""
-                if value_nodes_a: value_text_combined = " ".join([v.strip() for v in value_nodes_a if v.strip()]).strip()
-                elif value_nodes_text: value_text_combined = " ".join([v.strip() for v in value_nodes_text if v.strip()]).strip()
-                if not value_text_combined: value_text_combined = block.xpath('normalize-space(./span[@class="value"])')
+                value_node = block.xpath('./span[@class="value"]')
+                if not value_node: continue
+                value_node = value_node[0]
 
-                if key == 'id': continue
+                if key == 'id':
+                    # ID는 이미 위에서 처리했으므로 건너뛰기
+                    continue
                 elif key == 'released date':
-                    entity.premiered = value_text_combined
+                    entity.premiered = value_node.xpath('normalize-space()')
                     if entity.premiered:
                         try: entity.year = int(entity.premiered[:4])
                         except ValueError: logger.warning(f"JavDB Info: Year parse error from '{entity.premiered}' for code {code}")
+                
                 elif key == 'duration':
-                    duration_match = re.search(r'(\d+)', value_text_combined)
+                    duration_text = value_node.xpath('normalize-space()')
+                    duration_match = re.search(r'(\d+)', duration_text)
                     if duration_match: entity.runtime = int(duration_match.group(1))
+                
                 elif key == 'rating':
-                    rating_match = re.search(r'([\d\.]+)\s*,\s*by\s*([\d,]+)\s*users', value_text_combined)
+                    rating_text = value_node.xpath('normalize-space()')
+                    # 다국어 지원 정규식 (users|人評價)
+                    rating_match = re.search(r'([\d\.]+)\s*.*?,\s*.*?([\d,]+)\s*(?:users|人評價)', rating_text, re.I)
                     if rating_match:
                         try:
                             rating_val_original = float(rating_match.group(1))
                             votes_count = int(rating_match.group(2).replace(',', ''))
+                            if entity.ratings is None: entity.ratings = []
                             entity.ratings.append(EntityRatings(rating_val_original, max=5, name=cls.site_name, votes=votes_count))
-                        except ValueError:
-                            logger.warning(f"JavDB Info: Could not parse rating from text: '{value_text_combined}' for code {code}")
-                elif key == 'director' and value_text_combined.lower() != 'n/a':
-                    entity.director = SiteUtil.trans(value_text_combined, do_trans=do_trans, source='ja', target='ko')
-                elif key == 'maker' and value_text_combined.lower() != 'n/a':
-                    entity.studio = SiteUtil.trans(value_text_combined, do_trans=do_trans, source='ja', target='ko')
-                elif key == 'series' and value_text_combined.lower() != 'n/a':
-                    if entity.tag is None: entity.tag = []
-                    series_name = SiteUtil.trans(value_text_combined, do_trans=do_trans, source='ja', target='ko')
-                    if series_name not in entity.tag: entity.tag.append(series_name)
-                elif key == 'tags': 
+                        except (ValueError, IndexError):
+                            logger.warning(f"JavDB Info: Could not parse rating from text: '{rating_text}' for code {code}")
+                
+                elif key == 'director':
+                    director_text = value_node.xpath('normalize-space()')
+                    if director_text.lower() not in ['n/a', '暂无', '暫無']:
+                        entity.director = SiteUtil.trans(director_text, do_trans=do_trans, source='ja', target='ko')
+                
+                elif key in ('maker', 'publisher'):
+                    studio_text = value_node.xpath('normalize-space(./a/text())') or value_node.xpath('normalize-space()')
+                    if not entity.studio and studio_text.lower() not in ['n/a', '暂无', '暫無']:
+                        studio_name = studio_text.split(',')[0].strip()
+                        entity.studio = SiteUtil.trans(studio_name, do_trans=do_trans, source='ja', target='ko')
+                
+                elif key == 'series':
+                    series_text = value_node.xpath('normalize-space(./a/text())') or value_node.xpath('normalize-space()')
+                    if series_text.lower() not in ['n/a', '暂无', '暫無']:
+                        if entity.tag is None: entity.tag = []
+                        series_name = SiteUtil.trans(series_text, do_trans=do_trans, source='ja', target='ko')
+                        if series_name not in entity.tag: entity.tag.append(series_name)
+                
+                elif key == 'tags':
                     if entity.genre is None: entity.genre = []
-                    genre_tags_from_panel_links = block.xpath('./span[@class="value"]/a/text()')
+                    genre_tags_from_panel_links = value_node.xpath('./a/text()')
                     for genre_name_raw in genre_tags_from_panel_links:
                         genre_name = genre_name_raw.strip()
                         if genre_name:
+                            # 중국어 태그도 일본어->한국어 번역기를 사용하면 대부분 잘 번역됨
                             trans_genre = SiteUtil.trans(genre_name, do_trans=do_trans, source='ja', target='ko')
                             if trans_genre not in entity.genre: entity.genre.append(trans_genre)
+                
                 elif key == 'actor(s)':
                     if entity.actor is None: entity.actor = []
-                    actor_nodes_with_gender = block.xpath('./span[@class="value"]/a')
+                    actor_nodes_with_gender = value_node.xpath('./a')
                     for actor_node in actor_nodes_with_gender:
                         actor_name_tag = actor_node.xpath('./text()')
-                        gender_symbol_node_strong = actor_node.xpath('./following-sibling::strong[1][@class="symbol female" or @class="symbol male"]')
-                        gender_symbol_node_text = actor_node.xpath('./following-sibling::text()[normalize-space()][1]')
-                        is_female_actor = False
-                        if gender_symbol_node_strong and gender_symbol_node_strong[0].get('class') == 'symbol female': is_female_actor = True
-                        elif gender_symbol_node_text and gender_symbol_node_text[0].strip() == '♀': is_female_actor = True
+                        gender_symbol_node = actor_node.xpath('./following-sibling::strong[1][contains(@class, "symbol")]')
+                        
+                        if gender_symbol_node and 'female' in gender_symbol_node[0].get('class', ''):
+                            if actor_name_tag:
+                                actor_name_original_lang = actor_name_tag[0].strip()
+                                if actor_name_original_lang and actor_name_original_lang.lower() not in ['n/a', '暂无', '暫無']:
+                                    if not any(act.originalname == actor_name_original_lang for act in entity.actor):
+                                        # 배우 이름도 번역
+                                        actor_entity = EntityActor(SiteUtil.trans(actor_name_original_lang, do_trans=do_trans, source='ja', target='ko'))
+                                        actor_entity.originalname = actor_name_original_lang
+                                        entity.actor.append(actor_entity)
 
-                        if actor_name_tag and is_female_actor: 
-                            actor_name_original_lang = actor_name_tag[0].strip()
-                            if actor_name_original_lang and actor_name_original_lang.lower() != 'n/a':
-                                if not any(act.originalname == actor_name_original_lang for act in entity.actor):
-                                    actor_entity = EntityActor(SiteUtil.trans(actor_name_original_lang, do_trans=do_trans, source='ja', target='ko'))
-                                    actor_entity.originalname = actor_name_original_lang
-                                    entity.actor.append(actor_entity)
             if not entity.plot:
                 if entity.tagline and entity.tagline != entity.ui_code:
                     entity.plot = entity.tagline
-            # === 메타데이터 파싱 종료 ===
 
             # === "포스터 예외처리 2 (크롭 모드)"를 위한 레이블 기반 forced_crop_mode_for_this_item 결정 ===
             forced_crop_mode_for_this_item = None
@@ -760,10 +795,11 @@ class SiteJavdb:
                             else: trailer_url_final = "https:" + trailer_url_raw
                         entity.extras.append(EntityExtra("trailer", trailer_title_to_use, "mp4", trailer_url_final))
 
-            # === 8. 최종 entity.code 값 변경 (ui_code 기반) ===
-            if hasattr(entity, 'ui_code') and entity.ui_code and entity.ui_code.lower() != original_code_for_url.lower():
-                new_code_value = cls.module_char + cls.site_char + entity.ui_code.lower() 
-                logger.debug(f"JavDB Info: Changing entity.code from '{entity.code}' to '{new_code_value}' based on ui_code '{entity.ui_code}'")
+            # === 8. 최종 entity.code 값 변경 (품번 기반) ===
+            match_code = entity.code[2:]
+            if current_ui_code_for_image and entity.ui_code.lower() != match_code.lower():
+                new_code_value = cls.module_char + cls.site_char + current_ui_code_for_image.upper() 
+                logger.debug(f"JavDB Info: Changing entity.code from '{entity.code}' to '{new_code_value}' based on ui_code '{current_ui_code_for_image}'")
                 entity.code = new_code_value
 
             logger.info(f"JavDB Info Parsed: final_code='{entity.code}', ui_code='{entity.ui_code}', Thumbs: {len(entity.thumb)}, Fanarts: {len(entity.fanart)}, Extras: {len(entity.extras)}")

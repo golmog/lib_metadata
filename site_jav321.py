@@ -518,10 +518,10 @@ class SiteJav321:
                             formatted_pid = pid_value_cleaned.upper()
                             try: 
                                 label_pid_val, num_pid_val = formatted_pid.split('-', 1)
-                                ui_code_for_image = f"{label_pid_val.upper()}-{num_pid_val}"
+                                ui_code_for_image = f"{label_pid_val.lower()}-{num_pid_val}"
                             except ValueError: 
                                 ui_code_for_image = formatted_pid
-                            entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image 
+                            entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image.upper()
                             entity.ui_code = ui_code_for_image; identifier_parsed = True
                             logger.debug(f"Jav321: Identifier (ui_code_for_image) parsed: {ui_code_for_image}")
                             if entity.tag is None: entity.tag = []

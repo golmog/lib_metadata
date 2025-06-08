@@ -289,7 +289,7 @@ class SiteJavbus:
 
         entity = EntityMovie(cls.site_name, code)
         entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
-        entity.thumb = []; entity.fanart = []
+        entity.thumb = []; entity.fanart = []; entity.tag = []
 
         identifier_parsed_flag = False
         actual_raw_title_text_from_h3 = ""
@@ -323,6 +323,11 @@ class SiteJavbus:
                 entity.sorttitle = entity.ui_code
                 identifier_parsed_flag = bool(parsed_ui_code_value)
                 logger.debug(f"JavBus: ui_code set to: {entity.ui_code}, identifier_parsed: {identifier_parsed_flag}")
+
+                parsed_label = parsed_ui_code_value.split('-')[0] if '-' in parsed_ui_code_value else parsed_ui_code_value
+                if entity.tag is None: entity.tag = []
+                if parsed_label:
+                    entity.tag.append(parsed_label)
 
                 # 2. H3 제목에서 실제 원본 제목 추출 (Tagline 용도)
                 actual_raw_title_text_from_h3 = ""
@@ -372,19 +377,17 @@ class SiteJavbus:
                     elif key_text_general == "長度":
                         try: entity.runtime = int(value_text_general.replace("分鐘", "").strip())
                         except: pass
-                    elif key_text_general == "導演": entity.director = value_text_general
-                    elif key_text_general == "製作商": entity.studio = SiteUtil.trans(value_text_general, do_trans=do_trans, source='ja', target='ko')
+                    elif key_text_general == "導演":
+                        entity.director = value_text_general
+                    elif key_text_general == "製作商":
+                        entity.studio = SiteUtil.trans(value_text_general, do_trans=do_trans, source='ja', target='ko')
                     elif key_text_general == "發行商":
-                        if not entity.studio: entity.studio = SiteUtil.trans(value_text_general, do_trans=do_trans, source='ja', target='ko')
-                        if entity.tag is None: entity.tag = []
-                        trans_label_general = SiteUtil.trans(value_text_general, do_trans=do_trans, source='ja', target='ko')
-                        if trans_label_general and trans_label_general not in entity.tag: entity.tag.append(trans_label_general)
+                        if not entity.studio:
+                            entity.studio = SiteUtil.trans(value_text_general, do_trans=do_trans, source='ja', target='ko')
                     elif key_text_general == "系列":
+                        value_text_general = SiteUtil.trans(value_text_general, do_trans=do_trans, source='ja', target='ko')
                         if entity.tag is None: entity.tag = []
-                        series_name_from_a_general = header_span_general[0].xpath("./following-sibling::a[1]/text()")
-                        series_final_name_general = series_name_from_a_general[0].strip() if series_name_from_a_general else value_text_general
-                        trans_series_general = SiteUtil.trans(series_final_name_general, do_trans=do_trans, source='ja', target='ko')
-                        if trans_series_general and trans_series_general not in entity.tag: entity.tag.append(trans_series_general)
+                        if value_text_general not in entity.tag: entity.tag.append(value_text_general)
 
                 if genre_header_p_node is not None:
                     genre_values_p_node_list = genre_header_p_node.xpath("./following-sibling::p[1]")

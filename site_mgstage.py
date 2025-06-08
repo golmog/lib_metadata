@@ -252,7 +252,7 @@ class SiteMgstageDvd(SiteMgstage):
             return None
 
         entity = EntityMovie(cls.site_name, code)
-        entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
+        entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"; entity.tag = []
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
 
         ui_code_for_image = ""
