@@ -25,7 +25,7 @@ class SiteMgstage:
     }
 
     PTN_SEARCH_PID = re.compile(r"\/product_detail\/(?P<code>.*?)\/")
-    PTN_SEARCH_REAL_NO = re.compile(r"^\d*(?P<real>[a-zA-Z]+[0-9]*)\-(?P<no>\d+)$")
+    PTN_SEARCH_REAL_NO = re.compile(r"^(?P<label_part>\d*[a-zA-Z]+[0-9]*)\-(?P<no>\d+)$")
     PTN_TEXT_SUB = [
         re.compile(r"【(?<=【)(?:MGSだけのおまけ映像付き|期間限定).*(?=】)】(:?\s?\+\d+分\s?)?"),
         re.compile(r"※通常版\+\d+分の特典映像付のスペシャルバージョン！"),
@@ -38,10 +38,13 @@ class SiteMgstage:
         if not ui_code_str or not isinstance(ui_code_str, str): return ""
         
         ui_code_upper = ui_code_str.upper()
-        if '-' in ui_code_upper:
-            return ui_code_upper.split('-', 1)[0]
-        else:
-            return ui_code_upper 
+        label_part = ui_code_upper.split('-', 1)[0]
+
+        # 숫자 접두사 제거 (예: 298GOOD -> GOOD)
+        match = re.match(r"\d*(?P<label>[a-zA-Z].*)", label_part)
+        if match:
+            return match.group('label')
+        return label_part
 
     @classmethod
     def __search(
@@ -53,19 +56,17 @@ class SiteMgstage:
         priority_label_setting_str=""
         ):
 
-        original_keyword = keyword
-        temp_keyword = original_keyword.strip().lower()
-        if temp_keyword:
-            temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
-            temp_keyword = temp_keyword.strip(' _-')
-            keyword_for_url = temp_keyword
+        temp_keyword = keyword.strip().lower()
+        temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
+        keyword_for_url = temp_keyword.strip(' _-')
 
-        module_query = "&type=top"
-
-        url = f"{cls.site_base_url}/search/cSearch.php?search_word={keyword_for_url}&x=0&y=0{module_query}"
+        url = f"{cls.site_base_url}/search/cSearch.php?search_word={keyword_for_url}&x=0&y=0&type=top"
         logger.debug(f"MGStage Search URL: {url}")
 
         tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.headers)
+        if tree is None:
+            logger.warning(f"MGStage Search ({cls.module_char}): Failed to get tree for URL: {url}")
+            return []
         lists = tree.xpath('//div[@class="search_list"]/div/ul/li')
         # logger.debug("mgs search kwd=%s len=%d", keyword_for_url, len(lists))
 
@@ -76,25 +77,19 @@ class SiteMgstage:
                 tag = node.xpath(".//a")[0]
                 href = tag.attrib["href"].lower()
                 match = cls.PTN_SEARCH_PID.search(href)
-                if match:
-                    item.code = cls.module_char + cls.site_char + match.group("code").upper()
-                already_exist = False
-                for exist_item in ret:
-                    if exist_item["code"] == item.code:
-                        already_exist = True
-                        break
-                if already_exist:
+                if not match: continue
+                
+                item.code = cls.module_char + cls.site_char + match.group("code").upper()
+                if any(exist_item["code"] == item.code for exist_item in ret):
                     continue
 
-                tag = node.xpath(".//img")[0]
-                item.image_url = tag.attrib["src"]
-
+                tag_img = node.xpath(".//img")[0]
+                item.image_url = tag_img.attrib["src"]
                 if item.code and item.image_url:
                     cls._ps_url_cache[item.code] = {'ps': item.image_url}
-                    logger.debug(f"MGStage Search ({cls.module_char}): Cached PS for {item.code}: {item.image_url}")
 
-                tag = node.xpath('.//a[@class="title lineclamp"]')[0]
-                title = tag.text_content()
+                tag_title = node.xpath('.//a[@class="title lineclamp"]')[0]
+                title = tag_title.text_content()
                 for ptn in cls.PTN_TEXT_SUB:
                     title = ptn.sub("", title)
                 item.title = item.title_ko = title.strip()
@@ -102,28 +97,28 @@ class SiteMgstage:
                 if manual:
                     _image_mode = "1" if image_mode != "0" else image_mode
                     item.image_url = SiteUtil.process_image_mode(_image_mode, item.image_url, proxy_url=proxy_url)
-                    if do_trans:
-                        item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
+                    item.title_ko = "(현재 인터페이스에서는 번역을 제공하지 않습니다) " + item.title
                 else:
                     item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
 
                 match_ui_code = cls.PTN_SEARCH_REAL_NO.search(item.code[2:])
                 if match_ui_code:
-                    item.ui_code = match_ui_code.group("real") + "-" + match_ui_code.group("no")
+                    item.ui_code = match_ui_code.group("label_part").upper() + "-" + match_ui_code.group("no")
                 else:
                     item.ui_code = item.code[2:]
+                
+                normalized_keyword = keyword_for_url.upper().replace('-', '')
+                normalized_ui_code = item.ui_code.upper().replace('-', '')
 
-                if item.ui_code == keyword_for_url.upper():
+                if normalized_keyword == normalized_ui_code:
                     item.score = 100
-                elif keyword_for_url.upper().replace(item.ui_code, "").isnumeric():
-                    item.score = 100
+                elif normalized_keyword in normalized_ui_code:
+                    item.score = 90
                 else:
-                    item.score = 60 - (len(ret) * 10)
-                if item.score < 0:
-                    item.score = 0
+                    item.score = 70 - (len(ret) * 10)
+                if item.score < 0: item.score = 0
 
                 item_dict = item.as_dict()
-
                 item_dict['is_priority_label_site'] = False
                 item_dict['site_key'] = cls.site_name
 
@@ -133,81 +128,59 @@ class SiteMgstage:
                         priority_labels_set = {lbl.strip().upper() for lbl in priority_label_setting_str.split(',') if lbl.strip()}
                         if label_to_check in priority_labels_set:
                             item_dict['is_priority_label_site'] = True
-                            logger.debug(f"MGStage Search ({cls.module_char}): Item '{item_dict['ui_code']}' matched priority label '{label_to_check}'. Setting is_priority_label_site=True.")
-
                 ret.append(item_dict)
-
-                logger.debug(f"MGStage Search: Type={item_dict['content_type']}, Score={item_dict['score']}, Code={item_dict['code']}, UI Code={item_dict['ui_code']}, Title(KO)='{item_dict['title_ko']}', Priority={item_dict['is_priority_label_site']}")
-            except Exception:
-                logger.exception("개별 검색 결과 처리 중 예외:")
+            except Exception as e:
+                logger.exception(f"개별 검색 결과 처리 중 예외: {e}")
         return sorted(ret, key=lambda k: k["score"], reverse=True)
 
     @classmethod
     def search(cls, keyword, **kwargs):
         ret = {}
         try:
-            original_keyword = keyword
-            temp_keyword = original_keyword.strip().lower()
-            if temp_keyword:
-                temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
-                temp_keyword = temp_keyword.strip(' _-')
+            temp_keyword = keyword.strip().upper()
+            temp_keyword = re.sub(r'[_]?CD\d+$', '', temp_keyword)
+            temp_keyword = temp_keyword.strip(' _-')
 
-            data = []
-            tmps = temp_keyword.upper().replace("-", " ").split()
-
-            # --- __search 호출 시 필요한 kwargs 추출 ---
             do_trans_arg = kwargs.get('do_trans', True)
             proxy_url_arg = kwargs.get('proxy_url', None)
             image_mode_arg = kwargs.get('image_mode', "0")
             manual_arg = kwargs.get('manual', False)
             priority_label_str_arg = kwargs.get('priority_label_setting_str', "")
 
+            data = []
+            tmps = temp_keyword.split('-')
+            
+            search_keyword_for_mgs = temp_keyword
             if len(tmps) == 2:
-                label, code_part = tmps
-                numlabels = MGS_LABEL_MAP.get(label) or []
-                if numlabels:
-                    if label not in numlabels:
-                        numlabels.append(label)
-                    for idx, lab in enumerate(numlabels):
-                        current_code_part = code_part
-                        if codelen := MGS_CODE_LEN.get(lab):
-                            try:
-                                current_code_part = str(int(current_code_part)).zfill(codelen)
-                            except ValueError:
-                                pass
+                input_label, code_part = tmps
+                
+                # MGS_LABEL_MAP에서 변환할 레이블 목록을 가져옴
+                mgs_labels_to_try = MGS_LABEL_MAP.get(input_label)
+                if mgs_labels_to_try:
+                    mgs_label = mgs_labels_to_try[0] # 첫 번째 것을 대표로 사용
+                    if codelen := MGS_CODE_LEN.get(mgs_label):
+                        try: code_part = str(int(code_part)).zfill(codelen)
+                        except ValueError: pass
+                    search_keyword_for_mgs = f"{mgs_label}-{code_part}"
+                    logger.debug(f"MGStage Search: Mapping '{keyword}' to '{search_keyword_for_mgs}' for search.")
+                
+            data = cls.__search(search_keyword_for_mgs,
+                                do_trans=do_trans_arg,
+                                proxy_url=proxy_url_arg,
+                                image_mode=image_mode_arg,
+                                manual=manual_arg,
+                                priority_label_setting_str=priority_label_str_arg)
 
-                        _d = cls.__search(f"{lab}-{current_code_part}",
-                                          do_trans=do_trans_arg,
-                                          proxy_url=proxy_url_arg,
-                                          image_mode=image_mode_arg,
-                                          manual=manual_arg,
-                                          priority_label_setting_str=priority_label_str_arg)
-                        if _d:
-                            data += _d
-                            if idx > 0:
-                                numlabels.remove(lab)
-                                numlabels.insert(0, lab)
-                            break
-            if not data:
-                data = cls.__search(keyword,
-                                    do_trans=do_trans_arg,
-                                    proxy_url=proxy_url_arg,
-                                    image_mode=image_mode_arg,
-                                    manual=manual_arg,
-                                    priority_label_setting_str=priority_label_str_arg)
         except Exception as exception:
             logger.exception("검색 결과 처리 중 예외:")
-            ret["ret"] = "exception"
-            ret["data"] = str(exception)
+            ret["ret"] = "exception"; ret["data"] = str(exception)
         else:
-            ret["ret"] = "success" if data else "no_match"
-            ret["data"] = data
+            ret["ret"] = "success" if data else "no_match"; ret["data"] = data
         return ret
 
 
 class SiteMgstageDvd(SiteMgstage):
     module_char = "C"
-    # search_module_query = "&type=dvd"
 
     @classmethod
     def __img_urls(cls, tree):
@@ -232,13 +205,13 @@ class SiteMgstageDvd(SiteMgstage):
         use_extras=True,
         ps_to_poster_labels_str="", 
         crop_mode_settings_str="",
-        priority_label_setting_str="",
         **kwargs          
     ):
         use_image_server = kwargs.get('use_image_server', False)
         image_server_url = kwargs.get('image_server_url', '').rstrip('/') if use_image_server else ''
         image_server_local_path = kwargs.get('image_server_local_path', '') if use_image_server else ''
         image_path_segment = kwargs.get('url_prefix_segment', 'unknown/unknown')
+        maintain_series_number_labels_str = kwargs.get('maintain_series_number_labels', '')
 
         # logger.debug(f"Image Server Mode Check ({cls.module_char}): image_mode={image_mode}, use_image_server={use_image_server}")
 
@@ -256,31 +229,22 @@ class SiteMgstageDvd(SiteMgstage):
         entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []
 
         ui_code_for_image = ""
-        identifier_parsed = False
-        original_h1_text_for_vr_check = ""
 
         try:
-            logger.debug(f"MGStage ({cls.module_char}): Parsing metadata for {code}...")
             h1_tags = tree.xpath('//h1[@class="tag"]/text()')
             if h1_tags:
-                h1_text_raw_unmodified = h1_tags[0]
-                original_h1_text_for_vr_check = h1_text_raw_unmodified.strip()
-                h1_text_processed = original_h1_text_for_vr_check
-                for ptn in cls.PTN_TEXT_SUB: h1_text_processed = ptn.sub("", h1_text_processed)
-                entity.tagline = SiteUtil.trans(h1_text_processed.strip(), do_trans=do_trans)
-            else: logger.warning(f"MGStage ({cls.module_char}): H1 title tag not found for {code}.")
-
+                h1_text_raw = h1_tags[0]
+                for ptn in cls.PTN_TEXT_SUB: h1_text_raw = ptn.sub("", h1_text_raw)
+                entity.tagline = SiteUtil.trans(h1_text_raw.strip(), do_trans=do_trans)
+            
             info_table_xpath = '//div[@class="detail_data"]//tr'
             tr_nodes = tree.xpath(info_table_xpath)
 
-            temp_shohin_hatsubai = None # DVD용
-            temp_haishin_kaishi = None  # Ama/DVD 공용
-
-            for tr_node in tr_nodes:
-                key_node = tr_node.xpath("./th"); value_node_outer = tr_node.xpath("./td")
-                if not key_node or not value_node_outer: continue
-                key_text = key_node[0].text_content().strip(); value_text_content = value_node_outer[0].text_content().strip()
-                value_node_instance = value_node_outer[0]
+            temp_shohin_hatsubai = None
+            temp_haishin_kaishi = None
+            
+            # ▼ 시리즈 넘버 유지 레이블 목록 세트화
+            maintain_series_labels_set = {lbl.strip().upper() for lbl in maintain_series_number_labels_str.split(',') if lbl.strip()}
 
             for tr_node in tr_nodes:
                 key_node = tr_node.xpath("./th"); value_node_outer = tr_node.xpath("./td")
@@ -289,114 +253,94 @@ class SiteMgstageDvd(SiteMgstage):
                 value_node_instance = value_node_outer[0]
 
                 if "品番" in key_text:
-                    parsed_pid_value = value_text_content
-                    match_品番 = cls.PTN_SEARCH_REAL_NO.match(parsed_pid_value)
-                    formatted_品番_for_assignment = parsed_pid_value
+                    # 1. 페이지의 공식 품번(예: 298GOOD-005)을 그대로 파싱
+                    official_code = value_text_content.strip().upper()
+                    
+                    # 2. 순수 문자 레이블 추출 (예: 298GOOD -> GOOD)
+                    pure_label = cls.get_label_from_ui_code(official_code)
 
-                    if match_品番:
-                        label_original_case = match_品番.group("real")
-                        num_str_original = match_品番.group("no")
-                        num_str_filled = str(int(num_str_original)).zfill(3)
-                        formatted_品番_for_assignment = f"{label_original_case}-{num_str_filled}"
-
-                        if entity.tag is None: entity.tag = []
-                        if label_original_case.upper() not in entity.tag:
-                            entity.tag.append(label_original_case.upper())
-
-                    ui_code_for_image = formatted_品番_for_assignment
-                    entity.title = entity.originaltitle = entity.sorttitle = formatted_品番_for_assignment
-                    entity.ui_code = formatted_品番_for_assignment
-                    identifier_parsed = True
-                    logger.debug(f"MGStage ({cls.module_char}): Identifier parsed as: {ui_code_for_image}")
-                elif "商品発売日" in key_text:
-                    if cls.module_char == 'D': # Ama (SiteMgstageAma)
-                        try:
-                            if not entity.premiered:
-                                entity.premiered = value_text_content.replace("/", "-"); entity.year = int(value_text_content[:4])
-                        except Exception: pass
-                    elif cls.module_char == 'C': # Dvd (SiteMgstageDvd)
-                        if value_text_content and value_text_content.lower() != "dvd未発売" and "----" not in value_text_content:
-                            temp_shohin_hatsubai = value_text_content.replace("/", "-")
-
-                elif "配信開始日" in key_text:
-                    if value_text_content and "----" not in value_text_content:
-                        if cls.module_char == 'D': # Ama
-                            temp_haishin_kaishi = value_text_content.replace("/", "-")
-                        elif cls.module_char == 'C': # Dvd
-                            temp_haishin_kaishi = value_text_content.replace("/", "-")
-                elif "収録時間" in key_text:
-                    try: entity.runtime = int(value_text_content.replace("min", "").strip())
-                    except Exception: logger.warning(f"MGStage ({cls.module_char}): Runtime parse error '{value_text_content}'")
-                elif "出演" in key_text:
-                    entity.actor = []
-                    for actor_a_tag in value_node_instance.xpath("./a/text()"):
-                        actor_name_full = actor_a_tag.strip()
-                        if actor_name_full: entity.actor.append(EntityActor(actor_name_full.split(" ", 1)[0]))
-                elif "監督" in key_text: entity.director = value_text_content 
-                elif "シリーズ" in key_text:
-                    series_a_tag = value_node_instance.xpath("./a/text()")
-                    series_name = series_a_tag[0].strip() if series_a_tag else value_text_content
-                    if entity.tag is None: entity.tag = []
-                    trans_series = SiteUtil.trans(series_name, do_trans=do_trans)
-                    if trans_series and trans_series not in entity.tag: entity.tag.append(trans_series)
-                elif "レーベル" in key_text: 
-                    label_a_tag = value_node_instance.xpath("./a/text()")
-                    studio_name = label_a_tag[0].strip() if label_a_tag else value_text_content
-                    entity.studio = SiteUtil.trans(studio_name, do_trans=do_trans) if do_trans else studio_name
-                elif "ジャンル" in key_text:
-                    entity.genre = []
-                    for genre_a_tag in value_node_instance.xpath("./a"):
-                        genre_text_ja = genre_a_tag.text_content().strip()
-                        if "MGSだけのおまけ映像付き" in genre_text_ja or not genre_text_ja or genre_text_ja in SiteUtil.av_genre_ignore_ja: continue
-                        if genre_text_ja in SiteUtil.av_genre: entity.genre.append(SiteUtil.av_genre[genre_text_ja])
+                    # 3. 설정에 따라 최종 ui_code 결정
+                    if pure_label in maintain_series_labels_set:
+                        # 시리즈 넘버 유지
+                        final_ui_code = official_code
+                    else:
+                        # 시리즈 넘버 제거
+                        match = cls.PTN_SEARCH_REAL_NO.search(official_code)
+                        if match:
+                            # 정규식으로 순수 레이블과 번호 재조합
+                            final_ui_code = f"{pure_label}-{match.group('no')}"
                         else:
-                            genre_ko = SiteUtil.trans(genre_text_ja, do_trans=do_trans).replace(" ", "")
-                            if genre_ko not in SiteUtil.av_genre_ignore_ko: entity.genre.append(genre_ko)
+                            # 패턴이 안맞으면 공식 품번 그대로 사용
+                            final_ui_code = official_code
+                    
+                    ui_code_for_image = final_ui_code
+                    entity.ui_code = final_ui_code
+                    entity.title = entity.originaltitle = entity.sorttitle = final_ui_code
 
-            # 날짜 처리 (클래스별 우선순위 적용)
-            if cls.module_char == 'D':
-                if temp_haishin_kaishi:
-                    entity.premiered = temp_haishin_kaishi
-                # entity.premiered가 이미 상품출시일로 채워졌을 수도 있으므로, 배신일이 있으면 덮어씀
-                if entity.premiered:
-                    try: entity.year = int(entity.premiered[:4])
-                    except Exception: entity.year = 0
-                else: # 상품출시일도, 배신일도 없었다면
-                    entity.year = 0
-            elif cls.module_char == 'C': # Dvd는 상품발매일 우선
-                if temp_shohin_hatsubai:
-                    entity.premiered = temp_shohin_hatsubai
-                elif temp_haishin_kaishi: # 상품발매일 없으면 배신일 사용
-                    entity.premiered = temp_haishin_kaishi
+                    label_for_tag = official_code.split('-', 1)[0]
+                    if entity.tag is None: entity.tag = []
+                    if label_for_tag and label_for_tag not in entity.tag:
+                        entity.tag.append(label_for_tag)
+                    
+                    logger.debug(f"MGStage ({cls.module_char}): Official Code='{official_code}', Pure Label='{pure_label}', Final UI Code='{final_ui_code}' (Maintain Series: {pure_label in maintain_series_labels_set})")
 
-                if entity.premiered:
-                    try: entity.year = int(entity.premiered[:4])
-                    except Exception: entity.year = 0
-                else:
-                    entity.year = 0
-                    logger.warning(f"MGStage ({cls.module_char}): Premiered date could not be determined for {code}.")
+                elif "商品発売日" in key_text:
+                    if "----" not in value_text_content:
+                        temp_shohin_hatsubai = value_text_content.replace("/", "-")
+                elif "配信開始日" in key_text:
+                    if "----" not in value_text_content:
+                        temp_haishin_kaishi = value_text_content.replace("/", "-")
+                elif "収録時間" in key_text:
+                    rt_match = re.search(r'(\d+)', value_text_content)
+                    if rt_match: entity.runtime = int(rt_match.group(1))
+                elif "出演" in key_text:
+                    entity.actor = [EntityActor(act.strip().split(" ", 1)[0]) for act in value_node_instance.xpath("./a/text()") if act.strip()]
+                elif "監督" in key_text: 
+                    entity.director = value_text_content.strip() or None
+                elif "シリーズ" in key_text:
+                    s_name = (value_node_instance.xpath("./a/text()")[0] if value_node_instance.xpath("./a/text()") else value_text_content).strip()
+                    if s_name:
+                        trans_s = SiteUtil.trans(s_name, do_trans=do_trans)
+                        if trans_s and trans_s not in (entity.tag or []): 
+                            if entity.tag is None: entity.tag = []
+                            entity.tag.append(trans_s)
+                elif "レーベル" in key_text: 
+                    studio_name = (value_node_instance.xpath("./a/text()")[0] if value_node_instance.xpath("./a/text()") else value_text_content).strip()
+                    if studio_name: entity.studio = SiteUtil.trans(studio_name, do_trans=do_trans) if do_trans else studio_name
+                elif "ジャンル" in key_text:
+                    if entity.genre is None: entity.genre = []
+                    for g_tag in value_node_instance.xpath("./a"):
+                        g_ja = g_tag.text_content().strip()
+                        if "MGSだけのおまけ映像付き" in g_ja or not g_ja or g_ja in SiteUtil.av_genre_ignore_ja: continue
+                        if g_ja in SiteUtil.av_genre:
+                            g_ko = SiteUtil.av_genre[g_ja]
+                            if g_ko not in entity.genre: entity.genre.append(g_ko)
+                        else:
+                            g_ko = SiteUtil.trans(g_ja, do_trans=do_trans).replace(" ", "")
+                            if g_ko not in SiteUtil.av_genre_ignore_ko and g_ko not in entity.genre: entity.genre.append(g_ko)
 
-            rating_p_detail_nodes = tree.xpath('//div[@class="user_review_head"]/p[@class="detail"]/text()')
-            if rating_p_detail_nodes:
-                match_rating_info = cls.PTN_RATING.search(rating_p_detail_nodes[0])
-                if match_rating_info:
+            entity.premiered = temp_shohin_hatsubai or temp_haishin_kaishi
+            if entity.premiered:
+                try: entity.year = int(entity.premiered[:4])
+                except (ValueError, IndexError): pass
+            
+            rating_nodes = tree.xpath('//div[@class="user_review_head"]/p[@class="detail"]/text()')
+            if rating_nodes:
+                rating_match = cls.PTN_RATING.search(rating_nodes[0])
+                if rating_match:
                     try:
-                        rating_val = float(match_rating_info.group("rating"))
-                        votes_count = int(match_rating_info.group("vote"))
-                        entity.ratings = [EntityRatings(rating_val, max=5, name=cls.site_name, votes=votes_count)]
-                    except Exception: logger.warning(f"MGStage ({cls.module_char}): Failed to parse rating values for {code}.")
-
-            if not identifier_parsed:
-                logger.error(f"MGStage ({cls.module_char}): CRITICAL - Failed to parse identifier for {code}.")
-                ui_code_for_image = code[2:].upper().replace("_", "-") 
-                entity.title = entity.originaltitle = entity.sorttitle = ui_code_for_image
-                entity.ui_code = ui_code_for_image
-                logger.warning(f"MGStage ({cls.module_char}): Using fallback identifier: {ui_code_for_image}")
-        except Exception as e_meta_main:
-            logger.exception(f"MGStage ({cls.module_char}): Major error during metadata parsing for {code}: {e_meta_main}")
+                        rating_val = float(rating_match.group("rating"))
+                        votes = int(rating_match.group("vote"))
+                        entity.ratings = [EntityRatings(rating_val, max=5, name=cls.site_name, votes=votes)]
+                    except Exception: pass
+            
             if not ui_code_for_image:
-                logger.error(f"MGStage ({cls.module_char}): Returning None due to critical metadata parsing failure (no identifier).")
+                logger.error(f"MGStage ({cls.module_char}): CRITICAL - Failed to parse identifier for {code}.")
                 return None
+
+        except Exception as e_meta:
+            logger.exception(f"MGStage ({cls.module_char}): Major error during metadata parsing: {e_meta}")
+            return None
 
         label_from_ui_code_for_settings = ""
         if hasattr(entity, 'ui_code') and entity.ui_code:

@@ -27,17 +27,17 @@ class SiteJav321:
 
         processed_cid = code_str.lower().strip() # 초기 공백 제거 및 소문자화
 
-        # 1. DMM 스타일 접두사 제거 (h_, n_ 및 h_N, n_N)
+        # DMM 스타일 접두사 제거 (h_, n_ 및 h_N, n_N)
         prefix_match = re.match(r'^([hn]_\d?)(.*)', processed_cid)
         if prefix_match:
             processed_cid = prefix_match.group(2).strip(' _-')
 
-        #suffix_strip_match = re.match(r'^(.*\d)([a-z]+)$', processed_cid) # 숫자 뒤에 오는 알파벳 접미사
-        #if suffix_strip_match:
-        #    if suffix_strip_match.group(1)[-1].isdigit():
-        #         processed_cid = suffix_strip_match.group(1)
+        suffix_strip_match = re.match(r'^(.*\d)([a-z]+)$', processed_cid)
+        if suffix_strip_match:
+            if suffix_strip_match.group(1)[-1].isdigit():
+                processed_cid = suffix_strip_match.group(1)
 
-        # 3. 추가적인 앞뒤 구분자(하이픈, 언더스코어, 공백) 최종 제거
+        # 추가적인 앞뒤 구분자(하이픈, 언더스코어, 공백) 최종 제거
         processed_cid = processed_cid.strip('-_ ')
 
         label_num_ui_final = ""

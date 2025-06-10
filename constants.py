@@ -335,6 +335,7 @@ AV_STUDIO = {
 
 MGS_LABEL_MAP = {
     "3DSVR": ["1073DSVR"],
+    "133GOOD": ["298GOOD"],
     "AAD": ["224AAD"],
     "AAK": ["052AAK"],
     "AAO": ["052AAO"],
