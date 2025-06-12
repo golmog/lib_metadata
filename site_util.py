@@ -763,7 +763,7 @@ class SiteUtil:
                         else: # 숫자 제거 후에도 알파벳으로 시작하지 않거나 비어있는 극히 예외적인 경우
                             first_char_of_label_folder = 'ETC'
                             logger.warning(f"save_image_to_server_path: Label '{label_part_input}' after stripping digits resulted in '{label_part_for_folder}'. Using 'ETC'.")
-                        logger.debug(f"save_image_to_server_path: Label '{label_part_input}' (not starting with '741'). Stripped to '{label_part_for_folder}'. Using '{first_char_of_label_folder}/{label_part_for_folder}'.")
+                        # logger.debug(f"save_image_to_server_path: Label '{label_part_input}' (not starting with '741'). Stripped to '{label_part_for_folder}'. Using '{first_char_of_label_folder}/{label_part_for_folder}'.")
 
                     else:
                         # 알파벳으로 시작하는 부분을 찾지 못한 경우 (예: 레이블 전체가 숫자이거나, 특수문자로 시작 등)
@@ -775,7 +775,7 @@ class SiteUtil:
                         else: # 비어있거나 기타 특수문자
                             first_char_of_label_folder = 'ETC'
                         label_part_for_folder = label_part_input # 원본 레이블 사용
-                        logger.warning(f"save_image_to_server_path: Label '{label_part_input}' (not starting with '741') did not match leading digits pattern. Using '{first_char_of_label_folder}/{label_part_for_folder}'.")
+                        # logger.warning(f"save_image_to_server_path: Label '{label_part_input}' (not starting with '741') did not match leading digits pattern. Using '{first_char_of_label_folder}/{label_part_for_folder}'.")
 
 
                 # 폴더 경로 리스트에 추가

@@ -131,7 +131,14 @@ class SiteMgstage:
                 ret.append(item_dict)
             except Exception as e:
                 logger.exception(f"개별 검색 결과 처리 중 예외: {e}")
-        return sorted(ret, key=lambda k: k["score"], reverse=True)
+
+        sorted_result = sorted(ret, key=lambda k: k.get("score", 0), reverse=True)
+        if sorted_result:
+            log_count = min(len(sorted_result), 5)
+            logger.debug(f"MGS Search: Top {log_count} results for '{keyword_for_url}':")
+            for idx, item_log_final in enumerate(sorted_result[:log_count]):
+                logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
+        return sorted_result
 
     @classmethod
     def search(cls, keyword, **kwargs):
@@ -273,7 +280,7 @@ class SiteMgstageDvd(SiteMgstage):
                             # 패턴이 안맞으면 공식 품번 그대로 사용
                             final_ui_code = official_code
                     
-                    ui_code_for_image = final_ui_code
+                    ui_code_for_image = final_ui_code.lower()
                     entity.ui_code = final_ui_code
                     entity.title = entity.originaltitle = entity.sorttitle = final_ui_code
 
@@ -344,12 +351,12 @@ class SiteMgstageDvd(SiteMgstage):
 
         label_from_ui_code_for_settings = ""
         if hasattr(entity, 'ui_code') and entity.ui_code:
-            ui_code_for_image = entity.ui_code
+            ui_code_for_image = entity.ui_code.lower()
             label_from_ui_code_for_settings = cls.get_label_from_ui_code(entity.ui_code)
             logger.debug(f"[{cls.site_name} Info] Extracted label for settings: '{label_from_ui_code_for_settings}' from ui_code '{entity.ui_code}'")
         else:
             logger.warning(f"[{cls.site_name} Info] entity.ui_code not found after parsing. Using fallback for image filenames.")
-            ui_code_for_image = code[len(cls.module_char)+len(cls.site_char):].upper().replace("_", "-")
+            ui_code_for_image = code[len(cls.module_char)+len(cls.site_char):].replace("_", "-")
 
         apply_ps_to_poster_for_this_item = False
         forced_crop_mode_for_this_item = None

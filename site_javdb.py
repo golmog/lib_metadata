@@ -278,8 +278,13 @@ class SiteJavdb:
                 logger.error(traceback.format_exc())
                 # 개별 아이템 파싱 실패 시 해당 아이템은 건너뛰고 계속 진행
         
-        # 루프 종료 후 정렬된 결과 반환
-        return sorted(final_search_results_list, key=lambda k: k.get("score", 0), reverse=True)
+        sorted_result = sorted(final_search_results_list, key=lambda k: k.get("score", 0), reverse=True)
+        if sorted_result:
+            log_count = min(len(sorted_result), 5)
+            logger.debug(f"JavBus Search: Top {log_count} results for '{keyword_for_url}':")
+            for idx, item_log_final in enumerate(sorted_result[:log_count]):
+                logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
+        return sorted_result
 
 
     @classmethod
@@ -334,6 +339,8 @@ class SiteJavdb:
         use_extras_setting = kwargs.get('use_extras', True)
         cf_clearance_cookie_value = kwargs.get('cf_clearance_cookie', None)
         crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '')
+        original_keyword = kwargs.get('original_keyword', None)
+        maintain_series_number_labels_str = kwargs.get('maintain_series_number_labels', '')
 
         custom_cookies = { 'over18': '1', 'locale': 'en' }
         if cf_clearance_cookie_value:
@@ -363,27 +370,46 @@ class SiteJavdb:
             entity = EntityMovie(cls.site_name, code)
             entity.country = ['일본'] 
             entity.mpaa = '청소년 관람불가'
-            entity.thumb = []
-            entity.fanart = []
-            entity.extras = []
-            entity.ratings = []
-            entity.tag = []
+            entity.thumb = []; entity.fanart = []; entity.extras = []; entity.ratings = []; entity.tag = []
 
-            # === 1. 메타데이터 파싱 시작 ===
-            ui_code_from_panel = ""
+            # 1. 페이지의 "ID" 필드에서 표준 ui_code 파싱
             id_panel_block = tree_info.xpath('//div[@class="panel-block" and ./strong[contains(text(),"ID:")]]')
-            if id_panel_block:
-                ui_code_from_panel = id_panel_block[0].text_content().strip().replace(" ", "")
+            base_ui_code = id_panel_block[0].strip().upper() if id_panel_block else ""
+            if not base_ui_code:
+                h2_visible_code_node = tree_info.xpath('//h2[@class="title is-4"]/strong[1]/text()')
+                if h2_visible_code_node:
+                    base_ui_code = h2_visible_code_node[0].strip().upper()
+            
+            # --- 시리즈 넘버 유지 로직 ---
+            final_ui_code = base_ui_code # 기본값
+            maintain_labels_set = {label.strip().upper() for label in maintain_series_number_labels_str.split(',') if label}
 
-            h2_visible_code = ""
-            h2_title_node_check = tree_info.xpath('//h2[@class="title is-4"]/strong[1]/text()')
-            if h2_title_node_check: h2_visible_code = h2_title_node_check[0].strip().upper()
+            logger.debug(f"JavDB Info: final_ui_code = {final_ui_code}, original_keyword = {original_keyword}, base_ui_code = {base_ui_code}, maintain_labels_set = {maintain_labels_set}")
 
-            entity.ui_code = ui_code_from_panel if ui_code_from_panel else (h2_visible_code if h2_visible_code else original_code_for_url.upper())
-            entity.title = entity.ui_code
-            entity.originaltitle = entity.ui_code
-            entity.sorttitle = entity.ui_code
-            current_ui_code_for_image = entity.ui_code
+            if original_keyword and base_ui_code and maintain_labels_set:
+                keyword_match = re.match(r'^(\d+)?([A-Z]+)-?(\d+)', original_keyword.upper())
+                javdb_match = re.match(r'^([A-Z]+)-(\d+)', base_ui_code)
+
+                logger.debug(f"JavDB Info: keyword_match = {keyword_match}, javdb_match = {javdb_match}")
+
+                if keyword_match and javdb_match:
+                    kw_prefix, kw_label, kw_num = keyword_match.groups()
+                    jb_label, jb_num = javdb_match.groups()
+                    
+                    logger.debug(f"JavDB Info: Keyword Parts: prefix={kw_prefix}, label={kw_label}, num={kw_num}")
+                    logger.debug(f"JavDB Info: JavDB Parts: label={jb_label}, num={jb_num}")
+
+                    if (kw_prefix and 
+                        kw_label == jb_label and 
+                        kw_num.lstrip('0') == jb_num.lstrip('0') and 
+                        jb_label in maintain_labels_set):
+                        
+                        final_ui_code = f"{kw_prefix}{base_ui_code}"
+                        logger.debug(f"JavDB Info: Applied series number '{kw_prefix}' from keyword. New ui_code: {final_ui_code}")
+
+            entity.ui_code = final_ui_code if final_ui_code else original_code_for_url.upper()
+            entity.title = entity.originaltitle = entity.sorttitle = entity.ui_code
+            current_ui_code_for_image = entity.ui_code.lower()
 
             if '-' in current_ui_code_for_image and current_ui_code_for_image.split('-',1)[0].upper() not in entity.tag:
                 entity.tag.append(current_ui_code_for_image.split('-',1)[0].upper())
@@ -392,8 +418,9 @@ class SiteJavdb:
             h2_title_node = tree_info.xpath('//h2[@class="title is-4"]')
             if h2_title_node:
                 full_h2_text = h2_title_node[0].text_content().strip()
-                if h2_visible_code and full_h2_text.startswith(h2_visible_code):
-                    actual_raw_title_text = full_h2_text[len(h2_visible_code):].strip()
+                visible_code_in_h2 = tree_info.xpath('string(//h2[@class="title is-4"]/strong[1])').strip().upper()
+                if visible_code_in_h2 and full_h2_text.startswith(visible_code_in_h2):
+                    actual_raw_title_text = full_h2_text[len(visible_code_in_h2):].strip()
                 else:
                     current_title_node = h2_title_node[0].xpath('./strong[@class="current-title"]/text()')
                     if current_title_node:
@@ -595,7 +622,7 @@ class SiteJavdb:
                 normalized_title_for_vr_check = title_to_check_for_vr.upper()
                 if normalized_title_for_vr_check.startswith("[VR]") or normalized_title_for_vr_check.startswith("【VR】"):
                     is_vr_content = True
-            logger.debug(f"JavDB Info: Is VR content? {is_vr_content} (Checked title: '{title_to_check_for_vr}')")
+            # logger.debug(f"JavDB Info: Is VR content? {is_vr_content} (Checked title: '{title_to_check_for_vr}')")
 
             # 3. 유효한 PL URL 확정 (플레이스홀더 검사)
             valid_pl_url = None
@@ -795,12 +822,7 @@ class SiteJavdb:
                             else: trailer_url_final = "https:" + trailer_url_raw
                         entity.extras.append(EntityExtra("trailer", trailer_title_to_use, "mp4", trailer_url_final))
 
-            # === 8. 최종 entity.code 값 변경 (품번 기반) ===
-            match_code = entity.code[2:]
-            if current_ui_code_for_image and entity.ui_code.lower() != match_code.lower():
-                new_code_value = cls.module_char + cls.site_char + current_ui_code_for_image.upper() 
-                logger.debug(f"JavDB Info: Changing entity.code from '{entity.code}' to '{new_code_value}' based on ui_code '{current_ui_code_for_image}'")
-                entity.code = new_code_value
+            entity.code = cls.module_char + cls.site_char + original_code_for_url
 
             logger.info(f"JavDB Info Parsed: final_code='{entity.code}', ui_code='{entity.ui_code}', Thumbs: {len(entity.thumb)}, Fanarts: {len(entity.fanart)}, Extras: {len(entity.extras)}")
             return entity

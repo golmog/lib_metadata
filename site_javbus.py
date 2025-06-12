@@ -65,6 +65,7 @@ class SiteJavbus:
             logger.exception(f"SiteJavbus._get_javbus_page_tree: Exception while getting or parsing page for URL='{page_url}': {e}")
             return None
 
+
     @classmethod
     def __search(
         cls,
@@ -82,49 +83,21 @@ class SiteJavbus:
         temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
         temp_keyword = temp_keyword.strip(' _-')
 
-        label_series = ""
-        label_part = ""
-        num_part = ""
-        keyword_for_url = ""
         label_for_compare = ""
-
-        # ID 계열 패턴 우선 처리
-        match_id_prefix = re.match(r'^id[-_]?(\d{2})(\d+)$', temp_keyword, re.I)
-        if match_id_prefix:
-            label_series = match_id_prefix.group(1) # "16"
-            num_part = match_id_prefix.group(2)     # "045" 또는 "45" 등
-            num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
-            keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
-            label_for_compare = label_series + "id" + num_part.zfill(5) # 점수용은 DMM 스타일
+        match_series_num = re.match(r'^([a-zA-Z0-9]+)-?(\d+)$', temp_keyword)
+        if match_series_num:
+            label_part = match_series_num.group(1).lower()
+            num_part = match_series_num.group(2)
+            label_for_compare = f"{label_part}{num_part.zfill(5)}"
         else:
-            match_series_id_prefix = re.match(r'^(\d{2})id[-_]?(\d+)$', temp_keyword, re.I)
-            if match_series_id_prefix:
-                label_series = match_series_id_prefix.group(1) # "16"
-                num_part = match_series_id_prefix.group(2)      # "045" 또는 "45" 등
-                num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
-                keyword_for_url = f"{label_series}id-{num_part_padded_3}" # 예: "16id-045"
-                label_for_compare = label_series + "id" + num_part.zfill(5) # 점수용
-            else:
-                # 일반 품번 처리
-                label_part = temp_keyword.split('-')[0].upper() if '-' in temp_keyword else temp_keyword.upper()
-                num_part = temp_keyword.split('-')[1] if '-' in temp_keyword else temp_keyword
-                if num_part.isdigit():
-                    num_part_padded_3 = num_part.lstrip('0').zfill(3) if num_part else "000"
-                    num_part_padded_5 = num_part.lstrip('0').zfill(5) if num_part else "00000"
-                    label_for_compare = f"{label_part}{num_part_padded_5}"
-                    keyword_for_url = f"{label_part}-{num_part_padded_3}"
-                else:
-                    keyword_for_url = temp_keyword
-                    label_for_compare = temp_keyword
-
-        logger.debug(f"JavBus Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', label_for_compare='{label_for_compare}'")
+            label_for_compare = temp_keyword.replace('-', '')
+        
+        keyword_for_url = temp_keyword
+        logger.debug(f"JavBus Search: original='{original_keyword}', url_kw='{keyword_for_url}', compare_kw='{label_for_compare}'")
 
         url = f"{cls.site_base_url}/search/{keyword_for_url}"
-        logger.debug(f"JavBus Search URL: {url}")
-
         tree = cls._get_javbus_page_tree(url, proxy_url=proxy_url, cf_clearance_cookie=cf_clearance_cookie)
         if tree is None:
-            logger.warning(f"SiteJavbus.__search: _get_javbus_page_tree returned None for URL: {url}. Search will likely fail or return empty.")
             return []
 
         ret = []
@@ -133,38 +106,32 @@ class SiteJavbus:
                 item = EntityAVSearch(cls.site_name)
                 item.image_url = cls.__fix_url(node.xpath(".//img/@src")[0])
                 tag = node.xpath(".//date")
-                ui_code = tag[0].text_content().strip()
-                try:
-                    label, num = ui_code.split("-")
-                    item.ui_code = f"{label}-{num.lstrip('0').zfill(3)}"
-                except Exception: item.ui_code = ui_code
-                item.code = cls.module_char + cls.site_char + node.attrib["href"].split("/")[-1]
-                item.desc = "발매일: " + tag[1].text_content().strip()
-                item.year = int(tag[1].text_content().strip()[:4])
-                item.title = node.xpath(".//span/text()")[0].strip()
+                item.ui_code = tag[0].text_content().strip()
+                
+                code_from_url = node.attrib["href"].split("/")[-1]
+                item.code = cls.module_char + cls.site_char + code_from_url
 
-                # --- 점수 계산 ---
-                current_score_val = 0
+                item.desc = "발매일: " + tag[1].text_content().strip()
+                item.year = int(item.desc[-10:-6])
+                item.title = node.xpath(".//span/text()")[0].strip()
 
                 item_code_for_compare = ""
                 if item.ui_code:
-                    item_ui_code_cleaned = item.ui_code.replace("-","").lower()
-
-                    temp_match = re.match(r'([a-z]+)(\d+)', item_ui_code_cleaned)
-                    if temp_match:
-                        item_code_for_compare = temp_match.group(1) + temp_match.group(2).zfill(5)
+                    item_ui_code_cleaned = item.ui_code.lower().replace("-", "")
+                    match_item_num = re.match(r'^([a-z0-9]+)(\d+)$', item_ui_code_cleaned)
+                    if match_item_num:
+                        item_label_part = match_item_num.group(1)
+                        item_num_part = match_item_num.group(2)
+                        item_code_for_compare = f"{item_label_part}{item_num_part.zfill(5)}"
                     else:
                         item_code_for_compare = item_ui_code_cleaned
-
-                if label_for_compare and item_code_for_compare and label_for_compare == item_code_for_compare:
-                    current_score_val = 100
-                elif keyword_for_url.replace("-","") == item.ui_code.lower().replace("-",""):
-                    current_score_val = 100
-                elif item.ui_code.lower().replace("-", "") == keyword_for_url.lower().replace("-", ""):
-                    current_score_val = 100
+                
+                if label_for_compare == item_code_for_compare:
+                    item.score = 100
+                elif re.match(r'^\d+[a-zA-Z]+-?\d+$', temp_keyword):
+                    item.score = 90
                 else:
-                    current_score_val = 60
-                item.score = current_score_val
+                    item.score = 60
 
                 if manual:
                     _image_mode = "1" if image_mode != "0" else image_mode
@@ -174,29 +141,24 @@ class SiteJavbus:
                     item.title_ko = SiteUtil.trans(item.title, do_trans=do_trans)
 
                 item_dict = item.as_dict()
-
                 item_dict['is_priority_label_site'] = False
                 item_dict['site_key'] = cls.site_name
-
-                if item_dict.get('ui_code') and priority_label_setting_str:
-                    label_to_check = ""
-                    if '-' in item_dict['ui_code']:
-                        label_to_check = item_dict['ui_code'].split('-', 1)[0].upper()
-                    else:
-                        match_label_no_hyphen = re.match(r'^([A-Z]+)', item_dict['ui_code'].upper())
-                        if match_label_no_hyphen: label_to_check = match_label_no_hyphen.group(1)
-                        else: label_to_check = item_dict['ui_code'].upper()
-                        logger.debug(f"Javbus Search: Item '{item_dict['ui_code']}' matched priority label '{label_to_check}'. Setting is_priority_label_site=True.")
 
                 original_ps_url = cls.__fix_url(node.xpath(".//img/@src")[0])
                 if item_dict.get('code') and original_ps_url:
                     cls._ps_url_cache[item_dict['code']] = {'ps': original_ps_url}
-                    # logger.debug(f"JavBus Search PS Cache: Cached ORIGINAL PS for '{item_dict['code']}' -> '{original_ps_url}'")
 
                 ret.append(item_dict)
 
             except Exception: logger.exception("개별 검색 결과 처리 중 예외:")
-        return sorted(ret, key=lambda k: k["score"], reverse=True)
+        sorted_result = sorted(ret, key=lambda k: k.get("score", 0), reverse=True)
+        if sorted_result:
+            log_count = min(len(sorted_result), 5)
+            logger.debug(f"JavBus Search: Top {log_count} results for '{keyword_for_url}':")
+            for idx, item_log_final in enumerate(sorted_result[:log_count]):
+                logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
+        return sorted_result
+
 
     @classmethod
     def search(cls, keyword, **kwargs):
@@ -269,10 +231,12 @@ class SiteJavbus:
         ps_to_poster_labels_str = kwargs.get('ps_to_poster_labels_str', '')
         crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '')
         cf_clearance_cookie_value_from_kwargs = kwargs.get('cf_clearance_cookie', None)
+        original_keyword = kwargs.get('original_keyword', None)
+        maintain_series_number_labels_str = kwargs.get('maintain_series_number_labels', '')
 
         cached_data_for_javbus = cls._ps_url_cache.get(code, {})
         ps_url_from_search_cache = cached_data_for_javbus.get('ps')
-        logger.debug(f"JavBus Info: PS URL from cache for '{code}': {ps_url_from_search_cache}")
+        # logger.debug(f"JavBus Info: PS URL from cache for '{code}': {ps_url_from_search_cache}")
 
         original_code_for_url = code[len(cls.module_char) + len(cls.site_char):]
         url = f"{cls.site_base_url}/{original_code_for_url}"
@@ -291,167 +255,154 @@ class SiteJavbus:
         entity.country = ["일본"]; entity.mpaa = "청소년 관람불가"
         entity.thumb = []; entity.fanart = []; entity.tag = []
 
-        identifier_parsed_flag = False
-        actual_raw_title_text_from_h3 = ""
-
         try:
-            logger.debug(f"JavBus: Parsing metadata for {code}...")
+            info_node = tree.xpath("//div[contains(@class, 'container')]//div[@class='col-md-3 info']")[0]
+            
+            # 1. URL 기반으로 기본 ui_code를 먼저 설정
+            base_ui_code = original_code_for_url.split('_')[0].upper()
+            
+            # 2. 페이지의 "識別碼" 필드를 파싱 (폴백용)
+            ui_code_val_nodes = info_node.xpath("./p[./span[@class='header' and contains(text(),'識別碼')]]/span[not(@class='header')]//text()")
+            if not ui_code_val_nodes:
+                ui_code_val_nodes = info_node.xpath("./p[./span[@class='header' and contains(text(),'識別碼')]]/text()[normalize-space()]")
+            raw_ui_code_from_page = "".join(ui_code_val_nodes).strip()
+            
+            # URL 기반 코드가 유효하지 않을 경우(예: 빈 문자열), 페이지 기반 코드로 폴백
+            if not base_ui_code and raw_ui_code_from_page:
+                base_ui_code = raw_ui_code_from_page.upper()
+                logger.warning(f"JavBus: URL-based code was empty. Falling back to page-based code: {base_ui_code}")
 
-            info_container_node_list = tree.xpath("//div[contains(@class, 'container')]//div[@class='col-md-3 info']")
-            if not info_container_node_list:
-                logger.error(f"JavBus: Info container (div.info) not found for {code}.")
-                # 필수 정보 파싱 불가 시 아래 identifier_parsed_flag로 핸들링
+            # 3. 시리즈 넘버 유지 로직 적용
+            final_ui_code = base_ui_code
+            maintain_labels_set = {label.strip().upper() for label in maintain_series_number_labels_str.split(',') if label}
+
+            if original_keyword and base_ui_code and maintain_labels_set:
+                keyword_match = re.match(r'^(\d+)([a-zA-Z]+)-?(\d+)', original_keyword.upper())
+                javbus_match = re.match(r'^([A-Z]+)-(\d+)', base_ui_code)
+                
+                if keyword_match and javbus_match:
+                    kw_prefix, kw_label, kw_num = keyword_match.groups()
+                    jb_label, jb_num = javbus_match.groups()
+                    
+                    if kw_label == jb_label and kw_num.lstrip('0') == jb_num.lstrip('0') and jb_label in maintain_labels_set:
+                        final_ui_code = f"{kw_prefix}{jb_label}-{jb_num}"
+                        logger.debug(f"JavBus Info: Applied series number from keyword. New ui_code: {final_ui_code}")
+            
+            entity.ui_code = final_ui_code
+            entity.title = entity.originaltitle = entity.sorttitle = final_ui_code
+
+            h3_text = tree.xpath("normalize-space(//div[@class='container']/h3/text())")
+            if h3_text.upper().startswith(base_ui_code):
+                entity.tagline = SiteUtil.trans(h3_text[len(base_ui_code):].strip(), do_trans)
             else:
-                info_node = info_container_node_list[0]
+                entity.tagline = SiteUtil.trans(h3_text, do_trans)
 
-                # 1. ui_code (識別碼) 파싱 및 title, originaltitle, sorttitle 초기화
-                ui_code_val_nodes = info_node.xpath("./p[./span[@class='header' and contains(text(),'識別碼')]]/span[not(@class='header')]//text()")
-                if not ui_code_val_nodes: ui_code_val_nodes = info_node.xpath("./p[./span[@class='header' and contains(text(),'識別碼')]]/text()[normalize-space()]")
-                raw_ui_code = "".join(ui_code_val_nodes).strip()
-                parsed_ui_code_value = ""
-                if raw_ui_code:
-                    try:
-                        label, num_str = raw_ui_code.split('-', 1)
-                        num_part = ''.join(filter(str.isdigit, num_str))
-                        if num_part: parsed_ui_code_value = f"{label.upper()}-{int(num_part):03d}"
-                        else: parsed_ui_code_value = raw_ui_code.upper()
-                    except ValueError: parsed_ui_code_value = raw_ui_code.upper()
+            # 나머지 정보 직접 XPath로 추출 (info_node 기준)
+            all_p_tags_in_info = info_node.xpath("./p")
+            genre_header_p_node = None; actor_header_p_node = None
+            for p_idx, p_tag_node_loop in enumerate(all_p_tags_in_info):
+                header_span_text_nodes = p_tag_node_loop.xpath("normalize-space(./span[@class='header']/text())")
+                if "類別:" in header_span_text_nodes or (p_tag_node_loop.get("class") == "header" and p_tag_node_loop.text_content().strip().startswith("類別")):
+                    genre_header_p_node = p_tag_node_loop
+                elif "演員" in header_span_text_nodes or (p_tag_node_loop.get("class") == "star-show" and "演員" in p_tag_node_loop.xpath("normalize-space(./span[@class='header']/text())")):
+                    actor_header_p_node = p_tag_node_loop
 
-                entity.ui_code = parsed_ui_code_value if parsed_ui_code_value else original_code_for_url.upper()
-                entity.title = entity.ui_code
-                entity.originaltitle = entity.ui_code 
-                entity.sorttitle = entity.ui_code
-                identifier_parsed_flag = bool(parsed_ui_code_value)
-                logger.debug(f"JavBus: ui_code set to: {entity.ui_code}, identifier_parsed: {identifier_parsed_flag}")
+            for p_tag_node_loop_general in all_p_tags_in_info:
+                header_span_general = p_tag_node_loop_general.xpath("./span[@class='header']")
+                if not header_span_general or not header_span_general[0].text: continue
+                key_text_general = header_span_general[0].text_content().replace(":", "").strip()
+                if key_text_general in ["類別", "演員"]: continue
 
-                parsed_label = parsed_ui_code_value.split('-')[0] if '-' in parsed_ui_code_value else parsed_ui_code_value
-                if entity.tag is None: entity.tag = []
-                if parsed_label:
-                    entity.tag.append(parsed_label)
+                value_nodes_general = header_span_general[0].xpath("./following-sibling::node()")
+                value_parts_general = []
+                for node_item_general in value_nodes_general:
+                    if hasattr(node_item_general, 'tag'):
+                        if node_item_general.tag == 'a': value_parts_general.append(node_item_general.text_content().strip())
+                        elif node_item_general.tag == 'span' and not node_item_general.get('class'): value_parts_general.append(node_item_general.text_content().strip())
+                    elif isinstance(node_item_general, str): 
+                        stripped_text_general = node_item_general.strip()
+                        if stripped_text_general: value_parts_general.append(stripped_text_general)
+                value_text_general = " ".join(filter(None, value_parts_general)).strip()
+                if not value_text_general or value_text_general == "----": continue
 
-                # 2. H3 제목에서 실제 원본 제목 추출 (Tagline 용도)
-                actual_raw_title_text_from_h3 = ""
-                h3_node_list = tree.xpath("//div[@class='container']/h3")
-                if h3_node_list:
-                    full_h3_text_content = h3_node_list[0].text_content().strip()
-                    if entity.ui_code and full_h3_text_content.upper().startswith(entity.ui_code):
-                        actual_raw_title_text_from_h3 = full_h3_text_content[len(entity.ui_code):].strip()
-                    else: actual_raw_title_text_from_h3 = full_h3_text_content
-
-                if actual_raw_title_text_from_h3:
-                    entity.tagline = SiteUtil.trans(actual_raw_title_text_from_h3, do_trans=do_trans, source='ja', target='ko')
-                else: entity.tagline = entity.ui_code
-                logger.debug(f"JavBus: Tagline set to: {entity.tagline}")
-
-                # 3. 나머지 정보 직접 XPath로 추출 (info_node 기준)
-                all_p_tags_in_info = info_node.xpath("./p")
-                genre_header_p_node = None; actor_header_p_node = None
-                for p_idx, p_tag_node_loop in enumerate(all_p_tags_in_info):
-                    header_span_text_nodes = p_tag_node_loop.xpath("normalize-space(./span[@class='header']/text())")
-                    if "類別:" in header_span_text_nodes or (p_tag_node_loop.get("class") == "header" and p_tag_node_loop.text_content().strip().startswith("類別")):
-                        genre_header_p_node = p_tag_node_loop
-                    elif "演員" in header_span_text_nodes or (p_tag_node_loop.get("class") == "star-show" and "演員" in p_tag_node_loop.xpath("normalize-space(./span[@class='header']/text())")):
-                        actor_header_p_node = p_tag_node_loop
-
-                for p_tag_node_loop_general in all_p_tags_in_info:
-                    header_span_general = p_tag_node_loop_general.xpath("./span[@class='header']")
-                    if not header_span_general or not header_span_general[0].text: continue
-                    key_text_general = header_span_general[0].text_content().replace(":", "").strip()
-                    if key_text_general in ["類別", "演員"]: continue
-
-                    value_nodes_general = header_span_general[0].xpath("./following-sibling::node()")
-                    value_parts_general = []
-                    for node_item_general in value_nodes_general:
-                        if hasattr(node_item_general, 'tag'):
-                            if node_item_general.tag == 'a': value_parts_general.append(node_item_general.text_content().strip())
-                            elif node_item_general.tag == 'span' and not node_item_general.get('class'): value_parts_general.append(node_item_general.text_content().strip())
-                        elif isinstance(node_item_general, str): 
-                            stripped_text_general = node_item_general.strip()
-                            if stripped_text_general: value_parts_general.append(stripped_text_general)
-                    value_text_general = " ".join(filter(None, value_parts_general)).strip()
-                    if not value_text_general or value_text_general == "----": continue
-
-                    if key_text_general == "發行日期":
-                        if value_text_general != "0000-00-00": entity.premiered = value_text_general; entity.year = int(value_text_general[:4])
-                        else: entity.premiered = "1900-01-01"; entity.year = 1900
-                    elif key_text_general == "長度":
-                        try: entity.runtime = int(value_text_general.replace("分鐘", "").strip())
-                        except: pass
-                    elif key_text_general == "導演":
-                        entity.director = value_text_general
-                    elif key_text_general == "製作商":
+                if key_text_general == "發行日期":
+                    if value_text_general != "0000-00-00": entity.premiered = value_text_general; entity.year = int(value_text_general[:4])
+                    else: entity.premiered = "1900-01-01"; entity.year = 1900
+                elif key_text_general == "長度":
+                    try: entity.runtime = int(value_text_general.replace("分鐘", "").strip())
+                    except: pass
+                elif key_text_general == "導演":
+                    entity.director = value_text_general
+                elif key_text_general == "製作商":
+                    entity.studio = SiteUtil.trans(value_text_general, do_trans=do_trans, source='ja', target='ko')
+                elif key_text_general == "發行商":
+                    if not entity.studio:
                         entity.studio = SiteUtil.trans(value_text_general, do_trans=do_trans, source='ja', target='ko')
-                    elif key_text_general == "發行商":
-                        if not entity.studio:
-                            entity.studio = SiteUtil.trans(value_text_general, do_trans=do_trans, source='ja', target='ko')
-                    elif key_text_general == "系列":
-                        value_text_general = SiteUtil.trans(value_text_general, do_trans=do_trans, source='ja', target='ko')
-                        if entity.tag is None: entity.tag = []
-                        if value_text_general not in entity.tag: entity.tag.append(value_text_general)
+                elif key_text_general == "系列":
+                    value_text_general = SiteUtil.trans(value_text_general, do_trans=do_trans, source='ja', target='ko')
+                    if entity.tag is None: entity.tag = []
+                    if value_text_general not in entity.tag: entity.tag.append(value_text_general)
 
-                if genre_header_p_node is not None:
-                    genre_values_p_node_list = genre_header_p_node.xpath("./following-sibling::p[1]")
-                    if genre_values_p_node_list:
-                        genre_values_p_actual_node = genre_values_p_node_list[0]
-                        # logger.debug(f"JavBus: Genre values P tag content: {html.tostring(genre_values_p_actual_node, encoding='unicode')[:300]}")
+            if genre_header_p_node is not None:
+                genre_values_p_node_list = genre_header_p_node.xpath("./following-sibling::p[1]")
+                if genre_values_p_node_list:
+                    genre_values_p_actual_node = genre_values_p_node_list[0]
+                    # logger.debug(f"JavBus: Genre values P tag content: {html.tostring(genre_values_p_actual_node, encoding='unicode')[:300]}")
 
-                        genre_span_tags = genre_values_p_actual_node.xpath("./span[@class='genre']")
+                    genre_span_tags = genre_values_p_actual_node.xpath("./span[@class='genre']")
 
-                        if entity.genre is None: entity.genre = []
+                    if entity.genre is None: entity.genre = []
 
-                        # logger.debug(f"JavBus: Found {len(genre_span_tags)} <span class='genre'> tags.")
-                        for span_tag_genre in genre_span_tags:
-                            a_tag_text_nodes = span_tag_genre.xpath("./label/a/text() | ./a/text()")
-                            genre_ja = ""
-                            if a_tag_text_nodes:
-                                genre_ja = a_tag_text_nodes[0].strip()
-                            else:
-                                if not span_tag_genre.xpath("./button[@id='gr_btn']"):
-                                    genre_ja = span_tag_genre.text_content().strip()
+                    # logger.debug(f"JavBus: Found {len(genre_span_tags)} <span class='genre'> tags.")
+                    for span_tag_genre in genre_span_tags:
+                        a_tag_text_nodes = span_tag_genre.xpath("./label/a/text() | ./a/text()")
+                        genre_ja = ""
+                        if a_tag_text_nodes:
+                            genre_ja = a_tag_text_nodes[0].strip()
+                        else:
+                            if not span_tag_genre.xpath("./button[@id='gr_btn']"):
+                                genre_ja = span_tag_genre.text_content().strip()
 
-                            # logger.debug(f"  Raw genre text from span: '{genre_ja}'")
-                            if not genre_ja or genre_ja == "多選提交" or genre_ja in SiteUtil.av_genre_ignore_ja: 
-                                # logger.debug(f"    Skipping genre: '{genre_ja}'")
-                                continue
+                        # logger.debug(f"  Raw genre text from span: '{genre_ja}'")
+                        if not genre_ja or genre_ja == "多選提交" or genre_ja in SiteUtil.av_genre_ignore_ja: 
+                            # logger.debug(f"    Skipping genre: '{genre_ja}'")
+                            continue
 
-                            if genre_ja in SiteUtil.av_genre: 
-                                if SiteUtil.av_genre[genre_ja] not in entity.genre: entity.genre.append(SiteUtil.av_genre[genre_ja])
-                            else:
-                                genre_ko = SiteUtil.trans(genre_ja, do_trans=do_trans, source='ja', target='ko').replace(" ", "")
-                                if genre_ko not in SiteUtil.av_genre_ignore_ko and genre_ko not in entity.genre:
-                                    entity.genre.append(genre_ko)
-                    else:
-                        logger.warning(f"JavBus: Genre values P tag (sibling of header) not found for {code}.")
+                        if genre_ja in SiteUtil.av_genre: 
+                            if SiteUtil.av_genre[genre_ja] not in entity.genre: entity.genre.append(SiteUtil.av_genre[genre_ja])
+                        else:
+                            genre_ko = SiteUtil.trans(genre_ja, do_trans=do_trans, source='ja', target='ko').replace(" ", "")
+                            if genre_ko not in SiteUtil.av_genre_ignore_ko and genre_ko not in entity.genre:
+                                entity.genre.append(genre_ko)
                 else:
-                    logger.warning(f"JavBus: Genre header P tag ('類別') not found for {code}.")
+                    logger.warning(f"JavBus: Genre values P tag (sibling of header) not found for {code}.")
+            else:
+                logger.warning(f"JavBus: Genre header P tag ('類別') not found for {code}.")
 
-                if actor_header_p_node is not None:
-                    actor_values_p_node = actor_header_p_node.xpath("./following-sibling::p[1]")
-                    if actor_values_p_node:
-                        actor_a_tags = actor_values_p_node[0].xpath(".//span[@class='genre']/a")
-                        if entity.actor is None: entity.actor = []
-                        for a_tag_actor in actor_a_tags:
-                            actor_name = a_tag_actor.text_content().strip()
-                            if actor_name and actor_name != "暫無出演者資訊":
-                                if not any(act.originalname == actor_name for act in entity.actor):
-                                    actor_entity = EntityActor(actor_name); actor_entity.name = actor_name
-                                    entity.actor.append(actor_entity)
-                else: logger.warning(f"JavBus: Actor header P tag ('演員') not found for {code}.")
+            if actor_header_p_node is not None:
+                actor_values_p_node = actor_header_p_node.xpath("./following-sibling::p[1]")
+                if actor_values_p_node:
+                    actor_a_tags = actor_values_p_node[0].xpath(".//span[@class='genre']/a")
+                    if entity.actor is None: entity.actor = []
+                    for a_tag_actor in actor_a_tags:
+                        actor_name = a_tag_actor.text_content().strip()
+                        if actor_name and actor_name != "暫無出演者資訊":
+                            if not any(act.originalname == actor_name for act in entity.actor):
+                                actor_entity = EntityActor(actor_name); actor_entity.name = actor_name
+                                entity.actor.append(actor_entity)
+            else: logger.warning(f"JavBus: Actor header P tag ('演員') not found for {code}.")
 
-            if not identifier_parsed_flag and entity.ui_code:
-                identifier_parsed_flag = True
+            if entity.ui_code:
+                label_part = entity.ui_code.split('-')[0]
+                if label_part and label_part not in (entity.tag or []):
+                    if entity.tag is None: entity.tag = []
+                    entity.tag.append(label_part)
 
-            if not entity.plot:
-                if entity.tagline and entity.tagline != entity.ui_code: entity.plot = entity.tagline
-                elif actual_raw_title_text_from_h3 and actual_raw_title_text_from_h3 != entity.ui_code: 
-                    entity.plot = SiteUtil.trans(actual_raw_title_text_from_h3, do_trans=do_trans, source='ja', target='ko')
-                elif entity.ui_code: entity.plot = entity.ui_code 
+        except Exception as e:
+            logger.exception(f"JavBus Info: Metadata parsing error: {e}")
+            return None
 
-        except Exception as e_meta_main:
-            logger.exception(f"JavBus: Major error during metadata parsing for {code}: {e_meta_main}")
-            if not (hasattr(entity, 'ui_code') and entity.ui_code) : return None
-
-        ui_code_for_image = entity.ui_code
+        ui_code_for_image = entity.ui_code.lower()
         user_custom_poster_url = None; user_custom_landscape_url = None
         skip_default_poster_logic = False; skip_default_landscape_logic = False
 
@@ -675,50 +626,34 @@ class SiteJavbus:
                             entity.fanart.append(full_art_url)
                             current_fanart_server_count +=1
         else:
-            if not skip_default_poster_logic and final_poster_source:
-                poster_value_for_process = final_poster_source
-
-                if not isinstance(final_poster_source, str) or not (final_poster_source.startswith("http") or os.path.exists(final_poster_source)):
-                    logger.warning(f"JavBus: Invalid poster_source type for process_image_mode: {type(final_poster_source)}. Using PL fallback.")
-                    poster_value_for_process = pl_url if pl_url else None
-
-                if poster_value_for_process and not any(t.aspect == 'poster' for t in entity.thumb):
-                    processed_poster_url = SiteUtil.process_image_mode(image_mode, poster_value_for_process, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
-                    if processed_poster_url:
-                        entity.thumb.append(EntityThumb(aspect="poster", value=processed_poster_url))
-
-            if not skip_default_landscape_logic and final_landscape_url_source:
-                if not any(t.aspect == 'landscape' for t in entity.thumb):
-                    processed_landscape_url = SiteUtil.process_image_mode(image_mode, final_landscape_url_source, proxy_url=proxy_url)
-                    if processed_landscape_url:
-                        entity.thumb.append(EntityThumb(aspect="landscape", value=processed_landscape_url))
-
+            if not skip_default_poster_logic and final_poster_source and not any(t.aspect == 'poster' for t in entity.thumb):
+                p_url = SiteUtil.process_image_mode(image_mode, final_poster_source, proxy_url=proxy_url, crop_mode=final_poster_crop_mode)
+                if p_url: entity.thumb.append(EntityThumb(aspect="poster", value=p_url))
+            if not skip_default_landscape_logic and final_landscape_url_source and not any(t.aspect == 'landscape' for t in entity.thumb):
+                pl_url = SiteUtil.process_image_mode(image_mode, final_landscape_url_source, proxy_url=proxy_url)
+                if pl_url: entity.thumb.append(EntityThumb(aspect="landscape", value=pl_url))
             if arts_urls_for_processing:
-                current_fanart_processed_count = len(entity.fanart)
                 for art_url in arts_urls_for_processing:
-                    if current_fanart_processed_count >= max_arts: break
-                    processed_art_url = SiteUtil.process_image_mode(image_mode, art_url, proxy_url=proxy_url)
-                    if processed_art_url and processed_art_url not in entity.fanart:
-                        entity.fanart.append(processed_art_url)
-                        current_fanart_processed_count += 1
+                    if len(entity.fanart) >= max_arts: break
+                    processed_art = SiteUtil.process_image_mode(image_mode, art_url, proxy_url=proxy_url)
+                    if processed_art: entity.fanart.append(processed_art)
 
         final_entity = entity
         if final_entity.ui_code:
-            try: final_entity = SiteUtil.shiroutoname_info(final_entity)
-            except Exception as e_shirouto: logger.exception(f"JavBus: Shiroutoname correction error for {final_entity.ui_code}: {e_shirouto}")
-
-        if hasattr(final_entity, 'ui_code') and final_entity.ui_code and final_entity.ui_code.lower() != original_code_for_url.lower():
-            new_code_value = cls.module_char + cls.site_char + final_entity.ui_code.lower()
-            logger.debug(f"JavBus: Code changed by shiroutoname from {final_entity.code} to {new_code_value}")
-            final_entity.code = new_code_value
-
+            try: 
+                final_entity = SiteUtil.shiroutoname_info(final_entity)
+                if final_entity.ui_code.upper() != original_code_for_url.split('_')[0].upper():
+                    new_code_value = final_entity.ui_code.lower()
+                    if '_' in original_code_for_url:
+                        new_code_value += '_' + original_code_for_url.split('_')[1]
+                    if final_entity.code != (cls.module_char + cls.site_char + new_code_value):
+                        final_entity.code = cls.module_char + cls.site_char + new_code_value
+            except Exception as e_shirouto: logger.exception(f"JavBus: Shiroutoname error: {e_shirouto}")
+        
         if mgs_style_poster_filepath and os.path.exists(mgs_style_poster_filepath):
-            try:
-                os.remove(mgs_style_poster_filepath)
-                logger.debug(f"JavBus: Removed MGS-style temp poster file: {mgs_style_poster_filepath}")
-            except Exception as e_remove_temp:
-                logger.error(f"JavBus: Failed to remove MGS-style temp poster file {mgs_style_poster_filepath}: {e_remove_temp}")
-
+            try: os.remove(mgs_style_poster_filepath)
+            except Exception as e: logger.error(f"Failed to remove temp file {mgs_style_poster_filepath}: {e}")
+        
         logger.info(f"JavBus: __info finished for {code}. UI Code: {final_entity.ui_code if hasattr(final_entity, 'ui_code') else 'N/A'}, Thumbs: {len(final_entity.thumb)}, Fanarts: {len(final_entity.fanart)}")
         return final_entity
 
