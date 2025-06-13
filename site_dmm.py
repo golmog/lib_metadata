@@ -971,6 +971,12 @@ class SiteDmm:
         logger.debug(f"SITE_DMM: __info received dmm_parser_rules via kwargs: {dmm_parser_rules}")
 
         cached_data = cls._ps_url_cache.get(code, {}) # 기존 변수명 cached_data 사용
+        ps_url_from_search_cache = kwargs.get('ps_url')
+        if not ps_url_from_search_cache:
+            # 전달받은 ps_url이 없으면, 기존 캐시 방식 사용
+            cached_data = cls._ps_url_cache.get(code, {})
+            content_type_from_cache = cached_data.get('main_content_type', 'unknown')
+            ps_url_from_search_cache = cached_data.get(content_type_from_cache)
 
         # content_type_from_cache 초기화 및 값 할당 (기존 변수명 사용)
         content_type_from_cache = cached_data.get('main_content_type', 'unknown') # <<--- 기본값을 'unknown' 문자열로 명시
