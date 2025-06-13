@@ -223,7 +223,10 @@ class SiteMgstageDvd(SiteMgstage):
         # logger.debug(f"Image Server Mode Check ({cls.module_char}): image_mode={image_mode}, use_image_server={use_image_server}")
 
         cached_data = cls._ps_url_cache.get(code, {}) 
-        ps_url_from_search_cache = cached_data.get('ps')
+        ps_url_from_search_cache = kwargs.get('ps_url')
+        if not ps_url_from_search_cache:
+            cached_data = cls._ps_url_cache.get(code, {}) 
+            ps_url_from_search_cache = cached_data.get('ps')
 
         url = cls.site_base_url + f"/product/product_detail/{code[2:]}/"
         tree = SiteUtil.get_tree(url, proxy_url=proxy_url, headers=cls.headers)
