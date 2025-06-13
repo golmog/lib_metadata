@@ -667,7 +667,7 @@ class SiteDmm:
         # 재시도하지 않는 경우, 최종 정렬하여 반환
         sorted_result = sorted(final_filtered_list, key=lambda k: k.get("score", 0), reverse=True)
         if sorted_result:
-            log_count = min(len(sorted_result), 5)
+            log_count = min(len(sorted_result), 10)
             logger.debug(f"DMM Search: Top {log_count} results for '{original_keyword}':")
             for idx, item_log_final in enumerate(sorted_result[:log_count]):
                 logger.debug(f"  {idx+1}. Score={item_log_final.get('score')}, Type={item_log_final.get('content_type')}, Code={item_log_final.get('code')}, UI Code={item_log_final.get('ui_code')}, Title='{item_log_final.get('title_ko')}'")
