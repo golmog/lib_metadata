@@ -318,7 +318,7 @@ class SiteDmm:
             logger.debug(f"DMM Search: original_keyword='{original_keyword}', keyword_for_url='{keyword_for_url}', priority_label='{priority_label_setting_str}'")
 
         # --- 검색 URL 생성 ---
-        search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': keyword_for_url, 'limit' : '120' }
+        search_params = { 'redirect': '1', 'enc': 'UTF-8', 'category': '', 'searchstr': keyword_for_url }
         search_url = f"{cls.site_base_url}/search/?{py_urllib_parse.urlencode(search_params)}"
         logger.debug(f"DMM Search URL: {search_url}")
 
