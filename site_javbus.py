@@ -83,22 +83,16 @@ class SiteJavbus:
         temp_keyword = re.sub(r'[_-]?cd\d+$', '', temp_keyword, flags=re.I)
         temp_keyword = temp_keyword.strip(' _-')
 
-        label_for_compare = ""
-        match_series_num = re.match(r'^([a-zA-Z0-9]+)-?(\d+)$', temp_keyword)
-        if match_series_num:
-            label_part = match_series_num.group(1).lower()
-            num_part = match_series_num.group(2)
-            label_for_compare = f"{label_part}{num_part.zfill(5)}"
-        else:
-            label_for_compare = temp_keyword.replace('-', '')
-        
-        keyword_for_url = temp_keyword
-        logger.debug(f"JavBus Search: original='{original_keyword}', url_kw='{keyword_for_url}', compare_kw='{label_for_compare}'")
+        keyword_for_url = re.sub(r'^\d+', '', temp_keyword).lstrip('-_')
+
+        logger.debug(f"JavBus Search: original='{original_keyword}', url_kw='{keyword_for_url}'")
 
         url = f"{cls.site_base_url}/search/{keyword_for_url}"
         tree = cls._get_javbus_page_tree(url, proxy_url=proxy_url, cf_clearance_cookie=cf_clearance_cookie)
         if tree is None:
             return []
+
+        logger.debug(f"JavBus Search: original='{original_keyword}', url_kw='{keyword_for_url}'")
 
         ret = []
         for node in tree.xpath('//a[@class="movie-box"]')[:10]:
@@ -114,24 +108,38 @@ class SiteJavbus:
                 item.desc = "발매일: " + tag[1].text_content().strip()
                 item.year = int(item.desc[-10:-6])
                 item.title = node.xpath(".//span/text()")[0].strip()
-
-                item_code_for_compare = ""
-                if item.ui_code:
-                    item_ui_code_cleaned = item.ui_code.lower().replace("-", "")
-                    match_item_num = re.match(r'^([a-z0-9]+)(\d+)$', item_ui_code_cleaned)
-                    if match_item_num:
-                        item_label_part = match_item_num.group(1)
-                        item_num_part = match_item_num.group(2)
-                        item_code_for_compare = f"{item_label_part}{item_num_part.zfill(5)}"
-                    else:
-                        item_code_for_compare = item_ui_code_cleaned
                 
-                if label_for_compare == item_code_for_compare:
-                    item.score = 100
-                elif re.match(r'^\d+[a-zA-Z]+-?\d+$', temp_keyword):
-                    item.score = 90
+                # --- 점수 계산 로직 ---
+                # 1. 키워드 표준화
+                kw_match = re.match(r'^(\d*)?([a-zA-Z]+)-?(\d+)', temp_keyword)
+                kw_std_code = ""
+                kw_core_code = ""
+                if kw_match:
+                    kw_prefix, kw_label, kw_num = kw_match.groups()
+                    kw_prefix = kw_prefix if kw_prefix else ""
+                    kw_std_code = f"{kw_prefix}{kw_label}{kw_num.zfill(5)}".lower()
+                    kw_core_code = f"{kw_label}{kw_num.zfill(5)}".lower()
+                
+                # 2. 아이템 코드 표준화
+                item_match = re.match(r'^(\d*)?([a-zA-Z]+)-?(\d+)', item.ui_code.lower())
+                item_std_code = ""
+                item_core_code = ""
+                if item_match:
+                    item_prefix, item_label, item_num = item_match.groups()
+                    item_prefix = item_prefix if item_prefix else ""
+                    item_std_code = f"{item_prefix}{item_label}{item_num.zfill(5)}".lower()
+                    item_core_code = f"{item_label}{item_num.zfill(5)}".lower()
+
+                # 3. 점수 부여
+                if kw_std_code and item_std_code:
+                    if kw_std_code == item_std_code:
+                        item.score = 100 # 시리즈 넘버까지 완벽 일치 (또는 둘 다 없을 때)
+                    elif kw_core_code == item_core_code:
+                        item.score = 80 # 시리즈 넘버는 다르지만, 핵심은 일치
+                    else:
+                        item.score = 60
                 else:
-                    item.score = 60
+                    item.score = 20 # 표준화 실패 시
 
                 if manual:
                     _image_mode = "1" if image_mode != "0" else image_mode
@@ -143,6 +151,7 @@ class SiteJavbus:
                 item_dict = item.as_dict()
                 item_dict['is_priority_label_site'] = False
                 item_dict['site_key'] = cls.site_name
+                item_dict['original_keyword'] = original_keyword
 
                 original_ps_url = cls.__fix_url(node.xpath(".//img/@src")[0])
                 if item_dict.get('code') and original_ps_url:
@@ -152,6 +161,7 @@ class SiteJavbus:
 
             except Exception: logger.exception("개별 검색 결과 처리 중 예외:")
         sorted_result = sorted(ret, key=lambda k: k.get("score", 0), reverse=True)
+
         if sorted_result:
             log_count = min(len(sorted_result), 5)
             logger.debug(f"JavBus Search: Top {log_count} results for '{keyword_for_url}':")
@@ -276,17 +286,23 @@ class SiteJavbus:
             final_ui_code = base_ui_code
             maintain_labels_set = {label.strip().upper() for label in maintain_series_number_labels_str.split(',') if label}
 
-            if original_keyword and base_ui_code and maintain_labels_set:
-                keyword_match = re.match(r'^(\d+)([a-zA-Z]+)-?(\d+)', original_keyword.upper())
-                javbus_match = re.match(r'^([A-Z]+)-(\d+)', base_ui_code)
-                
-                if keyword_match and javbus_match:
-                    kw_prefix, kw_label, kw_num = keyword_match.groups()
-                    jb_label, jb_num = javbus_match.groups()
+            if keyword and base_ui_code and maintain_labels_set:
+                # 키워드에서 prefix와 core 분리
+                kw_match = re.match(r'^(\d+)([a-zA-Z].*)', keyword.upper())
+                if kw_match:
+                    kw_prefix = kw_match.group(1)
+                    kw_core = kw_match.group(2).replace('-', '')
                     
-                    if kw_label == jb_label and kw_num.lstrip('0') == jb_num.lstrip('0') and jb_label in maintain_labels_set:
-                        final_ui_code = f"{kw_prefix}{jb_label}-{jb_num}"
-                        logger.debug(f"JavBus Info: Applied series number from keyword. New ui_code: {final_ui_code}")
+                    # 페이지 품번에서 prefix와 core 분리
+                    jb_match = re.match(r'^(\d*)?([A-Z]+-?\d+)', base_ui_code)
+                    if jb_match:
+                        jb_core = jb_match.group(2).replace('-', '')
+                        jb_label = jb_core.split('-')[0]
+                        pure_jb_label_match = re.match(r'(\D+)', jb_label)
+                        pure_jb_label = pure_jb_label_match.group(1) if pure_jb_label_match else jb_label
+
+                        if kw_core == jb_core and pure_jb_label in maintain_labels_set:
+                            final_ui_code = f"{kw_prefix}{base_ui_code}"
             
             entity.ui_code = final_ui_code
             entity.title = entity.originaltitle = entity.sorttitle = final_ui_code
