@@ -76,7 +76,9 @@ class SiteAvdbs:
 
             try:
                 actor_items = tree.xpath('//div[contains(@class, "search-actor-list")]/ul/li')
-                if not actor_items: logger.debug("WEB: No actor items found."); return None
+                if not actor_items:
+                    # logger.debug("WEB: No actor items found.")
+                    return None
 
                 names_to_check = SiteAvdbs._parse_name_variations(originalname)
 

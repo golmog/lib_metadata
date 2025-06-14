@@ -17,12 +17,12 @@ class SiteHentaku:
 
         hrefs = tree.xpath('//div[@class="avstar_photo"]/a/@href')
         if not hrefs:
-            logger.debug("검색 결과 없음: originalname=%s", originalname)
+            # logger.debug("검색 결과 없음: originalname=%s", originalname)
             return None
 
         names = tree.xpath('//div[@class="avstar_info_b"]/text()')[0].split("/")
         if len(names) != 3:
-            logger.debug("검색 결과에서 이름을 찾을 수 없음: len(%s) != 2", names)
+            # logger.debug("검색 결과에서 이름을 찾을 수 없음: len(%s) != 2", names)
             return None
 
         name_ko, name_en, name_ja = [x.strip() for x in names]
@@ -35,7 +35,7 @@ class SiteHentaku:
                 "site": "hentaku",
                 "thumb": SiteUtil.process_image_mode(image_mode, thumb_url, proxy_url=proxy_url),
             }
-        logger.debug("검색 결과 중 일치 항목 없음: %s != %s", name_ja, originalname)
+        # logger.debug("검색 결과 중 일치 항목 없음: %s != %s", name_ja, originalname)
         return None
 
     @staticmethod
