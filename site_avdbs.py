@@ -36,7 +36,7 @@ class SiteAvdbs:
     @staticmethod
     def __get_actor_info_from_web(originalname, **kwargs) -> dict:
         """Avdbs.com 웹사이트에서 배우 정보를 가져오는 내부 메소드 (Fallback용)"""
-        logger.debug(f"WEB Fallback: Avdbs.com 에서 '{originalname}' 정보 직접 검색 시작.")
+        # logger.debug(f"WEB Fallback: Avdbs.com 에서 '{originalname}' 정보 직접 검색 시작.")
         proxy_url = kwargs.get('proxy_url')
         image_mode = kwargs.get('image_mode', '0')
 
@@ -66,7 +66,7 @@ class SiteAvdbs:
             search_headers = enhanced_headers.copy()
             tree = None
             try:
-                logger.debug(f"WEB: Requesting search page: {search_url} with params: {search_params}")
+                # logger.debug(f"WEB: Requesting search page: {search_url} with params: {search_params}")
                 response_search_page = s.get(search_url, params=search_params, headers=search_headers, timeout=20)
                 response_search_page.raise_for_status()
                 tree = html.fromstring(response_search_page.text)
@@ -153,7 +153,7 @@ class SiteAvdbs:
             before_paren = match.group(1).strip(); inside_paren = match.group(2).strip()
             if before_paren: variations.add(before_paren)
             if inside_paren: variations.add(inside_paren)
-        logger.debug(f"원본 이름 '{originalname}'에 대한 검색 변형 생성: {list(variations)}")
+        # logger.debug(f"원본 이름 '{originalname}'에 대한 검색 변형 생성: {list(variations)}")
         return list(variations)
 
     @staticmethod
@@ -269,17 +269,17 @@ class SiteAvdbs:
                 if conn: conn.close()
         elif use_local_db: 
             logger.warning(f"로컬 배우DB 사용 설정되었으나 경로 문제: {local_db_path}")
-        else:
-            logger.debug("로컬 배우DB 사용 안 함.")
+        # else:
+        #    logger.debug("로컬 배우DB 사용 안 함.")
 
         if not db_found_valid and final_info is None:
-            logger.debug(f"DB에서 '{original_input_name}' 정보를 찾지 못했거나 유효하지 않아 웹 검색 시도.")
+            # logger.debug(f"DB에서 '{original_input_name}' 정보를 찾지 못했거나 유효하지 않아 웹 검색 시도.")
             web_info = SiteAvdbs.__get_actor_info_from_web(original_input_name, image_mode=image_mode, proxy_url=proxy_url)
             if web_info:
                 # logger.debug(f"웹에서 '{original_input_name}' 정보 찾음 (출처: {web_info.get('site')}).")
                 final_info = web_info
-            else:
-                logger.debug(f"웹에서도 '{original_input_name}' 정보를 찾지 못함.")
+            # else:
+            #    logger.debug(f"웹에서도 '{original_input_name}' 정보를 찾지 못함.")
 
         # 최종 결과 처리
         if final_info is not None:
@@ -300,5 +300,5 @@ class SiteAvdbs:
 
             if not entity_actor.get('name') and entity_actor.get('originalname'):
                 entity_actor['name'] = entity_actor.get('originalname')
-                logger.debug("DB/웹 검색 실패 후 이름 필드를 originalname으로 설정.")
+                # logger.debug("DB/웹 검색 실패 후 이름 필드를 originalname으로 설정.")
             return False
