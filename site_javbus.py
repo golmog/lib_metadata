@@ -241,7 +241,8 @@ class SiteJavbus:
         ps_to_poster_labels_str = kwargs.get('ps_to_poster_labels_str', '')
         crop_mode_settings_str = kwargs.get('crop_mode_settings_str', '')
         cf_clearance_cookie_value_from_kwargs = kwargs.get('cf_clearance_cookie', None)
-        original_keyword = kwargs.get('original_keyword', None)
+
+        keyword = kwargs.get('original_keyword', None)
         maintain_series_number_labels_str = kwargs.get('maintain_series_number_labels', '')
 
         cached_data_for_javbus = cls._ps_url_cache.get(code, {})
