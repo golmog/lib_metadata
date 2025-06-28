@@ -166,17 +166,23 @@ class SiteDmm:
 
         # --- 나머지 규칙들 (고급 규칙이 적용되지 않았을 때만 실행) ---
         if not rule_applied:
-            # 일련번호와 나머지 부분 분리
-            expected_num_len = 5 if content_type in ['videoa', 'vr'] else 3
-            num_match = re.match(rf'^(.*?)(\d{{{expected_num_len}}})$', processed_cid)
-            if num_match:
-                remaining_for_label, extracted_num_part = num_match.groups()
+            # 1. 레이블이 문자로 끝나고 그 뒤에 숫자가 오는 명확한 패턴을 먼저 시도
+            clear_pattern_match = re.match(r'^([a-zA-Z\d]*[a-zA-Z])(\d+)$', processed_cid)
+            if clear_pattern_match:
+                remaining_for_label, extracted_num_part = clear_pattern_match.groups()
             else:
-                general_num_match = re.match(r'^(.*?)(\d+)$', processed_cid)
-                if general_num_match:
-                    remaining_for_label, extracted_num_part = general_num_match.groups()
+                # 2. 위 패턴이 실패하면, 기존의 길이 기반 숫자 추출을 폴백으로 사용
+                expected_num_len = 5 if content_type in ['videoa', 'vr'] else 3
+                num_match = re.match(rf'^(.*?)(\d{{{expected_num_len}}})$', processed_cid)
+                if num_match:
+                    remaining_for_label, extracted_num_part = num_match.groups()
                 else:
-                    remaining_for_label, extracted_num_part = processed_cid, ""
+                    # 3. 길이 기반도 실패하면, 가장 일반적인 숫자 분리
+                    general_num_match = re.match(r'^(.*?)(\d+)$', processed_cid)
+                    if general_num_match:
+                        remaining_for_label, extracted_num_part = general_num_match.groups()
+                    else:
+                        remaining_for_label, extracted_num_part = processed_cid, ""
             
             final_num_part = extracted_num_part
 
@@ -219,7 +225,7 @@ class SiteDmm:
 
             # --- 일반 처리 ---
             if not rule_applied:
-                alpha_match = re.search(r'([a-z].*)', remaining_for_label, re.I)
+                alpha_match = re.search(r'([a-zA-Z].*)', remaining_for_label, re.I)
                 if alpha_match:
                     final_label_part = alpha_match.group(1)
                 else:
