@@ -891,7 +891,7 @@ class SiteDmm:
         trailer_title_from_json = None # JSON에서 가져온 제목
 
         try:
-            ajax_url = py_urllib_parse.urljoin(cls.fanza_av_url, f"/content/?id={cid_part}/")
+            ajax_url = py_urllib_parse.urljoin(cls.fanza_av_url, f"/content/?id={cid_part}")
             #logger.debug(f"DMM Trailer Helper ({current_content_type_for_log}): Accessing AJAX URL: {ajax_url}")
 
             ajax_headers = cls._get_request_headers(referer=detail_url_for_referer)
@@ -1018,7 +1018,7 @@ class SiteDmm:
         detail_url = None
 
         if current_content_type == 'videoa' or current_content_type == 'vr':
-            detail_url = cls.fanza_av_url + f"/content/?id={cid_part}/"
+            detail_url = cls.fanza_av_url + f"/content/?id={cid_part}"
         elif current_content_type == 'dvd' or current_content_type == 'bluray':
             detail_url = cls.site_base_url + f"/mono/dvd/-/detail/=/cid={cid_part}/"
         else: 
