@@ -17,7 +17,7 @@ logger = P.logger
 class SiteDmm:
     site_name = "dmm"
     site_base_url = "https://www.dmm.co.jp"
-    fanza_av_url = "https://video.dmm.co.jp/av/"
+    fanza_av_url = "https://video.dmm.co.jp/av"
     module_char = "C"; site_char = "D"
 
     dmm_base_headers = {
@@ -715,14 +715,14 @@ class SiteDmm:
 
                     # 첫 번째 이미지를 PL로, 나머지를 Art로
                     if all_img_tags_src:
-                        pl_candidate_url = py_urllib_parse.urljoin(cls.site_base_url, all_img_tags_src[0].strip())
+                        pl_candidate_url = py_urllib_parse.urljoin(cls.fanza_av_url, all_img_tags_src[0].strip())
                         # 플레이스홀더 검사
                         if not (now_printing_path and SiteUtil.are_images_visually_same(pl_candidate_url, now_printing_path, proxy_url=proxy_url)):
                             img_urls_dict['pl'] = pl_candidate_url
 
                         temp_arts_from_img_tags = []
                         for src in all_img_tags_src[1:]:
-                            art_url = py_urllib_parse.urljoin(cls.site_base_url, src.strip())
+                            art_url = py_urllib_parse.urljoin(cls.fanza_av_url, src.strip())
                             if art_url != img_urls_dict.get('pl') and art_url not in temp_arts_from_img_tags:
                                 # 플레이스홀더 검사
                                 if not (now_printing_path and SiteUtil.are_images_visually_same(art_url, now_printing_path, proxy_url=proxy_url)):
@@ -747,9 +747,9 @@ class SiteDmm:
 
                     # href가 이미지 URL 형태이면 href 우선
                     if href and re.search(r'\.(jpg|jpeg|png|webp)$', href, re.IGNORECASE):
-                        final_image_url = py_urllib_parse.urljoin(cls.site_base_url, href)
+                        final_image_url = py_urllib_parse.urljoin(cls.fanza_av_url, href)
                     elif img_src and re.search(r'\.(jpg|jpeg|png|webp)$', img_src, re.IGNORECASE): # 아니면 img_src 사용
-                        final_image_url = py_urllib_parse.urljoin(cls.site_base_url, img_src)
+                        final_image_url = py_urllib_parse.urljoin(cls.fanza_av_url, img_src)
 
                     if final_image_url and final_image_url not in seen_urls_in_videoa_vr:
                         # 플레이스홀더 검사
@@ -891,7 +891,7 @@ class SiteDmm:
         trailer_title_from_json = None # JSON에서 가져온 제목
 
         try:
-            ajax_url = py_urllib_parse.urljoin(cls.site_base_url, f"/av/content/?id={cid_part}/")
+            ajax_url = py_urllib_parse.urljoin(cls.fanza_av_url, f"/content/?id={cid_part}/")
             #logger.debug(f"DMM Trailer Helper ({current_content_type_for_log}): Accessing AJAX URL: {ajax_url}")
 
             ajax_headers = cls._get_request_headers(referer=detail_url_for_referer)
@@ -1018,7 +1018,7 @@ class SiteDmm:
         detail_url = None
 
         if current_content_type == 'videoa' or current_content_type == 'vr':
-            detail_url = cls.site_base_url + f"/av/content/?id={cid_part}/"
+            detail_url = cls.fanza_av_url + f"/content/?id={cid_part}/"
         elif current_content_type == 'dvd' or current_content_type == 'bluray':
             detail_url = cls.site_base_url + f"/mono/dvd/-/detail/=/cid={cid_part}/"
         else: 
